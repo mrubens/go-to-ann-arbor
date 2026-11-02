@@ -38,6 +38,8 @@ import { buildRiverPeople } from './river-people.js';
 import { CityAudioSystem } from './audio-system.js';
 import { fetchWeather, createPrecipitation } from './weather.js';
 import { fetchRiverFlow } from './river-gauge.js';
+import { fetchRiverPfas } from './river-pfas.js';
+import { waterDisturb } from './tsl-materials.js';
 import { buildRoadWork } from './road-work.js';
 
 // In its own window on the Mac the top strip is the title bar, which takes the clicks: the top panels sit below it
@@ -211,7 +213,7 @@ async function initApp() {
   const outskirts = outskirtsPart.made;
   markInit('outskirts');
   await showLoadingStage('Building the Big House...');
-  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/stadium-geodata.js'] });
+  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/stadium-geodata.js', 'js/campus-landmarks.js'] });
   const landmarkColliders = landmarks.made.colliders;
   markInit('landmarks');
   await showLoadingStage('Generating building footprints and facades...');
@@ -776,6 +778,28 @@ async function initApp() {
     if (mapSystem.isFullMapOpen) return;
     const cm = controllerManager;
     const was = cm.activeMode;
+    cm.traffic = trafficSystem;
+    // a bus: on at a stop, where its driver waits for the player, and off at the next one
+    const p = cm.entities.person;
+    if (was === 'person' && p.onBus) {
+      const ride = trafficSystem.busRide();
+      if (ride && !ride.stopped && !ride.gone) { showNotice('The bus will stop at the next stop'); return; }
+      cm.getOffBus(trafficSystem.leaveBus());
+      audioSystem.cue('door', p.position, 0.7);
+      log('[bus] got off');
+      savePlayerState();
+      return;
+    }
+    if (was === 'person' && !p.fallen) {
+      const ride = trafficSystem.boardBus(p.position.x, p.position.z, 5);
+      if (ride) {
+        cm.getOnBus(ride);
+        audioSystem.cue('door', p.position, 0.7);
+        showNotice(ride.route ? `Route ${ride.route} to ${ride.headsign}` : 'On the bus');
+        log(`[bus] got on${ride.route ? ` route ${ride.route}` : ''}`);
+        return;
+      }
+    }
     const choice = cm.enterOrExit(parkedCars, trafficSystem);
     if (!choice) return;
     if (choice.tooFast) { showNotice('Slow down to get out'); return; }
@@ -1138,6 +1162,11 @@ async function initApp() {
       if (lightingSystem.activePresetId === 'now') selectTime('now');
     });
     // the Huron's flow at the USGS gauge, which the kayak's current follows
+    // PFAS in the Huron by town, from the state's sampling: how much foam drifts on it
+    fetchRiverPfas().then((r) => {
+      waterDisturb.pfas.value = r.foam;
+      log(`[pfas] ${r.live ? 'state data' : 'offline, so the last known reading'}: PFOS ${r.detected ? r.ppt : `under ${r.ppt * 2}`} ppt at ${r.site} (${r.date}), foam ${r.foam.toFixed(2)}`);
+    });
     fetchRiverFlow().then((r) => {
       controllerManager.riverScale = r.scale;
       log(`[river] ${r.live ? `Huron at Ann Arbor now: ${Math.round(r.cfs)} cubic feet a second` : 'offline, so its usual flow'}, current ×${r.scale.toFixed(2)}`);

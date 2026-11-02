@@ -1,5 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { stadiumGround } from './terrain.js';
+import { GEO } from './city-geodata.js';
+import { buildCampusLandmarks } from './campus-landmarks.js';
 import { STADIUM, N, radiiAt, FIELD_Y, WALL_TOP, SEAT_TOP, RIM_Y, WALL_Y, AISLE_IN, CONCOURSE } from './stadium-shape.js';
 
 // Ann Arbor's landmarks are the city's own surveyed buildings (Burton Tower, Hill Auditorium, the Union...), drawn by
@@ -300,6 +302,9 @@ function buildLandmarks(scene) {
   group.name = 'AnnArborLandmarks';
   const colliders = [];
   buildBigHouse(group, colliders);
+  // Burton Tower, Hill Auditorium and the Union, modelled by hand in place of the survey's blocks
+  const campus = buildCampusLandmarks(group, colliders, GEO.landmarks || {});
+  console.info(`[landmarks] the Big House, ${campus.join(', ')}`);
   scene.add(group);
   return { group, colliders };
 }

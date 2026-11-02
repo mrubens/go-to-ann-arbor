@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundHeight } from './terrain.js';
 import { color, mix, uniform } from 'three/tsl';
 import { signalPhase } from './city-config.js';
+import { log } from '../lamp-game.js';
 
 // Lamp: Ann Arbor's traffic lights and stop & yield signs, where the road network put them (road-network.js, from
 // OpenStreetMap): at a signalised intersection, a mast arm on the far right corner of every approach with a head over
@@ -13,9 +14,10 @@ import { signalPhase } from './city-config.js';
 const HEAD_Y = 5.42;
 const ARM_Y = 6.05;
 
-function signTexture(draw) {
+function signTexture(draw, h = 256) {
   const c = document.createElement('canvas');
-  c.width = c.height = 256;
+  c.width = 256;
+  c.height = h;
   const ctx = c.getContext('2d');
   draw(ctx);
   const tex = new THREE.CanvasTexture(c);
@@ -78,6 +80,29 @@ function plaqueFace(ctx) {
   ctx.textBaseline = 'middle';
   ctx.fillText('ALL WAY', 128, 130);
 }
+// ONE WAY (MUTCD R6-1): a white arrow on black with the words in black on its shaft, on a 256 x 86 canvas (36 x 12 in);
+// `back` draws it pointing the other way, for the sign's far side seen from behind (so it points the same way there)
+function oneWayFace(back) {
+  return (ctx) => {
+    if (back) { ctx.translate(256, 0); ctx.scale(-1, 1); }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 256, 86);
+    ctx.fillStyle = '#111214';
+    ctx.fillRect(5, 5, 246, 76);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(14, 27); ctx.lineTo(196, 27); ctx.lineTo(196, 13); ctx.lineTo(242, 43);
+    ctx.lineTo(196, 73); ctx.lineTo(196, 59); ctx.lineTo(14, 59);
+    ctx.closePath();
+    ctx.fill();
+    if (back) { ctx.setTransform(1, 0, 0, 1, 0, 0); }
+    ctx.fillStyle = '#111214';
+    ctx.font = '800 26px Inter, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('ONE WAY', back ? 151 : 105, 44);
+  };
+}
 const silhouette = (shape) => (ctx) => {
   shape(ctx);
   ctx.fillStyle = '#ffffff';
@@ -123,6 +148,49 @@ function buildTrafficControls(group, network) {
   let signs = 0;
   const obstacles = []; // signal poles and sign posts, solid to the player: { x, z, r }
   const faceYaw = (e) => Math.atan2(-e.dx, -e.dz); // a face turned towards the drivers coming along e
+  // ONE WAY signs where a one-way street leaves an intersection: a post at each corner (near right, far left), the
+  // sign along the street with its arrow pointing the way traffic goes, for the cross street's drivers to read
+  const nextOf = new Map(); // node -> the nodes an edge runs to from it
+  const degree = new Map(); // node -> the nodes it's joined to either way
+  for (const e of network.edges) {
+    if (!nextOf.has(e.from)) nextOf.set(e.from, new Set());
+    nextOf.get(e.from).add(e.to);
+    for (const [a, b] of [[e.from, e.to], [e.to, e.from]]) {
+      if (!degree.has(a)) degree.set(a, new Set());
+      degree.get(a).add(b);
+    }
+  }
+  let oneWaySigns = 0;
+  const oneWayPost = (e, s, o) => {
+    const [px, pz] = at(e, s, o);
+    if (onRoad(px, pz)) return;
+    const g = groundHeight(px, pz);
+    dummy.rotation.set(0, 0, 0);
+    dummy.position.set(px, g + 1.25, pz);
+    dummy.scale.set(0.05, 2.5, 0.05);
+    obstacles.push(standing = { x: px, z: pz, r: 0.1, kind: 'sign', height: 2.5, parts: [] });
+    put('post');
+    dummy.rotation.set(0, Math.atan2(-e.dz, e.dx), 0);
+    dummy.position.set(px, g + 2.3, pz);
+    dummy.scale.set(0.92, 0.31, 1);
+    put('oneWay');
+    put('oneWayBack');
+    oneWaySigns++;
+  };
+  for (const e of network.edges) {
+    const n = e.from;
+    if (n.shape || e.divided || !e.lanes.length || e.len < 25 || (e.cls ?? 4) < 2) continue;
+    if (nextOf.get(e.to)?.has(e.from) || (degree.get(n)?.size || 0) < 3) continue;
+    // set back from the corner, out past the curb on each side
+    const r = curbside(e, 3, e.half + 0.7);
+    if (r) oneWayPost(e, 3, r[2]);
+    for (let o = -e.half - 0.7, k = 0; k < 10; k++, o -= 0.6) {
+      const [x, z] = at(e, 3, o);
+      if (!onRoad(x, z)) { oneWayPost(e, 3, o); break; }
+    }
+  }
+  standing = null;
+
   for (const e of network.edges) {
     const n = e.to;
     if (n.shape || !e.lanes.length) continue;
@@ -216,7 +284,9 @@ function buildTrafficControls(group, network) {
     yield: [plane, face(yieldFace), true],
     yieldBack: [back, backOf((ctx) => triangle(ctx, 140)), false],
     plaque: [plane, face(plaqueFace), false],
-    plaqueBack: [back, backOf(plaqueShape), false]
+    plaqueBack: [back, backOf(plaqueShape), false],
+    oneWay: [plane, new THREE.MeshStandardNodeMaterial({ map: signTexture(oneWayFace(false), 86), roughness: 0.5 }), true],
+    oneWayBack: [back, new THREE.MeshStandardNodeMaterial({ map: signTexture(oneWayFace(true), 86), roughness: 0.5 }), false]
   };
   const meshOf = new Map();
   for (const [name, matrices] of lists) {
@@ -236,7 +306,7 @@ function buildTrafficControls(group, network) {
     o.parts = parts;
   }
   group.userData.terrain = 'set'; // each was stood on the ground as it was placed
-  console.info(`[traffic controls] ${lights} signal heads, ${signs} stop & yield signs`);
+  log(`[traffic controls] ${lights} signal heads, ${signs} stop & yield signs, ${oneWaySigns} one-way signs`);
   const lamps = LAMPS.flatMap((lamp) => [[lamp, true, kinds[lamp + 'A'][1]], [lamp, false, kinds[lamp + 'B'][1]]]);
   const update = (time) => {
     for (const [lamp, mainRoad, mat] of lamps) mat.userData.on.value = signalPhase(time, mainRoad) === lamp ? 1 : 0;

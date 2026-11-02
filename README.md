@@ -28,6 +28,7 @@ The wish itself, to open in [Lamp](https://lamp.dev) and change, is on the [main
 - Uses [Historic Districts](https://ckan.a2gov.org/dataset/historic-districts) by City of Ann Arbor, None
 - Uses [Huron River at Ann Arbor gauge (04174500), live flow](https://waterdata.usgs.gov/monitoring-location/04174500/) by U.S. Geological Survey, LicenseRef-US-Government-Public-Domain
 - Uses [Amtrak GTFS timetable (Wolverine stops at Ann Arbor)](https://content.amtrak.com/content/gtfs/GTFS.zip) by Amtrak (National Railroad Passenger Corporation), None
+- Uses Huron River PFAS surface water sampling by Michigan EGLE (MPART)
 
 Map data is ODbL-1.0: it stays under that license, credited, in this remix.
 

@@ -2838,6 +2838,8 @@ const waterDisturb = hot(import.meta).keep('waterDisturb', () => ({
   bow: uniform(new THREE.Vector4(0, 0, 0, 1)),
   wake: uniform(new THREE.Vector2(0, 0))
 }));
+// how much PFAS foam drifts on the river, 0 to 1 (river-pfas.js, set by main.js); added here so a kept object has it
+waterDisturb.pfas ??= uniform(0);
 
 // The slope those add at p (a vec2, like the waves' own)
 const disturbSlope = (p) => {
@@ -2931,7 +2933,22 @@ function createWaterMaterial() {
 
   // the Argo Cascades' rapids: the surface raised and lowered by their waves, white where they break
   const rapids = rapidsField(positionWorld.xz);
-  const foam = rapids.z;
+  // PFAS foam: rafts of stiff white froth drifting slowly on the current, strung into lines by the eddies and gathered
+  // thick where the rapids churn it up; more of the river covered the more PFAS there is (waterDisturb.pfas)
+  const pfasFoam = Fn(() => {
+    const amt = waterDisturb.pfas;
+    const p = positionWorld.xz;
+    const drift = vec2(time.mul(0.35), time.mul(-0.22));
+    const big = noise2D(p.mul(0.045).add(drift.mul(0.045)));
+    const lines = noise2D(vec2(p.x.mul(0.11), p.y.mul(0.32)).add(drift.mul(0.12)).add(11.7));
+    const fine = noise2D(p.mul(0.9).add(drift.mul(0.9)).add(5.1));
+    const field = big.mul(0.55).add(lines.mul(0.45));
+    const edge = float(1).sub(amt.mul(0.5));
+    const rafts = smoothstep(edge, edge.add(0.08), field).mul(smoothstep(0.25, 0.6, fine).mul(0.45).add(0.55));
+    const churned = smoothstep(0.05, 0.4, rapids.z).mul(amt).mul(smoothstep(0.3, 0.7, fine));
+    return max(rafts, churned).mul(smoothstep(0.0, 0.05, amt)).mul(0.92);
+  })();
+  const foam = max(rapids.z, pfasFoam);
   mat.positionNode = positionLocal.add(vec3(0, rapidsField(positionLocal.xz).w, 0));
 
   // vec4(mean slope x, mean slope z, unresolved slope variance, crest height)
@@ -2988,7 +3005,9 @@ function createWaterMaterial() {
     const body = mix(color(0x162d2c), color(0x2e3f36), smoothstep(0.25, 0.85, silt));
     const lake = mix(color(0x2f4a3e), color(0x41583f), silt); // the Huron: clear green over its silt
     const crestTint = smoothstep(0.6, 2.4, waves.w).mul(0.35).add(1.0);
-    return mix(mix(body, lake, pond).mul(crestTint), color(0xdfe8e4), foam);
+    // white water bluish-white, PFAS froth a creamy off-white
+    const froth = mix(color(0xdfe8e4), color(0xe9e3d2), smoothstep(rapids.z, rapids.z.add(0.2), pfasFoam));
+    return mix(mix(body, lake, pond).mul(crestTint), froth, foam);
   })();
 
   // Night: the lit city seen along the reflected ray. The town is a stack of boxes inscribed in its edge, with a row of

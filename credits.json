@@ -7,7 +7,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "182ea9bfce13b72fce92c9713042a20f1e8069c4",
+      "commit" : "10efd379e49a11c54a9754e0273a81f8edef2827",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"
@@ -141,6 +141,10 @@
       "license" : "None",
       "name" : "Amtrak GTFS timetable (Wolverine stops at Ann Arbor)",
       "url" : "https://content.amtrak.com/content/gtfs/GTFS.zip"
+    },
+    {
+      "author" : "Michigan EGLE (MPART)",
+      "name" : "Huron River PFAS surface water sampling"
     }
   ]
 }

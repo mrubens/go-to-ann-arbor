@@ -21,8 +21,11 @@ const NEAR = 70, FAR = 650;
 const CELL = 250, STREAM_R = 1000, LET_GO = 1300;
 const LAWN_Y = 0.284; // Lamp: the driveways' height (city-grid.js, LAWN_Y + 0.004)
 
-const MASS = { sedan: 1600, suv: 2100, minivan: 2000, pickup: 2400, van: 2700, sports: 1450 };
-const KINDS = ['sedan', 'sedan', 'suv', 'sedan', 'suv', 'minivan', 'suv', 'pickup', 'sedan', 'suv', 'van', 'sedan', 'suv', 'pickup', 'sports'];
+const MASS = { sedan: 1600, suv: 2100, minivan: 2000, pickup: 2400, van: 2700, sports: 1450, tesla: 1850, ioniq: 2100, cybertruck: 3100, r1s: 2700, r1t: 3000 };
+// (Lamp: three Teslas, two Ioniqs and the odd Cybertruck in every 40)
+const KINDS = ['sedan', 'tesla', 'suv', 'sedan', 'suv', 'minivan', 'ioniq', 'pickup', 'sedan', 'suv', 'van', 'sedan', 'suv', 'pickup', 'sports',
+  'sedan', 'suv', 'tesla', 'sedan', 'suv', 'minivan', 'suv', 'pickup', 'sedan', 'ioniq', 'van', 'sedan', 'suv', 'pickup', 'sedan',
+  'tesla', 'suv', 'sedan', 'r1s', 'cybertruck', 'sedan', 'suv', 'minivan', 'r1t', 'sedan'];
 const hash = (x, z, k = 0) => { const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453; return v - Math.floor(v); };
 
 function inside(ring, x, z) {

@@ -65,6 +65,12 @@ const CAR_HANDLING = {
   suv: { mass: 2000, speed: 34, acceleration: 4.2, brake: 8.5, grip: 8.6, cornering: 9, wheelbase: 2.8, steer: 8, roll: 0.016 },
   minivan: { mass: 2000, speed: 33, acceleration: 3.8, brake: 8.5, grip: 8.4, cornering: 8.5, wheelbase: 3.03, steer: 7.5, roll: 0.015 },
   pickup: { mass: 2400, speed: 35, acceleration: 4.8, powerSpeed: 11, brake: 8, grip: 7.8, cornering: 7.6, wheelbase: 3.7, steer: 7, roll: 0.017, pitch: 0.034 },
+  // the electric cars: heavy, with all their pull from a standstill
+  tesla: { mass: 1850, speed: 44, acceleration: 7.5, powerSpeed: 24, grip: 11, cornering: 11, wheelbase: 2.88, roll: 0.01 },
+  ioniq: { mass: 2100, speed: 40, acceleration: 6.5, powerSpeed: 20, grip: 9.6, cornering: 9.6, wheelbase: 3.0, steer: 8.5, roll: 0.013 },
+  r1s: { mass: 2700, speed: 40, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 9, cornering: 9, wheelbase: 3.08, steer: 8, roll: 0.013 },
+  r1t: { mass: 3000, speed: 40, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.6, cornering: 8.2, wheelbase: 3.45, steer: 7.5, roll: 0.013, pitch: 0.028 },
+  cybertruck: { mass: 3100, speed: 40, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.4, cornering: 7.8, wheelbase: 3.81, steer: 8, roll: 0.012, pitch: 0.026 },
   van: { mass: 2700, speed: 30, acceleration: 3.2, powerSpeed: 11, brake: 7.5, grip: 7.2, cornering: 7, wheelbase: 3.6, steer: 6.5, roll: 0.02, pitch: 0.036 },
   // motorcycles (motorcycles.js): light, quick off the line, leaning into bends
   sportbike: { mass: 290, speed: 70, acceleration: 10, powerSpeed: 26, brake: 11, grip: 13, cornering: 15, wheelbase: 1.4, steer: 14, roll: 0, pitch: 0.03 },
@@ -433,6 +439,7 @@ class ThirdPersonControllerManager {
   setMode(mode) {
     if (!this.entities[mode]) return;
     const person = this.entities.person;
+    if (person.onBus && mode !== 'person') this.getOffBus(this.traffic?.leaveBus());
     // On foot from inside something: out beside it
     const ridden = mode === 'person' && person.riding ? this.entities[person.riding] : null;
     person.riding = mode === 'person' ? null : person.riding;
@@ -466,6 +473,7 @@ class ThirdPersonControllerManager {
   }
 
   teleportActiveTo(x, z, heading = Math.PI, savedAltitude = null) {
+    if (this.entities.person.onBus) { this.traffic?.leaveBus(); this.getOffBus(null); }
     const ent = this.getActiveEntity();
     this.resetInput();
     if (!Number.isFinite(heading)) heading = ent.heading;
@@ -712,7 +720,7 @@ class ThirdPersonControllerManager {
 
     if (!root.parent) this.scene.add(root);
 
-    const kindName = { sedan: 'Sedan', suv: 'SUV', minivan: 'Minivan', pickup: 'Pickup', van: 'Van', forester: 'Forester', sports: 'Sports Car' };
+    const kindName = { sedan: 'Sedan', suv: 'SUV', minivan: 'Minivan', pickup: 'Pickup', van: 'Van', forester: 'Forester', sports: 'Sports Car', tesla: 'Tesla', ioniq: 'Ioniq 5', cybertruck: 'Cybertruck', r1s: 'Rivian R1S', r1t: 'Rivian R1T' };
     return {
       type: 'car',
       label: own ? 'Your Car' : `Borrowed ${kindName[look.kind] || 'Car'}`,
@@ -1656,7 +1664,7 @@ class ThirdPersonControllerManager {
         h.quaternion.copy(p.rig.headQuaternion);
         h.scale.setScalar(p.rig.s);
         h.updateMatrixWorld(true);
-      } else if (!p.riding && (this.activeMode === 'person' || dx * dx + dz * dz <= maxDistSq)) {
+      } else if (!p.riding && !p.onBus && (this.activeMode === 'person' || dx * dx + dz * dz <= maxDistSq)) {
         p._charHidden = false;
         if (p.mesh) p.mesh.visible = true;
         const air = p.position.y - this.getGroundHeight(p.position.x, p.position.z, 'person');
@@ -1876,8 +1884,44 @@ class ThirdPersonControllerManager {
     log(`[moto] thrown off at ${Math.round(speed * 2.237)} mph`);
   }
 
+  // On a bus (main.js getInOrOut): carried in it, out of sight, the camera pulled back to see the bus; off at its
+  // door, on the curb
+  getOnBus(ride) {
+    const p = this.entities.person;
+    p.onBus = true;
+    p.walkCamera = { d: p.chaseDistance, h: p.chaseHeight };
+    p.chaseDistance = 17;
+    p.chaseHeight = 4.2;
+    p.speed = p.verticalVel = 0;
+    this.rideAlong(ride);
+  }
+  rideAlong(ride) {
+    const p = this.entities.person;
+    p.position.set(ride.x, this.getGroundHeight(ride.x, ride.z, 'car') + 0.95, ride.z);
+    p.heading = ride.yaw;
+  }
+  getOffBus(ride) {
+    const p = this.entities.person;
+    if (!p.onBus) return;
+    p.onBus = false;
+    if (p.walkCamera) { p.chaseDistance = p.walkCamera.d; p.chaseHeight = p.walkCamera.h; }
+    if (ride) {
+      p.position.set(ride.doorX, this.getGroundHeight(ride.doorX, ride.doorZ, 'person'), ride.doorZ);
+      p.heading = ride.yaw + Math.PI / 2;
+    }
+    p.speed = p.verticalVel = 0;
+    p._charHidden = false;
+    if (p.mesh) p.mesh.visible = true;
+    p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
+  }
+
   updatePerson(dt) {
     const p = this.entities.person;
+    if (p.onBus) {
+      const ride = this.traffic?.busRide();
+      if (ride && !ride.gone) { this.rideAlong(ride); p.speed = 0; return; }
+      this.getOffBus(ride);
+    }
     if (p.fallen) {
       if (p.fallen.getUp < 0) {
         if (p.rig.stepRagdoll(dt, personGround, this, true)) {

@@ -438,6 +438,151 @@ BODY_SPECS.sports = {
   rearWiper: false
 };
 
+// Lamp: the electric cars Ann Arbor drives. No grilles (only a slim lower intake), slim LED lamps.
+// A Tesla Model 3 / Model Y: the sedan's size under a smooth nose and one long sweep of roof down to a short deck
+BODY_SPECS.tesla = Object.assign({}, BODY_SPECS.sedan, {
+  name: 'tesla',
+  sill: [[2.22, 0.24], [1.2, 0.235], [-1.2, 0.235], [-2.28, 0.28]],
+  shoulder: [[2.22, 0.62], [1.75, 0.72], [1.4, 0.75], [0, 0.78], [-1.4, 0.8], [-2.28, 0.78]],
+  edge: [[2.08, 0.74], [1.55, 0.82], [0.82, 0.92], [0.3, 0.95], [-0.4, 0.975], [-1.2, 0.995], [-1.7, 0.995], [-2.0, 0.975], [-2.18, 0.95]],
+  nose: { halfWidth: [0.34, 0.7, 2.4], edge: [0.18, 0.64, 2.2], crown: [0.16, 0.012, 2], sill: [0.16, 0.3, 2], shoulder: [0.24, 0.56, 2.2] },
+  cabin: Object.assign({}, BODY_SPECS.sedan.cabin, {
+    cowl: 0.9,
+    roofFront: 0.02,
+    roofRear: -1.3,
+    deck: -1.98,
+    roofY: [[0.02, 1.42], [-0.5, 1.45], [-1.3, 1.38]],
+    pillars: [-0.42],
+    glassEnd: -1.62
+  }),
+  headlight: [0.64, 0.64, 0.2, 0.026],
+  taillight: [0.58, 0.83, 0.28, 0.04],
+  grille: [0.64, 0.001, 0.001],
+  intake: [0.36, 0.5, 0.045],
+  chrome: false
+});
+// A Hyundai Ioniq 5: a boxy hatchback the size of a crossover, its wheels pushed out to the corners, square pixel lamps
+// and a near-upright tailgate
+BODY_SPECS.ioniq = Object.assign({}, BODY_SPECS.suv, {
+  name: 'ioniq',
+  wheelRadius: 0.37,
+  wheelZ: 1.5,
+  archFlare: 0.02,
+  tail: { halfWidth: [0.2, 0.82, 3.4], edge: [0.04, 1.14, 3.2], crown: [0.04, 0.004, 2], sill: [0.14, 0.46, 2], shoulder: [0.16, 0.9, 3] },
+  tailRake: { length: 0.3, y: [[0.4, 0.06], [0.54, 0], [0.7, 0], [0.8, 0.012], [1.05, 0.016], [1.15, 0.02]], plan: 0.03 },
+  cabin: Object.assign({}, BODY_SPECS.suv.cabin, {
+    roofRear: -1.95,
+    deck: -2.22,
+    roofY: [[-0.22, 1.62], [-0.9, 1.64], [-1.95, 1.6]],
+    pillars: [-0.38],
+    glassEnd: -1.6
+  }),
+  headlight: [0.66, 0.84, 0.13, 0.05],
+  taillight: [0.56, 1.0, 0.34, 0.05],
+  grille: [0.8, 0.001, 0.001],
+  intake: [0.44, 0.42, 0.05],
+  rails: false,
+  cladding: 0.4
+});
+// A Tesla Cybertruck: a flat-sided stainless wedge, one straight roof line from the peak over the cab down to the tail,
+// a light bar across the whole nose and another across the tail
+BODY_SPECS.cybertruck = Object.assign({}, BODY_SPECS.pickup, {
+  name: 'cybertruck',
+  wheelRadius: 0.43,
+  upperRound: 9,
+  lowerRound: 6,
+  archPower: 6,
+  archFlare: 0.02,
+  halfWidth: [[2.74, 0.99], [1.92, 1.01], [0, 1.01], [-1.92, 1.01], [-2.94, 1.0]],
+  sill: [[2.74, 0.6], [1.4, 0.55], [-1.4, 0.55], [-2.94, 0.62]],
+  shoulder: [[2.74, 0.98], [2.15, 1.04], [1.92, 1.06], [0, 1.1], [-1.92, 1.12], [-2.94, 1.12]],
+  edge: [[2.62, 1.06], [2.15, 1.12], [1.4, 1.2], [0.6, 1.26], [-0.6, 1.27], [-1.92, 1.27], [-2.82, 1.26]],
+  crown: [[2.62, 0.004], [-2.94, 0.004]],
+  tumble: [[2.74, 0.2], [1.14, 0.17], [-0.96, 0.1], [-2.94, 0.08]],
+  nose: { halfWidth: [0.2, 0.86, 6], edge: [0.08, 1.02, 6], crown: [0.08, 0.004, 2], sill: [0.14, 0.64, 3], shoulder: [0.12, 0.94, 6] },
+  tail: { halfWidth: [0.14, 0.9, 6], edge: [0.04, 1.24, 6], crown: [0.04, 0.004, 2], sill: [0.14, 0.64, 3], shoulder: [0.1, 1.08, 6] },
+  cabin: Object.assign({}, BODY_SPECS.pickup.cabin, {
+    cowl: 1.7,
+    roofFront: 0.3,
+    roofRear: -2.6,
+    deck: -2.86,
+    roofY: [[0.3, 1.92], [-1.15, 1.62], [-2.6, 1.32]],
+    rail: [0.7, 0.8],
+    inset: 0.03,
+    roofEdge: 0.03,
+    roofCrown: 0.004,
+    roofRound: 14,
+    pillars: [-0.1],
+    glassEnd: -1.0
+  }),
+  doors: [1.36, -0.1, -1.0],
+  handles: [0.3, -0.62],
+  headlight: [0.47, 1.05, 0.47, 0.011],
+  taillight: [0.47, 1.2, 0.47, 0.018],
+  grille: [0.9, 0.001, 0.001],
+  intake: [0.7, 0.5, 0.04],
+  bumperLine: [1.0, 0.86],
+  chrome: false,
+  cladding: 0.66,
+  bedCover: false,
+  noRearGlass: true // the vault's cover runs from the cab's peak to the tailgate: no window there
+});
+
+// Rivian's R1S (a three-row SUV) and R1T (a pickup): rounded, upright shapes with no grille, an upright oval "stadium"
+// lamp at each front corner and a light bar running the whole width of the tail
+const RIVIAN = {
+  headlight: [0.74, 0.86, 0.075, 0.1],
+  grille: [0.8, 0.001, 0.001],
+  chrome: false
+};
+BODY_SPECS.r1s = Object.assign({}, BODY_SPECS.suv, RIVIAN, {
+  name: 'r1s',
+  wheelRadius: 0.4,
+  wheelZ: 1.5,
+  nose: { halfWidth: [0.3, 0.76, 2.6], edge: [0.14, 1.0, 2.4], crown: [0.14, 0.014, 2], sill: [0.16, 0.5, 2], shoulder: [0.2, 0.8, 2.4] },
+  tail: { halfWidth: [0.2, 0.82, 3.2], edge: [0.04, 1.12, 3], crown: [0.04, 0.004, 2], sill: [0.14, 0.5, 2], shoulder: [0.16, 0.9, 3] },
+  cabin: Object.assign({}, BODY_SPECS.suv.cabin, {
+    roofRear: -1.98,
+    deck: -2.2,
+    roofY: [[-0.22, 1.66], [-1.0, 1.69], [-1.98, 1.67]],
+    pillars: [-0.36, -1.3],
+    glassEnd: -2.08
+  }),
+  taillight: [0.82, 1.08, 0.82, 0.022],
+  rails: true,
+  cladding: 0.5
+});
+BODY_SPECS.r1t = Object.assign({}, BODY_SPECS.pickup, RIVIAN, {
+  name: 'r1t',
+  zFront: 2.6,
+  zRear: -2.84,
+  wheelRadius: 0.41,
+  wheelZ: 1.72,
+  halfWidth: [[2.6, 0.97], [1.72, 1.0], [0, 1.0], [-1.72, 1.0], [-2.84, 0.98]],
+  sill: [[2.6, 0.5], [1.4, 0.46], [-1.4, 0.46], [-2.84, 0.52]],
+  shoulder: [[2.6, 0.92], [2.1, 1.0], [1.72, 1.03], [0, 1.05], [-1.72, 1.06], [-2.84, 1.05]],
+  edge: [[2.48, 1.06], [2.05, 1.13], [1.4, 1.16], [0.1, 1.17], [-1.72, 1.18], [-2.72, 1.17]],
+  nose: { halfWidth: [0.32, 0.78, 2.6], edge: [0.16, 1.02, 2.4], crown: [0.14, 0.014, 2], sill: [0.18, 0.52, 2.2], shoulder: [0.22, 0.86, 2.4] },
+  tail: { halfWidth: [0.2, 0.86, 3.2], edge: [0.05, 1.14, 3], crown: [0.05, 0.004, 2], sill: [0.18, 0.54, 2.2], shoulder: [0.16, 0.98, 2.8] },
+  cabin: Object.assign({}, BODY_SPECS.pickup.cabin, {
+    cowl: 1.18,
+    roofFront: 0.28,
+    roofRear: -0.82,
+    deck: -1.02,
+    roofY: [[0.28, 1.82], [-0.25, 1.85], [-0.82, 1.8]],
+    pillars: [-0.02],
+    glassEnd: -0.9
+  }),
+  doors: [1.02, -0.02, -0.9],
+  handles: [0.16, -0.7],
+  headlight: [0.74, 0.92, 0.075, 0.1],
+  taillight: [0.86, 1.1, 0.86, 0.022],
+  plates: [0.66, 0.9],
+  bumperLine: [1.1, 0.8],
+  cladding: 0.5,
+  bedCover: true
+});
+
 for (const spec of Object.values(BODY_SPECS)) {
   // Kept for code that places lamp flares: lamp heights (front, rear) and centres across the car
   spec.lamps = [spec.headlight[1], spec.taillight[1]];
@@ -1290,6 +1435,14 @@ const ANN_ARBOR_PAINT = {
     [0x34433a, 1]],
   van: [[0xf3f4f5, 0], [0xf3f4f5, 0], [0x00274c, 0], [0xbcc2c8, 1], [0xf0f1f2, 0], [0x00274c, 0], [0x8e959c, 0]],
   taxi: [[0xc8ced5, 1]],
+  // the electric cars: Tesla's white, black, grey, deep blue and red; the Ioniq's matte greys, white, green and blue;
+  // the Cybertruck in its bare stainless, now and then wrapped in black
+  tesla: [[0xf2f3f4, 0], [0x15171a, 1], [0x5c6066, 1], [0x1f3a6b, 1], [0x9a1b22, 1], [0xbcc1c6, 1], [0xf2f3f4, 0]],
+  ioniq: [[0x8d9196, 0], [0xe9eaeb, 0], [0x3c4a3f, 1], [0x2a3f5c, 1], [0x5f6368, 1], [0xc7cbcf, 1], [0x9aa39e, 0]],
+  // Rivian's Launch Green, Glacier White, Forest Green, Limestone, Midnight and El Cap Granite
+  r1s: [[0x4a5a3c, 1], [0xeceeec, 0], [0x2f3d33, 1], [0xcfc8b8, 0], [0x1c2330, 1], [0x6c6e70, 1]],
+  r1t: [[0x4a5a3c, 1], [0xeceeec, 0], [0x2f3d33, 1], [0xcfc8b8, 0], [0x3a5f78, 1], [0x6c6e70, 1]],
+  cybertruck: [[0xaeb3b7, 1], [0xa7acb0, 1], [0xb3b7ba, 1], [0xaaafb3, 1], [0x1b1d20, 0]],
   // the odd sports car, in the bold colours they're sold in: racing red, maize, orange, lime, bright blue, Michigan
   // blue, purple, teal, white, black, silver (11, a prime, so traffic's every-7th numbering doesn't land on one colour)
   sports: [[0xc8102e, 1], [0xffcb05, 0], [0xf26a1b, 1], [0x7fbf2a, 1], [0x1e5bd8, 1], [0x00274c, 1], [0x5b2a86, 1],
@@ -1638,7 +1791,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false } 
     const front = polygonEdge(ax, p.z, frontGlassPlanes, 0.085, fwX, fwZ);
     const sideGlass = cov(dSideG, wSideG);
     const frontGlass = cov(front.d, front.w);
-    const rear = spec.cargo ? null : polygonEdge(ax, p.z, rearGlassPlanes, 0.085, fwX, fwZ);
+    const rear = spec.cargo || spec.noRearGlass ? null : polygonEdge(ax, p.z, rearGlassPlanes, 0.085, fwX, fwZ);
     const rearGlass = rear ? cov(rear.d, rear.w) : float(0.0);
     const glass = max(max(sideGlass, frontGlass), rearGlass);
     // The seal follows the nearest outline, filtered across that outline
@@ -2011,7 +2164,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false } 
       const signGlyph = signGlyphMask();
       emit.assign(color(0xffe28a).mul(signFace.mul(one.sub(signGlyph.mul(0.9))).mul(1.65)));
     }).ElseIf(isWindow.mul(brake).greaterThan(0.5), () => {
-      const chmsl = chmslMask(() => {
+      const chmsl = spec.noRearGlass ? float(0.0) : chmslMask(() => {
         const rear = polygonEdge(ax, p.z, rearGlassPlanes, 0.085, fwX, fwZ);
         return cov(rear.d, rear.w);
       });

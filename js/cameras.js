@@ -388,7 +388,7 @@ class CameraSystem {
       case 'burtonTop': {
         // From the top of Burton Tower, panning across campus and downtown
         const pan = Math.sin(elapsed * 0.18) * 500.0;
-        desiredPos.set(797.0, 44.0, 23.0);
+        desiredPos.set(797.0, 61.0, 23.0);
         desiredLook.set(200.0 + pan, 5.0, 100.0);
         break;
       }

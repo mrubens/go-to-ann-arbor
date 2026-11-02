@@ -65,6 +65,12 @@ const CAR_KINDS = {
   pickup: { half: 2.86, halfWidth: 0.96, axle: 1.92, halfL: 2.78, mass: 2400, engine: 'suv' },
   van: { half: 2.96, halfWidth: 0.95, axle: 1.8, halfL: 2.88, mass: 2700, engine: 'suv' },
   sports: { half: 2.25, halfWidth: 0.9, axle: 1.36, halfL: 2.18, mass: 1450, engine: 'sedan' },
+  // the electric cars (cars.js): their tyres heard, no engine's note
+  tesla: { half: 2.25, halfWidth: 0.92, axle: 1.4, halfL: 2.2, mass: 1850, engine: 'cyclist' },
+  ioniq: { half: 2.33, halfWidth: 0.94, axle: 1.5, halfL: 2.26, mass: 2100, engine: 'cyclist' },
+  r1s: { half: 2.3, halfWidth: 0.94, axle: 1.5, halfL: 2.22, mass: 2700, engine: 'cyclist' },
+  r1t: { half: 2.72, halfWidth: 0.96, axle: 1.72, halfL: 2.64, mass: 3000, engine: 'cyclist' },
+  cybertruck: { half: 2.86, halfWidth: 1.0, axle: 1.92, halfL: 2.8, mass: 3100, engine: 'cyclist' },
   // motorcycles (motorcycles.js), in town traffic only
   ...Object.fromEntries(Object.values(MOTO_SPECS).map((m) =>
     [m.name, { half: m.half, halfWidth: m.halfWidth, axle: m.axle, halfL: m.halfL, mass: m.mass, engine: m.quiet ? 'cyclist' : 'moto', moto: true, curb: !!m.quiet }]))
@@ -207,8 +213,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   const policeWhite = new THREE.Color(0xf6f9fc);
   // Of every 20 cars: 8 sedans (Priuses, Civics, Camrys, the odd Tesla or old Volvo), 6 SUVs and crossovers
   // (Subarus, RAV4s, CR-Vs), 2 minivans, 3 pickups (Fords and Chevys) and a van; no cabs. Every 40th sedan slot is a sports car. Colours in annArborCar().
-  const FLEET_MIX = ['sedan', 'sedan', 'van', 'sedan', 'suv', 'sedan', 'suv', 'minivan', 'suv', 'pickup',
-    'sedan', 'pickup', 'suv', 'pickup', 'suv', 'sedan', 'minivan', 'sedan', 'suv', 'sedan'];
+  // Lamp: and electric ones, Ann Arbor having plenty: of every 20, two Teslas, an Ioniq 5 and, now and then, a
+  // Cybertruck (every 60th car: Teslas' slots below)
+  const FLEET_MIX = ['sedan', 'tesla', 'van', 'sedan', 'suv', 'sedan', 'ioniq', 'minivan', 'suv', 'pickup',
+    'sedan', 'pickup', 'suv', 'pickup', 'suv', 'tesla', 'minivan', 'sedan', 'suv', 'sedan'];
 
   const cars = [];
   const counts = Object.fromEntries(Object.keys(CAR_KINDS).map((kind) => [kind, 0]));
@@ -218,6 +226,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     const isPolice = (i % 50) === 6 || (i % 100) === 56;
     let bodyType = FLEET_MIX[i % FLEET_MIX.length];
     if (bodyType === 'sedan' && i % 40 === 17) bodyType = 'sports';
+    if (bodyType === 'tesla' && i % 60 === 1) bodyType = 'cybertruck';
+    if (bodyType === 'suv' && i % 30 === 4) bodyType = 'r1s';
+    if (bodyType === 'pickup' && i % 20 === 9) bodyType = 'r1t';
     if (isPolice) bodyType = (i % 100) === 56 ? 'suv' : 'sedan';
     // about one in ten is a motorcycle, of each kind in turn
     const curb = !isPolice && i % 10 === 7;
@@ -1632,7 +1643,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     if (scheduleTimer > 0 && !jump) return;
     scheduleTimer = 0.5;
     for (const b of buses) {
-      if (!b.edge) continue;
+      if (!b.edge || b === ridden) continue;
       if (Math.hypot(b.x - focusX, b.z - focusZ) > VEHICLE_RADIUS) releaseBus(b, false);
       else if (!b.route && (!hasView || !visible(b.x, b.z, 22))) releaseBus(b, true);
     }
@@ -1688,6 +1699,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       v.dwellUntil = clock + Math.max(8 + Math.random() * 10, Math.min(late, 90));
     }
     if (v.dwellUntil) {
+      // the driver waits for the player walking up to the door
+      if (!ridden && player.active && player.mode === 'person') {
+        const [dx, dz] = busDoor(v, 0);
+        if (Math.hypot(player.x - dx, player.z - dz) < 14) v.dwellUntil = Math.max(v.dwellUntil, clock + 2.5);
+      }
       if (clock >= v.dwellUntil) {
         v.dwellUntil = 0;
         v.stopIx++;
@@ -2048,7 +2064,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     refreshNear();
     updateView(camera);
 
-    player.active = Boolean(playerEntity && activeMode !== 'helicopter'
+    player.mode = activeMode;
+    player.active = Boolean(playerEntity && activeMode !== 'helicopter' && !ridden
       && playerEntity.position.y - groundHeight(playerEntity.position.x, playerEntity.position.z) < 2.6);
     if (playerEntity) {
       const heading = playerEntity.heading || 0;
@@ -2171,6 +2188,44 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     updateSparks(dt);
   }
 
+  // Lamp: riding a bus (F at a stop, main.js): the bus's front door, `out` metres out on its curb side
+  let ridden = null;
+  function busDoor(v, out) {
+    const yaw = v.yaw + (v.yawOffset || 0);
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);
+    const side = 1.45 + out, ahead = v.half - 1.4;
+    return [v.x + fx * ahead - fz * side, v.z + fz * ahead + fx * side, yaw];
+  }
+  // a bus standing at a stop with its door within `reach` of (x, z): the player gets on
+  function boardBus(x, z, reach) {
+    let best = null, bestD = reach;
+    for (const v of buses) {
+      if (!v.edge || !v.dwellUntil) continue;
+      const [dx, dz] = busDoor(v, 0);
+      const d = Math.hypot(dx - x, dz - z);
+      if (d < bestD) { bestD = d; best = v; }
+    }
+    if (best) {
+      ridden = best;
+      best.dwellUntil = Math.max(best.dwellUntil, clock + 3);
+    }
+    return best ? busRide() : null;
+  }
+  // where the ridden bus is now, and whether it's at a stop (gone: it left the road, the player steps off there)
+  function busRide() {
+    const v = ridden;
+    if (!v) return null;
+    const [doorX, doorZ, yaw] = busDoor(v, 1.1);
+    if (!v.edge) ridden = null;
+    const label = v.trip && schedule ? schedule.label(v.trip) : null;
+    return { x: v.x, z: v.z, yaw, stopped: !!v.dwellUntil, gone: !v.edge, doorX, doorZ, route: label?.short, headsign: label?.headsign };
+  }
+  function leaveBus() {
+    const ride = busRide();
+    ridden = null;
+    return ride;
+  }
+
   // Lamp: the player taking a car out of traffic (F, main.js): the nearest car within `reach` of (x, z), as it is
   // (its look, where it is, its heading and speed), taken off the road (it comes back elsewhere, as a far car does)
   const takeColor = new THREE.Color();
@@ -2207,6 +2262,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     setCollisionListener,
     takeCar,
     nearestCar,
+    boardBus,
+    busRide,
+    leaveBus,
     closures,
     cars,
     buses,
@@ -2270,7 +2328,7 @@ function createHighwayTraffic(scene, lanes) {
     for (let u = rand() * 30; u < lane.len - 12; u += 24 + rand() * 50) {
       const h = rand();
       // Fewer vans than in town: commercial vehicles are barred from the parkways
-      const kind = h < 0.025 ? 'sports' : h < 0.4 ? 'sedan' : h < 0.75 ? 'suv' : h < 0.84 ? 'minivan' : h < 0.96 ? 'pickup' : 'van';
+      const kind = h < 0.025 ? 'sports' : h < 0.31 ? 'sedan' : h < 0.39 ? 'tesla' : h < 0.43 ? 'ioniq' : h < 0.44 ? 'cybertruck' : h < 0.46 ? 'r1s' : h < 0.75 ? 'suv' : h < 0.84 ? 'minivan' : h < 0.947 ? 'pickup' : h < 0.96 ? 'r1t' : 'van';
       const entry = annArborCar(kind, Math.floor(rand() * 1000));
       const col = new THREE.Color(entry.hex);
       const spec = BODY_SPECS[kind];
