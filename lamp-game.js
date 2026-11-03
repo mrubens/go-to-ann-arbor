@@ -1747,24 +1747,29 @@ function own(made, waiting) {
 
 // `spare` holds the geometry and materials a part that replaces this one goes on using (made once and shared by both,
 // so the new part's shaders were compiled long ago): those stay, and so does whatever the game still holds elsewhere
-// (`stillHeld`). A part with a `dispose` of its own takes care of everything it made.
+// (`stillHeld`). A part with a `dispose` of its own takes care of everything it made, and one with no three.js objects
+// has nothing to look for. What the game's listeners throw costs only the object they were told of.
 function letGo(k, spare = new Set()) {
     // A part built in the background lets go of the one it replaced once it's let go of itself.
     if (k.replaces) { letGo(k.replaces); k.replaces = null; }
     Promise.resolve(k.value).then(v => {
         try {
             if (k.dispose) return k.dispose(v);
-            // A part that's a plain object of three.js objects ({ group, heights }) lets go of each, out of its scene
-            // first, or the scene would count as still holding it.
-            const roots = keptRoots(), objects = objectsOf(v).filter(o => !roots.has(o));
-            for (const o of objects) o.removeFromParent();
-            const held = stillHeld(roots);
-            for (const o of objects) {
-                // A scene still being drawn waits: disposed of now, the renderer would only make it all again, and
-                // nothing would dispose of that. It's disposed of when it's taken apart.
-                if (held.has(o)) { retire(o, true); continue; }
-                disposeTree(o, spare, held);
-                retire(o);
+            const failed = e => log(`Lamp: letting go of ${k.key} kept in ${k.path} failed (${e && e.message || e}).`);
+            const parts = objectsOf(v);
+            if (parts.length) {
+                // A part that's a plain object of three.js objects ({ group, heights }) lets go of each, out of its scene
+                // first, or the scene would count as still holding it.
+                const roots = keptRoots(), objects = parts.filter(o => !roots.has(o));
+                for (const o of objects) { try { o.removeFromParent(); } catch (e) { failed(e); } }
+                const held = stillHeld(roots);
+                for (const o of objects) {
+                    // A scene still being drawn waits: disposed of now, the renderer would only make it all again, and
+                    // nothing would dispose of that. It's disposed of when it's taken apart.
+                    if (held.has(o)) { retire(o, true); continue; }
+                    disposeTree(o, spare, held, failed);
+                    retire(o);
+                }
             }
             if (v && !v.isObject3D && typeof v.dispose === 'function') v.dispose();
             else if (v && !v.isObject3D && typeof v.destroy === 'function') v.destroy(true);
@@ -1782,10 +1787,11 @@ function letGo(k, spare = new Set()) {
 //
 // Only roots are remembered, weakly: a part nothing holds simply goes, and this list keeps nothing alive.
 const retired = [], blanks = new Map();
-function disposeTree(root, spare, held) {
+function disposeTree(root, spare, held, failed = e => { throw e; }) {
+    const dispose = thing => { if (spare.has(thing) || held.has(thing)) return; try { thing.dispose(); } catch (e) { failed(e); } };
     root.traverse(o => {
-        if (o.geometry && !spare.has(o.geometry) && !held.has(o.geometry)) o.geometry.dispose();
-        for (const m of [o.material].flat()) if (m && m.dispose && !spare.has(m) && !held.has(m)) m.dispose();
+        if (o.geometry) dispose(o.geometry);
+        for (const m of [o.material].flat()) if (m && m.dispose) dispose(m);
     });
 }
 let emptying = false, emptyAfter = 3000;
@@ -1849,13 +1855,14 @@ function blankOf(thing) {
 function keptRoots() {
     const roots = new Set(), seen = new Set();
     const walk = (v, depth) => {
-        if (!v || typeof v !== 'object' || seen.has(v) || ArrayBuffer.isView(v) || v instanceof ArrayBuffer || (globalThis.Node && v instanceof Node)) return;
+        if (!v || typeof v !== 'object') return;
         if (v.isObject3D || v.isBufferGeometry || v.isMaterial) { roots.add(v); return; }
-        if (depth <= 0) return;
+        // What's kept can be big tables: a row at the last depth has been dealt with by here.
+        if (depth <= 0 || seen.has(v) || ArrayBuffer.isView(v) || v instanceof ArrayBuffer || (globalThis.Node && v instanceof Node)) return;
         seen.add(v);
         // Another library's object can throw on being read: what can't be read can't be told to be held.
         let each = [];
-        try { each = [...(v instanceof Map ? v.values() : v instanceof Set ? v : Object.values(v))]; } catch (e) {}
+        try { each = v instanceof Map ? [...v.values()] : v instanceof Set ? [...v] : Object.values(v); } catch (e) {}
         for (const x of each) walk(x, depth - 1);
     };
     for (const k of kept.values()) {

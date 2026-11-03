@@ -29,6 +29,16 @@ The wish itself, to open in [Lamp](https://lamp.dev) and change, is on the [main
 - Uses [Huron River at Ann Arbor gauge (04174500), live flow](https://waterdata.usgs.gov/monitoring-location/04174500/) by U.S. Geological Survey, LicenseRef-US-Government-Public-Domain
 - Uses [Amtrak GTFS timetable (Wolverine stops at Ann Arbor)](https://content.amtrak.com/content/gtfs/GTFS.zip) by Amtrak (National Railroad Passenger Corporation), None
 - Uses Huron River PFAS surface water sampling by Michigan EGLE (MPART)
+- Uses [TheRide GTFS-realtime vehicle positions](https://rt.theride.org/gtfsrt/vehicles) by Ann Arbor Area Transportation Authority (TheRide)
+- Uses [University of Michigan Blue Buses GTFS timetable](https://webapps.fo.umich.edu/transit_uploads/google_transit.zip) by University of Michigan Logistics, Transportation & Parking
+- Uses Downtown Street Closures by City of Ann Arbor
+- Uses [MiDrive construction and closures](https://mdotjboss.state.mi.us/MiDrive/map) by Michigan Department of Transportation
+- Uses [OpenSky Network live aircraft states](https://opensky-network.org) by The OpenSky Network
+- Uses [Ann Arbor scooter locations (GBFS)](https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs) by Bird Rides (Spin), LicenseRef-Bird-GBFS-Data-License
+- Uses [Snow depth (Open-Meteo)](https://open-meteo.com) by Open-Meteo.com, CC-BY-4.0
+- Uses [Mapillary street-level imagery (decides house and shopfront looks; no photos ship)](https://www.mapillary.com) by Mapillary contributors, CC-BY-SA-4.0
+- Uses [Parcels with assessor's year built and storeys](https://a2maps.a2gov.org/a2arcgis/rest/services/WaterServiceLeadMaterialAll/MapServer/3) by City of Ann Arbor, None
+- Uses [GPU and memory optimizations (pull request #1)](https://github.com/kcm/go-to-ann-arbor/tree/perf/gpu-and-memory-optimizations) by Ken MacInnis, at commit `1bf1070944c7`
 
 Map data is ODbL-1.0: it stays under that license, credited, in this remix.
 
@@ -66,6 +76,12 @@ Huron River at Ann Arbor gauge (04174500), live flow is used under its own terms
 
 Amtrak GTFS timetable (Wolverine stops at Ann Arbor) is used under its own terms (None).
 
+Ann Arbor scooter locations (GBFS) is used under its own terms (LicenseRef-Bird-GBFS-Data-License).
+
+Mapillary street-level imagery (decides house and shopfront looks; no photos ship) is CC-BY-SA-4.0, so this remix is too: anyone may share it on under the same license.
+
+Parcels with assessor's year built and storeys is used under its own terms (None).
+
 Remixed from [New York](https://github.com/lampdotdev/newyork) (a Lamp starter).
 
-`lamp-game.js`, `lamp-phaser.js`, `lamp-controllers.js`, `lamp-device.js`, `lamp-build.js` and `lamp.js` are the game's runtime, written by Lamp under the MIT license (`LAMP-LICENSE.txt`). three.js is MIT (`three/LICENSE`), and so are Phaser (`phaser/LICENSE.md`) and the QR code encoder inside `lamp.js` (its license is there).
+`lamp-game.js`, `lamp-phaser.js`, `lamp-controllers.js`, `lamp-device.js`, `lamp-build.js` and `lamp.js` are the game's runtime, written by Lamp under the MIT license (`LAMP-LICENSE.txt`). three.js is MIT (`three/LICENSE`). The QR code encoder inside `lamp.js` is MIT (its license is there).

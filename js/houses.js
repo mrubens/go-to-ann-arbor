@@ -35,6 +35,8 @@ const BRICKS = [0x8e4a38, 0x9a5240, 0x7c3b2c, 0x6b4a37, 0x7b5944, 0xa86a4c];
 const STONES = [0x9a9286, 0x857d70, 0xa89f8e];
 const STUCCO = [0xe6dcc4, 0xd7cbb0, 0xc9bfa8, 0xe9e2d2];
 const SHAKES = [0x8a6a4a, 0x6e5a45, 0x7d7a68, 0x5f6b55];
+// a building look's wall color indexes its material's palette (clapboard: SIDING, then HERITAGE)
+const LOOK_PALETTES = [[...SIDING, ...HERITAGE], BRICKS, STONES, STUCCO, SHAKES];
 const SHINGLES = [0x3b3b3e, 0x4e4038, 0x5b5e63, 0x3e4a40, 0x5a3e33, 0x2e2f33];
 // trim (row 0 of the palette texture) and doors & shutters (row 1)
 const TRIM = [0xf3f0e8, 0xe6dcc3, 0x2e3b2f, 0x202226, 0x5c2328, 0x28354a, 0xb39a70, 0x6b6f70];
@@ -209,11 +211,39 @@ export function setRoofShapes(data) {
     roofGrid.get(k).push(data[i], data[i + 1], data[i + 2]);
   }
 }
-function taggedRoof(ring, cx, cz) {
+function taggedRoof(ring, cx, cz, grid = roofGrid) {
   const ix = Math.floor(cx / ROOF_CELL), iz = Math.floor(cz / ROOF_CELL);
   for (let a = ix - 1; a <= ix + 1; a++) for (let b = iz - 1; b <= iz + 1; b++) {
-    const list = roofGrid.get(a * 100000 + b);
+    const list = grid.get(a * 100000 + b);
     for (let i = 0; list && i < list.length; i += 3) if (insideRing(ring, list[i], list[i + 1])) return list[i + 2];
+  }
+  return 0;
+}
+
+// How each house and shopfront really looks (data/building-looks.json, build-building-looks.py): the assessor's year
+// built and storeys, and what Jev saw in a Mapillary street photo. [x, z, code] with (x, z) inside the footprint, in
+// the roof shapes' 20 m cells; a field left 0 keeps the generated look.
+// House code, from bit 0: material 3 (1 clapboard … 5 shakes), color 6 (1 + index into that material's palette),
+// porch 2, shutters 2, dormers 2 (1 no, 2 yes), roof 3 (as tagged roofs), storeys 3 (1, 1.5, 2, split level), year 7
+// ((year - 1800) / 2). Shop code: facade 3, awning 2, display windows 2 (1 small, 2 medium, 3 large), frame color 4.
+let houseLooks = new Map(), shopLooks = new Map();
+function lookGrid(data) {
+  const grid = new Map();
+  for (let i = 0; data && i + 2 < data.length; i += 3) {
+    const k = Math.floor(data[i] / ROOF_CELL) * 100000 + Math.floor(data[i + 1] / ROOF_CELL);
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(data[i], data[i + 1], data[i + 2]);
+  }
+  return grid;
+}
+export function setBuildingLooks(data) {
+  houseLooks = lookGrid(data && data.houses);
+  shopLooks = lookGrid(data && data.shops);
+}
+export function shopLook(b) {
+  for (const p of b.polygons) {
+    const code = taggedRoof(p.outer, b.cx, b.cz, shopLooks);
+    if (code) return code;
   }
   return 0;
 }
@@ -756,7 +786,11 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     const g = r.ground ?? 0;
     const garage = r.garage || area < 45;
     const id = (k) => hash(r.cx, r.cz, k);
-    const historic = !garage && historicDistrictAt(r.cx, r.cz) !== null;
+    // what the assessor and a street photo say about it, where they do
+    const look = garage ? 0 : taggedRoof(ring, r.cx, r.cz, houseLooks);
+    const year = look >> 21 & 127 ? (look >> 21 & 127) * 2 + 1800 : 0;
+    // the historic districts' look, and that of any house the assessor says was built before 1915
+    const historic = !garage && (historicDistrictAt(r.cx, r.cz) !== null || (year > 0 && year < 1915));
 
     // the house's frame: u along its box, v across
     const vx = -fb.az, vz = fb.ax;
@@ -769,11 +803,12 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     const M = rects[0], wingRects = rects.slice(1);
     wings += wingRects.length;
 
-    // Storeys from the surveyed height (the LiDAR roof average, which reads low), a storey and a half where the
-    // second floor lives under the roof
+    // Storeys as the assessor has them (ranch, storey and a half, two storey), else from the surveyed height (the LiDAR
+    // roof average, which reads low), a storey and a half where the second floor lives under the roof
     const h = Math.max(3, r.height);
-    const storeys = garage ? 0 : h < 4.6 ? 1 : h < 6.6 ? 1.5 : h < 10 ? 2 : 3;
-    const ranch = storeys === 1 && !historic;
+    const said = [0, 1, 1.5, 2, 0][look >> 18 & 7] || 0;
+    const storeys = garage ? 0 : said || (h < 4.6 ? 1 : h < 6.6 ? 1.5 : h < 10 ? 2 : 3);
+    const ranch = storeys === 1 && (said === 1 || !historic);
     const fh = garage ? 0.12 : historic ? 0.75 + 0.3 * id(21) : ranch ? 0.3 + 0.2 * id(21) : 0.5 + 0.35 * id(21);
 
     // Walls: clapboard in Ann Arbor's colors, about one in five brick, a few stone, stucco or cedar shakes
@@ -786,7 +821,11 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       else if (m < brickP + 0.07) matKind = M_STUCCO;
       else if (m < brickP + 0.07 + (storeys === 1.5 ? 0.15 : 0.05)) matKind = M_SHAKE;
     }
-    const sidingHex = matKind === M_BRICK ? pick(BRICKS, id(3)) : matKind === M_STONE ? pick(STONES, id(3))
+    // the walls and their color as the photo shows them
+    if (look & 7) matKind = (look & 7) - 1;
+    const seen = look >> 3 & 63;
+    const sidingHex = seen ? LOOK_PALETTES[matKind][seen - 1]
+      : matKind === M_BRICK ? pick(BRICKS, id(3)) : matKind === M_STONE ? pick(STONES, id(3))
       : matKind === M_STUCCO ? pick(STUCCO, id(3)) : matKind === M_SHAKE ? pick(SHAKES, id(3))
       : pick(historic && id(12) < 0.5 ? HERITAGE : SIDING, id(3));
     // trim: white on most; dark on some light houses, contrasting colors on historic ones
@@ -798,8 +837,13 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     else trim = tr < 0.72 ? 0 : tr < 0.92 ? 1 : 6;
     const accent = Math.floor(id(10) * ACCENT.length);
     const trimRGB = lin(TRIM[trim]);
+    // the wall shader gives shutters to houses whose seed's fract(seed * 2.713) is 0.68 or more: nudge the seed until
+    // that agrees with the photo
+    let seed = id(4) * 100;
+    const shutters = look >> 11 & 3;
+    for (let k = 0; shutters && k < 64 && (seed * 2.713 - Math.floor(seed * 2.713) >= 0.68) !== (shutters === 2); k++) seed += 0.731;
     const hc = {
-      c: cellOf(r.cx, r.cz), g, P, seed: id(4) * 100, sc: lin(sidingHex), style: [matKind, trim, accent, fh],
+      c: cellOf(r.cx, r.cz), g, P, seed, sc: lin(sidingHex), style: [matKind, trim, accent, fh],
       doors: doorsNear(r.cx, r.cz), uDir: { x: fb.ax, z: fb.az }, vDir: { x: vx, z: vz },
       trimRGB, soffitRGB: trimRGB.map((x) => x * 0.8), shade: lin(pick(SHINGLES, id(5)))
     };
@@ -834,8 +878,8 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       }
     }
 
-    // The main roof: as mapped, else from the house's shape and age
-    const tag = garage ? 0 : taggedRoof(ring, r.cx, r.cz);
+    // The main roof: as mapped, or as the photo shows it, else from the house's shape and age
+    const tag = garage ? 0 : taggedRoof(ring, r.cx, r.cz) || (look >> 15 & 7);
     if (tag) tagged++;
     const mL = M.u1 - M.u0, mW = M.v1 - M.v0;
     const frontAlong = frontSide < 0 ? (mL >= mW ? 'u' : 'v') : frontSide % 2 === 0 ? 'u' : 'v';
@@ -939,8 +983,10 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       });
     }
     const MF = frames[0];
-    // Dormers on a storey-and-a-half house, and on many foursquares' hipped roofs
-    if (!garage && (type === 'gable' || type === 'hip') && (storeys === 1.5 || (type === 'hip' && storeys >= 2 && id(13) < 0.7))) {
+    // Dormers where the photo shows them, else on a storey-and-a-half house and on many foursquares' hipped roofs
+    const dormersSeen = look >> 13 & 3;
+    const dormered = dormersSeen ? dormersSeen === 2 : storeys === 1.5 || (type === 'hip' && storeys >= 2 && id(13) < 0.7);
+    if (!garage && (type === 'gable' || type === 'hip') && dormered) {
       const fN = frontSide >= 0 ? wn(sideOf(M, frontSide)) : null;
       const dotB = fN ? fN.x * MF.bDir.x + fN.z * MF.bDir.z : 0;
       if (Math.abs(dotB) > 0.7) {
@@ -991,7 +1037,8 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       const blockTop = roofSpecs[rects.indexOf(R)].top, blockSoffit = frames[rects.indexOf(R)].soffit;
       const yaw = Math.atan2(-dir.z, dir.x);
       const craftsman = storeys === 1.5 || (!historic && storeys === 1 && id(17) < 0.3);
-      const hasPorch = segLen >= 3.4 && id(8) < (historic ? 0.85 : ranch ? 0.3 : 0.65);
+      const porchSeen = look >> 9 & 3;
+      const hasPorch = porchSeen ? porchSeen === 2 && segLen >= 2.6 : segLen >= 3.4 && id(8) < (historic ? 0.85 : ranch ? 0.3 : 0.65);
       const nSteps = Math.max(1, Math.round(fh / 0.18)), riser = fh / nSteps;
       const sw = craftsman ? 1.8 : 1.5;
       let outD;

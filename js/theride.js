@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { asset, log } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
+import { nativeFeed, decodeVehiclePositions, toWorld } from './live-feeds.js';
 
 // Lamp: TheRide, Ann Arbor's buses, on their real routes and timetable. data/theride.json.gz (build-theride.py, from
 // TheRide's GTFS feed) holds the routes, the stops in the map, each route's path and every trip's times at those stops.
@@ -21,7 +22,7 @@ function localTime(ms) {
   return { date: `${p.year}${p.month}${p.day}`, weekday: WEEKDAYS.indexOf(p.weekday), sec: +p.hour * 3600 + +p.minute * 60 + +p.second };
 }
 
-async function loadTheRide(url = './data/theride.json.gz') {
+async function loadTheRide(url = './data/theride.json.gz', name = 'theride') {
   try {
     const packed = await asset(url);
     if (!packed) return null;
@@ -30,10 +31,10 @@ async function loadTheRide(url = './data/theride.json.gz') {
       ? await new Response(new Response(packed).body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
       : packed;
     const data = JSON.parse(new TextDecoder().decode(bytes));
-    log(`[theride] ${data.routes.length} routes, ${data.stops.length} stops, ${data.trips.length} trips (feed ${data.feed[0]})`);
+    log(`[${name}] ${data.routes.length} routes, ${data.stops.length} stops, ${data.trips.length} trips (feed ${data.feed[0]})`);
     return data;
   } catch (error) {
-    console.warn('[theride] no timetable:', error);
+    console.warn(`[${name}] no timetable:`, error);
     return null;
   }
 }
@@ -106,15 +107,72 @@ function createSchedule(data, network) {
     const yesterday = servicesOn(inFeed(dayBefore(now.date)), (now.weekday + 6) % 7);
     const out = [];
     for (const t of data.trips) {
-      if (today.has(t[3]) && now.sec >= tripStart(t) - 30 && now.sec <= tripEnd(t)) out.push({ trip: t, sec: now.sec });
-      else if (yesterday.has(t[3]) && now.sec + 86400 >= tripStart(t) - 30 && now.sec + 86400 <= tripEnd(t)) out.push({ trip: t, sec: now.sec + 86400 });
+      const sec = now.sec - delayOf(t);
+      if (today.has(t[3]) && sec >= tripStart(t) - 30 && sec <= tripEnd(t)) out.push({ trip: t, sec });
+      else if (yesterday.has(t[3]) && sec + 86400 >= tripStart(t) - 30 && sec + 86400 <= tripEnd(t)) out.push({ trip: t, sec: sec + 86400 });
     }
     return out;
   }
   // How far into the trip's service day it is at `ms`
   function secondsInto(trip, ms) {
+    const sec = localTime(ms).sec - delayOf(trip);
+    return sec < tripStart(trip) - 6 * 3600 ? sec + 86400 : sec;
+  }
+
+  // ---- Where the buses really are (GTFS-realtime vehicle positions) ------------------------------------------------
+  // Each live bus becomes how late (or early) its trip runs: where on its route the bus is, read back into the time
+  // the timetable has it there, against the time of the report. The trip then runs that much later everywhere above,
+  // so the bus is drawn where it really is and goes on from there. A report older than ten minutes is let go.
+  const tripById = new Map();
+  (data.tripIds || []).forEach((id, i) => tripById.set(id, data.trips[i]));
+  const live = new Map(); // trip -> { delay, stamp }
+  const delayOf = (trip) => live.get(trip)?.delay ?? 0;
+  const liveStamp = (trip) => live.get(trip)?.stamp ?? 0;
+  function rawSecondsInto(trip, ms) {
     const sec = localTime(ms).sec;
     return sec < tripStart(trip) - 6 * 3600 ? sec + 86400 : sec;
+  }
+  function timetableSecAt(trip, x, z) {
+    for (const route of routesOf(trip)) {
+      let best = 30, d = null;
+      for (let k = 0; k < route.edges.length; k++) {
+        const e = route.edges[k];
+        const qx = x - e.sx, qz = z - e.sz;
+        const s = qx * e.dx + qz * e.dz;
+        if (s < -6 || s > e.len + 6) continue;
+        const off = Math.abs(qx * e.rx + qz * e.rz);
+        if (off < best) { best = off; d = route.cum[k] + Math.max(0, Math.min(e.len, s)); }
+      }
+      if (d === null) continue;
+      const st = route.stops;
+      if (d <= st[0].d + 4) return st[0].dep;
+      for (let j = 1; j < st.length; j++) {
+        const a = st[j - 1], b = st[j];
+        if (d > b.d + 8) continue;
+        if (d >= b.d - 4) return b.arr; // at the stop
+        const f = Math.max(0, Math.min(1, (d - a.d - 4) / Math.max(1, b.d - a.d)));
+        return a.dep + f * (b.arr - a.dep);
+      }
+      return st[st.length - 1].arr;
+    }
+    return null;
+  }
+  function applyLive(feed, nowMs) {
+    let n = 0;
+    for (const v of feed.vehicles) {
+      const trip = tripById.get(v.trip);
+      if (!trip) continue;
+      const stamp = (v.time || feed.time) * 1000;
+      if (!stamp || nowMs - stamp > 600e3) continue;
+      const { x, z } = toWorld(v.lat, v.lon);
+      const at = timetableSecAt(trip, x, z);
+      if (at === null) continue;
+      const delay = Math.max(-900, Math.min(2700, rawSecondsInto(trip, stamp) - at));
+      live.set(trip, { delay, stamp });
+      n++;
+    }
+    for (const [trip, l] of live) if (nowMs - l.stamp > 600e3) live.delete(trip);
+    return n;
   }
 
   // ---- Each path as runs of road edges ----------------------------------------------------------------------------
@@ -296,7 +354,7 @@ function createSchedule(data, network) {
     return { short, name, color: col, headsign: head };
   }
 
-  return { activeTrips, secondsInto, placeAt, label, stops: data.stops };
+  return { activeTrips, secondsInto, placeAt, label, applyLive, delayOf, liveStamp, stops: data.stops };
 }
 
 // ---- The stop signs ---------------------------------------------------------------------------------------------------
@@ -374,4 +432,18 @@ function buildStopSigns(stops, network) {
   return { plates, poles, placed };
 }
 
-export { loadTheRide, createSchedule, buildStopSigns, localTime };
+// Asks the app around the page for TheRide's live positions and moves the schedule's trips to them; how many buses
+// it placed, or null where there's no live feed (Lamp's preview, or the feed not answering)
+const THERIDE_VEHICLES = 'https://rt.theride.org/gtfsrt/vehicles';
+async function fetchTheRideLive(sched) {
+  const bytes = await nativeFeed(THERIDE_VEHICLES);
+  if (!bytes) return null;
+  try {
+    return sched.applyLive(decodeVehiclePositions(bytes), Date.now());
+  } catch (error) {
+    console.warn('[theride] live positions unreadable:', error);
+    return null;
+  }
+}
+
+export { loadTheRide, createSchedule, buildStopSigns, localTime, fetchTheRideLive };

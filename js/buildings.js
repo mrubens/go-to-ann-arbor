@@ -35,7 +35,7 @@ import {
 import { GEO } from './city-geodata.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { createBuildingFootprints } from './building-footprints.js';
-import { buildHouses, streamHouses } from './houses.js';
+import { buildHouses, streamHouses, shopLook } from './houses.js';
 import { TIER } from './device-tier.js';
 import { groundStreamCenter } from './terrain.js';
 import { buildChurches, churchPlan } from './churches.js';
@@ -519,7 +519,11 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     // mixed-use parcel, not the University's own or a house-style one
     const storefronts = b.height >= 6 && kind !== 5 && (mat < 5 || mat > 7)
       && (kind === 2 || use === LAND_USE.SHOPS || use === LAND_USE.MIXED_USE);
-    const record = { ...b, tone, ground, storefronts };
+    // Lamp: a shop building's facade, display windows and shopfront color as its street photo shows them
+    // (data/building-looks.json): red brick, buff brick and stone, painted (kept), glass and metal
+    const look = storefronts ? shopLook(b) : 0;
+    if (look & 7) mat = [mat, 1, 0, 0, mat, 3][look & 7];
+    const record = { ...b, tone, ground, storefronts, shopLook: look };
     surveyedBuckets[mat].push(record);
     const detail = {
       cx: b.cx, cz: b.cz, minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ,
@@ -975,14 +979,18 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       // 5. Retail awnings & illuminated storefront fascia signs
       for (let i = 0; i < blk.awnings.length && awningCount < MAX_AWNINGS; i++) {
         const a = blk.awnings[i];
-        dummy.rotation.set(0, a.ry || 0, 0);
+        dummy.rotation.set(0, a.ry || 0, a.tilt || 0);
         dummy.position.set(a.x, a.y, a.z);
-        dummy.scale.set(a.w, 0.75, a.d);
+        dummy.scale.set(a.w, a.h || 0.75, a.d);
         dummy.updateMatrix();
+        dummy.rotation.z = 0;
         awningInst.setMatrixAt(awningCount, dummy.matrix);
         awningInst.setColorAt(awningCount, awningPalette[a.colorIdx % awningPalette.length]);
 
+        // Lamp: a photo's awning (building-details.js) gets no made-up sign or spotlight: the shop's own sign is
+        // shop-signs.js's
         const themeIdx = a.colorIdx % signInsts.length;
+        if (a.seen) { awningCount++; continue; }
         if (signCounts[themeIdx] < MAX_SIGNS_PER_THEME) {
           dummy.position.set(a.x, 4.68, a.z);
           dummy.scale.set(0.28, 0.86, a.d * 0.92);

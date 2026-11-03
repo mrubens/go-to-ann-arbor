@@ -82,6 +82,9 @@ const cityUniforms = hot(import.meta).keep('cityUniforms', () => ({
   uRoadWetness: uniform(0.38),
   uCanyonBounce: uniform(0.52)
 }));
+// Lamp: how much of the ground lies under snow, 0 to 1 (snow-cover.js); added after the others, so a city kept from
+// before it gets it too
+cityUniforms.uSnow ??= uniform(0);
 
 // Fast deterministic 2D -> 1D hash in TSL
 const hash2D = Fn(([p]) => {
@@ -164,7 +167,7 @@ const boxCoverage = Fn(([x, a, b, s]) => {
   return clamp(min(xv.add(sv), b).sub(max(xv.sub(sv), a)).div(sv.mul(2.0)), 0.0, 1.0);
 });
 
-// Keep distant lit windows in 1–2 pixel clusters. Adjacent world-anchored scales cross-fade, and
+// Keep distant lit windows in 1-2 pixel clusters. Adjacent world-anchored scales cross-fade, and
 // the half-width inset leaves room for filtering at cell edges while preserving mean brightness.
 const distantWindowLight = Fn(([grid, fw, probability, seed, lod]) => {
   const light = float(probability).toVar();
@@ -507,8 +510,16 @@ const SIGN_NAMES = false;
 const GHOST_ADS = false;
 
 // Shops span several upstairs bays; every material output shares their glazing and door layout.
+// Lamp: shopfront frame colors a street photo can give a shop (build-building-looks.py SHOP_COLORS, in order)
+const SHOP_FRAMES = [0x263831, 0x463b30, 0x242a32, 0x1d1e21, 0xe9e4d6, 0xe6dcc0, 0x7a2a24, 0x2b3f5a, 0x7a5a3c, 0x8a8d88];
+
 function createStorefront(facade, seed, local) {
-  const { wallS, wallW, boxSeed, uCoord, vCoord, isGroundFloor, isRoof, solid, coping } = facade;
+  const { wallS, wallW, boxSeed, uCoord, vCoord, isGroundFloor, isRoof, solid, coping, kind } = facade;
+  // Lamp: the shop's look (building-footprints.js), 0 where its photo said nothing: display windows 1 small, 2 medium,
+  // 3 large; frame 1 + an index into SHOP_FRAMES
+  const look = floor(kind.mul(128).add(0.5));
+  const frameSeen = mod(look, 16), windowsSeen = floor(look.div(16));
+  const smallWindows = step(abs(windowsSeen.sub(1)), 0.1), largeWindows = step(abs(windowsSeen.sub(3)), 0.1);
   const width = local ? wallW.div(max(floor(wallW.div(7.5).add(0.5)), 1)) : float(7.5);
   const horizontal = local ? wallS : uCoord.mul(mix(sign(facadeWorldNormal.z), sign(facadeWorldNormal.x).negate(), facadeAlongZ));
   const grid = horizontal.div(width);
@@ -522,7 +533,11 @@ function createStorefront(facade, seed, local) {
   const doorX = mix(float(0.24), width.sub(1.36), step(0.5, choice));
   const door = band(x, doorX, doorX.add(1.12), fw.x);
   const doorPane = band(x, doorX.add(0.06), doorX.add(1.06), fw.x).mul(band(y, 0.32, 2.42, fw.y));
-  const display = band(x, 0.18, width.sub(0.18), fw.x).mul(band(y, 0.58, 2.88, fw.y));
+  // display windows: over a knee wall; small ones set in solid wall; large ones from near the sidewalk, narrow piers
+  const sideWall = mix(mix(float(0.18), width.mul(0.22), smallWindows), float(0.08), largeWindows);
+  const sill = mix(mix(float(0.58), float(0.95), smallWindows), float(0.22), largeWindows);
+  const head = mix(float(2.88), float(2.3), smallWindows);
+  const display = band(x, sideWall, width.sub(sideWall), fw.x).mul(band(y, sill, head, fw.y));
   const transom = band(y, 2.46, 2.52, fw.y);
   const glass = max(display.mul(float(1).sub(max(door, transom))), doorPane)
     .add(display.mul(door).mul(band(y, 2.52, 2.88, fw.y))).clamp(0, 1);
@@ -530,7 +545,10 @@ function createStorefront(facade, seed, local) {
   const kickplate = door.mul(band(y, 0.23, 0.32, fw.y));
   const metal = max(handle, kickplate);
   const glazing = glass.mul(float(1).sub(handle));
-  const paint = mix(mix(color(0x263831), color(0x463b30), step(0.38, choice)), color(0x242a32), step(0.72, choice));
+  let seenPaint = color(SHOP_FRAMES[0]);
+  for (let i = 1; i < SHOP_FRAMES.length; i++) seenPaint = mix(seenPaint, color(SHOP_FRAMES[i]), step(i + 0.5, frameSeen));
+  const paint = mix(mix(mix(color(0x263831), color(0x463b30), step(0.38, choice)), color(0x242a32), step(0.72, choice)),
+    seenPaint, step(0.5, frameSeen));
   const signWidth = min(width.mul(0.82), 5.5);
   const signUV = vec2(x.sub(width.mul(0.5)).div(signWidth).add(0.5), y.sub(2.96).div(0.6));
   const signLod = log2(max(fw.x.mul(512).div(signWidth), fw.y.mul(64 / 0.6)));
@@ -1468,6 +1486,7 @@ function createTreeMaterial(leafAtlas) {
   // Light through the leaves: yellow-green, strongest out on the thin shell
   mat.translucencyNode = aData.xyz.mul(vec3(1.0, 1.2, 0.45)).mul(leaf.r.mul(1.5)).mul(crownAO.mul(0.8).add(0.2)).mul(isLeaf);
 
+  mat.userData.snow = 0; // leaves keep no snow (snow-cover.js)
   return mat;
 }
 
@@ -2049,6 +2068,7 @@ function createRoadSurfaceMaterial() {
     return reflectCol.mul(max(puddle, film.mul(0.35))).mul(roadFresnel).mul(cityUniforms.uInteriorGlow).mul(0.07);
   })();
 
+  mat.userData.snow = 0.18; // plowed: only a little slush (snow-cover.js)
   return mat;
 }
 
@@ -2123,6 +2143,7 @@ function createRoadPaintMaterial() {
   mat.aoNode = canyonSkyAONode();
 
   _roadPaintMaterial = mat;
+  mat.userData.snow = 0.18;
   return mat;
 }
 
@@ -2343,7 +2364,7 @@ function createBillboardCanvasTexture(themeKey) {
     ctx.fillStyle = '#ffdf78';
     ctx.font = '800 18px Inter, Arial, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('★  BROADWAY MUSICAL SPECTACULAR  ★', 256, 46);
+    ctx.fillText('*  BROADWAY MUSICAL SPECTACULAR  *', 256, 46);
 
     ctx.fillStyle = '#ffffff';
     ctx.font = '900 44px Inter, Arial, sans-serif';
@@ -2361,7 +2382,7 @@ function createBillboardCanvasTexture(themeKey) {
 
     ctx.fillStyle = '#fff3c4';
     ctx.font = '800 20px Inter, Arial, sans-serif';
-    ctx.fillText('★★★★★  "UNFORGETTABLE!" — NY TIMES', 256, 185);
+    ctx.fillText('*****  "UNFORGETTABLE!" : NY TIMES', 256, 185);
 
     ctx.fillStyle = '#ffae42';
     ctx.font = '700 16px JetBrains Mono, monospace';
@@ -2541,7 +2562,7 @@ function createBillboardCanvasTexture(themeKey) {
     ctx.fillStyle = '#ffd15c';
     ctx.textAlign = 'right';
     ctx.font = '800 22px JetBrains Mono, monospace';
-    ctx.fillText('NYC 72°F ☀', 492, 33);
+    ctx.fillText('NYC 72°F', 492, 33);
 
     // Center headline graphic
     ctx.fillStyle = '#ffffff';
@@ -3124,7 +3145,7 @@ function createWaterMaterial() {
         const sV = tHit.mul(sigma2).add(fwH).add(0.5).toVar();
         const sU = tHit.mul(sigma2).mul(max(viewDir.y, 0.05)).add(fwU).add(0.3).toVar();
 
-        // Lots 24 m wide with heights 0.3–1.3× the district skyline (averaged once a footprint spans several lots)
+        // Lots 24 m wide with heights 0.3-1.3x the district skyline (averaged once a footprint spans several lots)
         const lot = floor(u.div(24.0));
         const r1 = hash2D(vec2(lot, 5.1));
         const r2 = hash2D(vec2(lot, 9.7));
@@ -3159,6 +3180,7 @@ function createWaterMaterial() {
     return emit;
   })();
 
+  mat.userData.snow = 0; // open water (snow-cover.js)
   return mat;
 }
 
@@ -3468,6 +3490,7 @@ function createContactShadowMaterial() {
   mat.opacityNode = shadowOpacity;
   // Smoothly occlude wet-road SSR under the vehicle footprint proportional to shadow opacity (0 at quad edges)
   mat.mrtNode = mrt({
+    output: output,
     normal: vec4(0.0, 0.0, 0.0, 0.0),
     metalRough: vec4(0.0, 1.0, 0.0, shadowOpacity.mul(0.88))
   });

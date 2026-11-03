@@ -7,7 +7,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "10efd379e49a11c54a9754e0273a81f8edef2827",
+      "commit" : "186723198ee231f3fd05f2609bc1ab332fd93076",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"
@@ -145,6 +145,60 @@
     {
       "author" : "Michigan EGLE (MPART)",
       "name" : "Huron River PFAS surface water sampling"
+    },
+    {
+      "author" : "Ann Arbor Area Transportation Authority (TheRide)",
+      "name" : "TheRide GTFS-realtime vehicle positions",
+      "url" : "https://rt.theride.org/gtfsrt/vehicles"
+    },
+    {
+      "author" : "University of Michigan Logistics, Transportation & Parking",
+      "name" : "University of Michigan Blue Buses GTFS timetable",
+      "url" : "https://webapps.fo.umich.edu/transit_uploads/google_transit.zip"
+    },
+    {
+      "author" : "City of Ann Arbor",
+      "name" : "Downtown Street Closures"
+    },
+    {
+      "author" : "Michigan Department of Transportation",
+      "name" : "MiDrive construction and closures",
+      "url" : "https://mdotjboss.state.mi.us/MiDrive/map"
+    },
+    {
+      "author" : "The OpenSky Network",
+      "name" : "OpenSky Network live aircraft states",
+      "url" : "https://opensky-network.org"
+    },
+    {
+      "author" : "Bird Rides (Spin)",
+      "license" : "LicenseRef-Bird-GBFS-Data-License",
+      "name" : "Ann Arbor scooter locations (GBFS)",
+      "url" : "https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs"
+    },
+    {
+      "author" : "Open-Meteo.com",
+      "license" : "CC-BY-4.0",
+      "name" : "Snow depth (Open-Meteo)",
+      "url" : "https://open-meteo.com"
+    },
+    {
+      "author" : "Mapillary contributors",
+      "license" : "CC-BY-SA-4.0",
+      "name" : "Mapillary street-level imagery (decides house and shopfront looks; no photos ship)",
+      "url" : "https://www.mapillary.com"
+    },
+    {
+      "author" : "City of Ann Arbor",
+      "license" : "None",
+      "name" : "Parcels with assessor's year built and storeys",
+      "url" : "https://a2maps.a2gov.org/a2arcgis/rest/services/WaterServiceLeadMaterialAll/MapServer/3"
+    },
+    {
+      "author" : "Ken MacInnis",
+      "commit" : "1bf1070944c70f0845098fdc3d82749ebdaf67dc",
+      "name" : "GPU and memory optimizations (pull request #1)",
+      "url" : "https://github.com/kcm/go-to-ann-arbor/tree/perf/gpu-and-memory-optimizations"
     }
   ]
 }

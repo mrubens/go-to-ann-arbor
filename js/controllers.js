@@ -720,7 +720,7 @@ class ThirdPersonControllerManager {
 
     if (!root.parent) this.scene.add(root);
 
-    const kindName = { sedan: 'Sedan', suv: 'SUV', minivan: 'Minivan', pickup: 'Pickup', van: 'Van', forester: 'Forester', sports: 'Sports Car', tesla: 'Tesla', ioniq: 'Ioniq 5', cybertruck: 'Cybertruck', r1s: 'Rivian R1S', r1t: 'Rivian R1T' };
+    const kindName = { sedan: 'Sedan', suv: 'SUV', minivan: 'Minivan', pickup: 'Pickup', van: 'Van', forester: 'Wagon', sports: 'Sports Car', tesla: 'EV Sedan', ioniq: 'EV Hatch', cybertruck: 'Wedge Truck', r1s: 'EV SUV', r1t: 'EV Pickup' };
     return {
       type: 'car',
       label: own ? 'Your Car' : `Borrowed ${kindName[look.kind] || 'Car'}`,

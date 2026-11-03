@@ -465,12 +465,23 @@ const SPECIES = [
 SPECIES[0].fall = [0xa8862e, 0x8f7a2c, 0x5c6c28];
 SPECIES[1].fall = [0xd9b42a, 0xe6c63a, 0xb8a02a];
 
-// Fall color from late September to late November, by the day of the year where the game is played
-// (lamp-game.js gives Date.now a fixed day in the preview, so a replay shows the same trees)
-const AUTUMN = (() => {
-  const d = new Date(Date.now()), day = (d - new Date(d.getFullYear(), 0, 1)) / 864e5;
-  return day > 268 && day < 330;
+// Fall color by the day of the year where the game is played (lamp-game.js gives Date.now a fixed day in the preview,
+// so a replay shows the same trees): each species starts turning on its own day (maples first, oaks last), each tree a
+// few days either side, reaching full color about two weeks on; a month after that its leaves have gone brown
+const DAY_OF_YEAR = (() => {
+  const d = new Date(Date.now());
+  return (d - new Date(d.getFullYear(), 0, 1)) / 864e5;
 })();
+const TURNS = { plane: 288, locust: 280, elm: 284, maple: 272, oak: 292, flowering: 278 };
+const AUTUMN = DAY_OF_YEAR > 262 && DAY_OF_YEAR < 345;
+const BROWN = new THREE.Color(0x6b4a2a);
+// How far a tree of this species has turned (0 summer green, 1 full fall color) and gone brown after (0 to 1)
+function fallOf(name, r) {
+  const start = TURNS[name];
+  if (!AUTUMN || start == null) return [0, 0];
+  const at = DAY_OF_YEAR - start - (r - 0.5) * 12;
+  return [Math.min(1, Math.max(0, at / 14)), Math.min(1, Math.max(0, (at - 30) / 16))];
+}
 
 // =====================================================================================================================
 // 3. SKELETON
@@ -972,7 +983,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     if (list.length > 20) t.height = list[Math.floor((0.35 + hashPos(t.x, 2.7, t.z) * 0.65) * (list.length - 1))];
   }
   const dummy = new THREE.Object3D();
-  const tint = new THREE.Color();
+  const tint = new THREE.Color(), fallTint = new THREE.Color();
   // Where site t's tree stands (left in `dummy`): { sp, variant, s, y }, or null where a building is in the way
   function placeOf(t, cleared = false) {
     const sp = Math.min(SPECIES.length - 1, Math.max(0, t.species || 0));
@@ -1035,8 +1046,12 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     trunkR[i] = SPECIES[sp].trunk.r * dummy.scale.x;
     treeH[i] = heightOf[sp][variant] * dummy.scale.y;
     dummy.matrix.toArray(mats, i * 16);
-    const palette = (AUTUMN && SPECIES[sp].fall) || SPECIES[sp].tints;
-    tint.setHex(palette[Math.floor(r3 * palette.length * 0.9999)]).multiplyScalar(0.82 + r1 * 0.36);
+    const { tints, fall, name } = SPECIES[sp];
+    tint.setHex(tints[Math.floor(r3 * tints.length * 0.9999)]);
+    const [turned, browned] = fall ? fallOf(name, r2) : [0, 0];
+    if (turned > 0) tint.lerp(fallTint.setHex(fall[Math.floor(r3 * fall.length * 0.9999)]), turned);
+    if (browned > 0) tint.lerp(BROWN, browned * 0.8);
+    tint.multiplyScalar(0.82 + r1 * 0.36);
     data.set([tint.r, tint.g, tint.b, sp + r2 * 0.999], i * 4);
     px[i] = t.x;
     py[i] = y + 6 * s;
@@ -1135,7 +1150,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     mesh.name = m.name;
     mesh.count = 0;
     mesh.visible = false;
-    mesh.castShadow = true;
+    mesh.castShadow = !m.cell.far;
     mesh.receiveShadow = true;
     m.cell.group.add(mesh);
     m.type.meshes.push(mesh);

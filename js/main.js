@@ -13,9 +13,10 @@ import { buildRailways } from './railways.js';
 import { buildParkedCars } from './parked-cars.js';
 import { buildCityBlocks } from './buildings.js';
 import { setDistricts } from './districts.js';
-import { setRoofShapes } from './houses.js';
+import { setRoofShapes, setBuildingLooks } from './houses.js';
 import { buildStreetDetails } from './street-details.js';
 import { createTrafficSystem, createHighwayTraffic } from './traffic.js';
+import { loadCityClosures } from './city-closures.js';
 import { buildRoadPaint } from './road-paint.js';
 import { buildTrafficControls } from './traffic-controls.js';
 import { buildShopSigns } from './shop-signs.js';
@@ -39,6 +40,10 @@ import { CityAudioSystem } from './audio-system.js';
 import { fetchWeather, createPrecipitation } from './weather.js';
 import { fetchRiverFlow } from './river-gauge.js';
 import { fetchRiverPfas } from './river-pfas.js';
+import { createPlanes } from './planes.js';
+import { createScooters } from './scooters.js';
+import { dressForSnow, loadSnowCover } from './snow-cover.js';
+import { createMoon } from './moon.js';
 import { waterDisturb } from './tsl-materials.js';
 import { buildRoadWork } from './road-work.js';
 
@@ -207,6 +212,12 @@ async function initApp() {
   const cascadesPart = live.keep('cascades', () => cityPart((g) => buildCascades(g, waterLevel)), { inputs: [heights, grid] });
   // Lamp: kayakers and tubers on their way down the river from the cascades (river-people.js)
   const riverPeoplePart = live.keep('riverPeople', () => cityPart((g) => buildRiverPeople(g)), { inputs: [heights, grid] });
+  // the real aircraft overhead (planes.js)
+  const planesPart = live.keep('planes', () => cityPart((g) => createPlanes(g)), { from: ['js/planes.js', 'js/live-feeds.js'] });
+  // the rental scooters where they really stand (scooters.js)
+  const scootersPart = live.keep('scooters', () => cityPart((g) => createScooters(g)), { inputs: [heights], from: ['js/scooters.js', 'js/live-feeds.js', 'data/scooters-sample.json'] });
+  // Lamp: the moon in its real phase (moon.js)
+  const moonPart = live.keep('moon', () => cityPart((g) => createMoon(g)), { from: ['js/moon.js'] });
   await showLoadingStage('Laying out the hills of Washtenaw County...');
   const outskirtsPart = live.keep('outskirts', () => cityPart((g) => buildOutskirts(g), { cull: setupSceneCulling, still: true }),
     { inputs: [heights, grid], from: ['js/outskirts.js'] });
@@ -228,8 +239,11 @@ async function initApp() {
   // the roof shapes OpenStreetMap's mappers tagged (build-roof-shapes.py), for the houses that have one
   const roofBytes = await asset('data/roof-shapes.json');
   setRoofShapes(roofBytes ? JSON.parse(new TextDecoder().decode(roofBytes)) : null);
+  // how houses and shopfronts really look: the assessor's records and street photos (build-building-looks.py)
+  const looksBytes = await asset('data/building-looks.json');
+  setBuildingLooks(looksBytes ? JSON.parse(new TextDecoder().decode(looksBytes)) : null);
   const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarks.made.colliders, addresses, gasStations), { cull: setupSceneCulling, still: true }),
-    { inputs: [heights, landmarks], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json'] });
+    { inputs: [heights, landmarks], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json'] });
   const cityBlocks = blocks.made;
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...outskirts.colliders, ...(cityGrid.colliders || [])];
@@ -248,6 +262,7 @@ async function initApp() {
   const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
+  const cityClosures = await loadCityClosures();
   // Buildings turned along non-grid streets have oriented colliders whose world bounds reach past their lots: they stay
   // inside the property line anyway, so the road network (lanes & sidewalks) doesn't need them.
   // Elevated building sections that clear even a bus don't obstruct ground traffic (Lamp: measured from the ground
@@ -257,7 +272,7 @@ async function initApp() {
     ...details.made.footprints,
     ...allColliders.filter((c) => !c.obb
       && (c.minY ?? 0) - groundHeight((c.minX + c.maxX) * 0.5, (c.minZ + c.maxZ) * 0.5) < 3.5)
-  ], details.made.signalIntersections)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details], from: [CITY_MAP] });
+  ], details.made.signalIntersections, cityClosures)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details], from: [CITY_MAP, 'data/city-closures.json'] });
   const trafficSystem = traffic.made;
   markInit('traffic');
   const highway = live.keep('highwayTraffic', () => cityPart((g) => createHighwayTraffic(g, grid.made.highwayLanes)), { inputs: [grid], from: [CITY_MAP] });
@@ -346,7 +361,7 @@ async function initApp() {
     onLand: (it, spin) => audioSystem?.cue(it.kind === 'tree' ? 'thud' : 'crash',
       { x: it.x + it.dx * it.height * 0.6, y: it.g, z: it.z + it.dz * it.height * 0.6 }, Math.min(1, 0.4 + spin * 0.2))
   });
-  const parts = [grid, cascadesPart, riverPeoplePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, roadWorkPart];
+  const parts = [grid, cascadesPart, riverPeoplePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, planesPart, scootersPart, moonPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -355,6 +370,12 @@ async function initApp() {
   // camera for their level of detail, trees.js): the scene calls it for each part.
   // the houses near the player, on a phone (houses.js streamHouses)
   const houseStream = blocks.group.getObjectByName('AnnArborHouses')?.userData.stream;
+  // Lamp: snow lies where it really lies today (snow-cover.js), on what stands still: moving traffic, people, the
+  // river and the sky stay as they are
+  // (only once there is snow: on a bare day the materials keep their shaders as they are)
+  loadSnowCover().then((cover) => {
+    if (cover > 0) for (const part of [grid, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart]) dressForSnow(part.group);
+  });
   const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
   scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
   markInit('ground');
@@ -536,6 +557,9 @@ async function initApp() {
   let renderPipeline, scenePass, colorGrade, ssrPass = null, sceneMRT = null;
   if (!QUALITY.reflections) {
     scenePass = pass(scene, cameraSystem.camera);
+    scenePass.renderTarget.storeMultisampledColorBuffer = false;
+    scenePass.renderTarget.storeMultisampledDepthBuffer = false;
+    scenePass.renderTarget.resolveDepthBuffer = false;
     colorGrade = createPostProcessing(renderer, scenePass.getTextureNode('output'), vec3(0), { bloom: QUALITY.bloom });
     renderPipeline = new THREE.RenderPipeline(renderer, colorGrade.outputNode);
   } else {
@@ -896,7 +920,7 @@ async function initApp() {
     const btn = document.getElementById('time-now');
     if (!btn) return;
     const { rise, set } = sunTimes(Date.now());
-    const at = (t) => (t ? new Date(t).toLocaleTimeString('en-US', { timeZone: 'America/Detroit', hour: 'numeric', minute: '2-digit' }) : '—');
+    const at = (t) => (t ? new Date(t).toLocaleTimeString('en-US', { timeZone: 'America/Detroit', hour: 'numeric', minute: '2-digit' }) : '-');
     btn.title = `Now in Ann Arbor · sunrise ${at(rise)}, sunset ${at(set)}`;
     const label = btn.querySelector('.seg-label');
     const w = lightingSystem.weather;
@@ -1318,6 +1342,9 @@ async function initApp() {
     parkedCars.update(cameraSystem.camera);
     roadWork.update(dt, controllerManager.getActiveEntity(), controllerManager.activeMode, trafficSystem.cars, trafficSystem.buses);
     riverPeoplePart.made.update(dt, elapsed, cameraSystem.currentPos);
+    planesPart.made.update(dt);
+    scootersPart.made.update(dt, cameraSystem.currentPos);
+    moonPart.made.update(cameraSystem.camera);
     mark('trains & parked');
     const kayak = controllerManager.entities.kayak;
     if (kayak.strokes !== heardStrokes) {

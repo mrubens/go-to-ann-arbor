@@ -31,7 +31,7 @@ import {
 import { groundHeight, groundTilt } from './terrain.js';
 import { MOTO_SPECS, HELMET_OF, HELMET_PAINTS, buildMotoGeometry, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
-import { loadTheRide, createSchedule, buildStopSigns } from './theride.js';
+import { loadTheRide, createSchedule, buildStopSigns, fetchTheRideLive } from './theride.js';
 
 // Cars and buses follow the road graph, obey signals, yield at crossings and react to collisions.
 // Vehicles replenish around the player; pedestrian-system.js manages the nearby walking population.
@@ -123,7 +123,7 @@ function createBusDestinationTexture() {
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
-function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
+function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, cityClosures = null) {
   const group = new THREE.Group();
   group.name = 'TrafficAndPedestrians';
   let collisionListener = null;
@@ -156,7 +156,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   const network = buildRoadNetwork(sidewalks, obstacles, signalIntersections);
   const { nodes, edges, connector, curvePoint } = network;
   // Lamp: blocks shut for road work (road-work.js): nobody turns into one or starts on one
-  const closures = planClosures(edges);
+  const closures = planClosures(edges, cityClosures);
 
   // Sides of an intersection (road-network.js step 9): a grid intersection's are 0 east, 1 west, 2 south, 3 north;
   // centreline junctions number their arms from 4. Where lane i of edge e meets a crosswalk, measured along the
@@ -370,10 +370,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   const carShadowInst = new THREE.InstancedMesh(unitPlane, contactShadowMat, NUM_CARS);
   carShadowInst.renderOrder = 998;
 
-  for (const m of bodyMeshes) m.castShadow = m.receiveShadow = true;
-  for (const m of policeLightbarMeshes) m.castShadow = true;
-  carWheelLeftInst.castShadow = carWheelLeftInst.receiveShadow = true;
-  carWheelRightInst.castShadow = carWheelRightInst.receiveShadow = true;
+  for (const b of Object.values(bodies)) {
+    b.near.castShadow = b.near.receiveShadow = true;
+    b.far.receiveShadow = true;
+  }
+  carWheelLeftInst.receiveShadow = true;
+  carWheelRightInst.receiveShadow = true;
 
   group.add(
     ...bodyMeshes,
@@ -415,8 +417,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   busShadowInst.renderOrder = 998;
 
   busBodyInst.castShadow = busBodyInst.receiveShadow = true;
-  busWheelLeftInst.castShadow = busWheelLeftInst.receiveShadow = true;
-  busWheelRightInst.castShadow = busWheelRightInst.receiveShadow = true;
+  busWheelLeftInst.receiveShadow = true;
+  busWheelRightInst.receiveShadow = true;
 
   const buses = [];
   for (let i = 0; i < NUM_BUSES; i++) {
@@ -1617,16 +1619,44 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // Lamp: TheRide's buses by the timetable (theride.js). Every half second: buses whose trip is over (off their route),
   // out of sight, or that the player has left far behind are taken off; then each trip on the road whose bus the
   // timetable puts within NEAR_RADIUS (out of sight, unless the view just jumped) gets one, there, in the right lane.
-  let schedule = null;
+  // The University of Michigan's Blue Buses (data/umbus.json.gz, the same tool from U-M's own GTFS feed) run the same
+  // way on their routes and timetable, in Michigan blue. TheRide's buses follow its live positions where the app can
+  // read them (theride.js applyLive): a bus the feed puts elsewhere than the timetable comes back there once out of sight.
+  const schedules = [];
   let scheduleTimer = 0;
   const tripBus = new Map();
   const tripsDone = new Set();
   loadTheRide().then((data) => {
     if (!data) return;
-    schedule = createSchedule(data, network);
+    const sched = createSchedule(data, network);
+    sched.um = false;
+    schedules.push(sched);
+    const signs = buildStopSigns(data.stops, network);
+    group.add(signs.poles, signs.plates);
+    followLive(sched);
+  });
+  loadTheRide('./data/umbus.json.gz', 'umbus').then((data) => {
+    if (!data) return;
+    const sched = createSchedule(data, network);
+    sched.um = true;
+    schedules.push(sched);
     const signs = buildStopSigns(data.stops, network);
     group.add(signs.poles, signs.plates);
   });
+  // asked again every 30 s of play, counted in scheduleBuses (the game reads no clock of its own for this)
+  let liveSched = null, liveWait = 0, liveBusy = false, liveLogged = false;
+  function followLive(sched) { liveSched = sched; liveWait = 0; }
+  function askLive(dt) {
+    if (!liveSched || liveBusy) return;
+    liveWait -= dt;
+    if (liveWait > 0) return;
+    liveWait = 30;
+    liveBusy = true;
+    fetchTheRideLive(liveSched).then((n) => {
+      liveBusy = false;
+      if (n != null && !liveLogged) { liveLogged = true; log(`[theride] live: ${n} buses placed by their real positions`); }
+    });
+  }
   function releaseBus(b, done) {
     if (b.trip) {
       tripBus.delete(b.trip);
@@ -1636,9 +1666,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     b.route = null;
     b.edge = null;
     b.conn = null;
+    b.sched = null;
   }
   function scheduleBuses(dt, jump) {
-    if (!schedule) return;
+    if (!schedules.length) return;
+    askLive(dt);
     scheduleTimer -= dt;
     if (scheduleTimer > 0 && !jump) return;
     scheduleTimer = 0.5;
@@ -1646,34 +1678,42 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       if (!b.edge || b === ridden) continue;
       if (Math.hypot(b.x - focusX, b.z - focusZ) > VEHICLE_RADIUS) releaseBus(b, false);
       else if (!b.route && (!hasView || !visible(b.x, b.z, 22))) releaseBus(b, true);
+      // the live feed moved this trip's bus a long way from where it is: put it back there once out of sight
+      else if (b.sched && b.liveAt !== b.sched.liveStamp(b.trip) && Math.abs(b.sched.delayOf(b.trip) - b.delay) > 45 &&
+        (!hasView || !visible(b.x, b.z, 22))) releaseBus(b, false);
     }
-    const active = schedule.activeTrips(Date.now());
     const on = new Set();
-    for (const { trip, sec } of active) {
-      on.add(trip);
-      if (tripBus.has(trip) || tripsDone.has(trip)) continue;
-      const free = buses.find((b) => !b.edge);
-      if (!free) break;
-      const p = schedule.placeAt(trip, sec, free.half, { x: focusX, z: focusZ, r: NEAR_RADIUS + 300 });
-      if (!p) continue;
-      const e = p.route.edges[p.k];
-      if (e.closed) continue;
-      const lane = e.lanes.length - 1;
-      const x = e.sx + e.dx * p.s + e.rx * e.lanes[lane];
-      const z = e.sz + e.dz * p.s + e.rz * e.lanes[lane];
-      if (Math.hypot(x - focusX, z - focusZ) > NEAR_RADIUS) continue;
-      if (!jump && nearView(x, z, free.half + 4, VEHICLE_SPAWN_DISTANCE)) continue;
-      if (player.active && Math.hypot(x - player.x, z - player.z) < 25) continue;
-      if (!laneClear(e.occ[lane], p.s, free.half + 6)) continue;
-      free.trip = trip;
-      free.route = p.route;
-      free.ri = p.k;
-      free.stopIx = p.next;
-      free.dwellUntil = 0;
-      place(free, e, lane, p.s);
-      tripBus.set(trip, free);
-      const l = schedule.label(trip);
-      busDestTex.write(free.variant, l.short, l.headsign);
+    for (const sched of schedules) {
+      for (const { trip, sec } of sched.activeTrips(Date.now())) {
+        on.add(trip);
+        if (tripBus.has(trip) || tripsDone.has(trip)) continue;
+        const free = buses.find((b) => !b.edge);
+        if (!free) break;
+        const p = sched.placeAt(trip, sec, free.half, { x: focusX, z: focusZ, r: NEAR_RADIUS + 300 });
+        if (!p) continue;
+        const e = p.route.edges[p.k];
+        if (e.closed) continue;
+        const lane = e.lanes.length - 1;
+        const x = e.sx + e.dx * p.s + e.rx * e.lanes[lane];
+        const z = e.sz + e.dz * p.s + e.rz * e.lanes[lane];
+        if (Math.hypot(x - focusX, z - focusZ) > NEAR_RADIUS) continue;
+        if (!jump && nearView(x, z, free.half + 4, VEHICLE_SPAWN_DISTANCE)) continue;
+        if (player.active && Math.hypot(x - player.x, z - player.z) < 25) continue;
+        if (!laneClear(e.occ[lane], p.s, free.half + 6)) continue;
+        free.trip = trip;
+        free.sched = sched;
+        free.um = sched.um;
+        free.delay = sched.delayOf(trip);
+        free.liveAt = sched.liveStamp(trip);
+        free.route = p.route;
+        free.ri = p.k;
+        free.stopIx = p.next;
+        free.dwellUntil = 0;
+        place(free, e, lane, p.s);
+        tripBus.set(trip, free);
+        const l = sched.label(trip);
+        busDestTex.write(free.variant, l.short, l.headsign);
+      }
     }
     for (const t of tripsDone) if (!on.has(t)) tripsDone.delete(t);
   }
@@ -1695,7 +1735,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     if (v.stopIx >= stops.length || d > LOOKAHEAD) return 0;
     const st = stops[v.stopIx];
     if (!v.dwellUntil && d < 1.5 && v.speed < 0.4) {
-      const late = st.dep - schedule.secondsInto(v.trip, Date.now());
+      const late = st.dep - v.sched.secondsInto(v.trip, Date.now());
       v.dwellUntil = clock + Math.max(8 + Math.random() * 10, Math.min(late, 90));
     }
     if (v.dwellUntil) {
@@ -1906,7 +1946,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     busBodyInst.setMatrixAt(i, dummy.matrix);
     busHeaderInst.setMatrixAt(i, dummy.matrix);
     writeLampState(b, busStates.array, i * 4);
-    busStates.array[i * 4 + 3] = (b.variant ?? i) + 1;
+    busStates.array[i * 4 + 3] = (b.variant ?? i) + 1 + (b.um ? 256 : 0); // past 256: a Blue Bus's colors (bus.js)
 
     const dxCam = b.x - camX;
     const dzCam = b.z - camZ;
@@ -2217,7 +2257,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     if (!v) return null;
     const [doorX, doorZ, yaw] = busDoor(v, 1.1);
     if (!v.edge) ridden = null;
-    const label = v.trip && schedule ? schedule.label(v.trip) : null;
+    const label = v.trip && v.sched ? v.sched.label(v.trip) : null;
     return { x: v.x, z: v.z, yaw, stopped: !!v.dwellUntil, gone: !v.edge, doorX, doorZ, route: label?.short, headsign: label?.headsign };
   }
   function leaveBus() {

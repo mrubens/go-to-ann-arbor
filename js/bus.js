@@ -548,7 +548,12 @@ function createLoftedBusMaterial() {
   const upperHalf = one.sub(covAt(1.2, p.y, invY)).mul(shell);
   let rideLivery = mix(color(0xf1f3f5), color(0xd6dade), upperHalf);
   rideLivery = mix(rideLivery, color(0x2a6a4a), band(p.y.sub(0.56), 0.14, invY).mul(max(side, rear)));
-  const livery = mix(rideLivery, color(0x181c22), skirt).mul(shadeY);
+  // The University of Michigan's Blue Buses (traffic.js marks them by busState.w past 256): Michigan blue all over,
+  // a little lighter up top, with a maize band low down
+  const isUM = varying(vertexStage(step(255.5, state.w)));
+  let umLivery = mix(color(0x0f2f6b), color(0x1b3f82), upperHalf);
+  umLivery = mix(umLivery, color(0xffcb05), band(p.y.sub(0.58), 0.12, invY).mul(max(side, rear)));
+  const livery = mix(mix(rideLivery, umLivery, isUM), color(0x181c22), skirt).mul(shadeY);
 
   // Front MTA circular badge, SBS front lettering band, wheelchair icon & front/rear NY license plates
   const dMta = length(vec2(p.x, p.y.sub(0.95)));

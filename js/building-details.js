@@ -88,6 +88,21 @@ function addBuildingDetails(b, detail, { masonry, rand, neighbours }) {
     }
   }
 
+  // Lamp: a canvas awning only where the shop's street photo shows one (data/building-looks.json): one over each
+  // shopfront bay (7.5 m, as createStorefront lays them out) of its longest open street wall, sloping down to the street
+  if (b.storefronts && (b.shopLook >> 3 & 3) === 2) {
+    const colorIdx = Math.abs(Math.floor(b.cx * 7 + b.cz * 13)) % 5;
+    const e = edges.find((e) => !blocked(e.x + e.nx * 1.2, e.z + e.nz * 1.2, 2, e.length * 0.8, e.nx, -e.nz));
+    if (e) {
+      const bays = Math.max(1, Math.round(e.length / 7.5)), bay = e.length / bays;
+      for (let k = 0; k < bays; k++) {
+        const u = (k + 0.5) * bay - e.length / 2, x = e.x - e.nz * u, z = e.z + e.nx * u;
+        detail.awnings.push({ x: x + e.nx * 0.75, y: 3.05, z: z + e.nz * 0.75, w: 1.5, h: 0.12, d: bay - 0.7,
+          ry: Math.atan2(-e.nz, e.nx), tilt: -0.32, colorIdx, seen: true });
+      }
+    }
+  }
+
   let count = 0;
   for (const e of edges) {
     const segments = Math.floor(e.length / 10);

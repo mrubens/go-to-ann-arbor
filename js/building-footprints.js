@@ -27,10 +27,11 @@ function createBuildingFootprints(material, records, getNeighbours) {
     if (!(record.height > 0)) return;
     const key = Math.floor(record.cx / 1000) + ',' + Math.floor(record.cz / 1000);
     let cell = cells.get(key);
-    if (!cell) cells.set(key, (cell = { positions: [], normals: [], indices: [], boxes: [], walls: [], ground: [] }));
+    if (!cell) cells.set(key, (cell = { positions: [], normals: [], indices: [], boxes: [], walls: [], ground: [], maxH: 0 }));
     // Lamp: the building stands on `record.ground` (terrain.js); its storeys count from there
     const g = record.ground ?? 0;
     const height = record.height, base = g + 0.22, top = g + height + 0.22;
+    if (height > cell.maxH) cell.maxH = height;
     const seed = Math.floor(record.seed ?? index * 29) % 1000 + 0.1 + 0.8 * (record.tone ?? 0.5);
     const neighbours = getNeighbours && height <= 60 ? getNeighbours(record) : [];
 
@@ -50,8 +51,11 @@ function createBuildingFootprints(material, records, getNeighbours) {
           if (width === 0) continue;
           const offset = cell.positions.length / 3;
           const adjacentHeight = !i && neighbours.length ? partyWallHeight(record, a, b, neighbours) : 0;
+          // Lamp: a shop wall carries its shopfront's look (createStorefront) under the next kind: display windows and
+          // frame color, (windows * 16 + frame) / 128
+          const look = record.shopLook || 0;
           const kind = i ? WALL_KINDS.rear : adjacentHeight ? WALL_KINDS.lotLine
-            : record.storefronts ? WALL_KINDS.shop : WALL_KINDS.front;
+            : record.storefronts ? WALL_KINDS.shop + ((look >> 5 & 3) * 16 + (look >> 7 & 15)) / 128 : WALL_KINDS.front;
           const exposedHeight = adjacentHeight ? Math.max(0, top - adjacentHeight) : height;
           // Match the positive-world-axis tangent used by the shared interior-map view ray.
           const reverse = (Math.abs(dz) >= Math.abs(dx) ? dz : dx) < 0;
@@ -97,6 +101,7 @@ function createBuildingFootprints(material, records, getNeighbours) {
     mesh.castShadow = mesh.receiveShadow = true;
     // Most cells are too small for scene-culling.js to pick them as big casters on its own: opt in to its stand-ins.
     mesh.userData.shadowStandIn = true;
+    mesh.userData.cullDistance = cell.maxH > 35 ? 3500 : 1600;
     if (first) mesh.userData.sharesPipelineWith = first;
     else first = mesh;
     group.add(mesh);
