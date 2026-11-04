@@ -1000,6 +1000,30 @@ body[data-mode='helicopter'] .gauge-alt {
   color: var(--text-3);
 }
 
+.car-radio[hidden] { display: none; }
+.radio-current { height: 44px; }
+.radio-text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+}
+#radio-station,
+#radio-now {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#radio-now {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+.car-radio.is-off #radio-station { color: var(--text-2); }
+
 #hud-active-camera {
   min-width: 0;
   overflow: hidden;

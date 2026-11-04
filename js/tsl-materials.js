@@ -3023,6 +3023,10 @@ function createWaterMaterial() {
   const viewDir = normalize(cameraPosition.sub(positionWorld));
   const fresnel = pow(float(1.0).sub(clamp(dot(waterNormal, viewDir), 0.0, 1.0)), 5.0).mul(0.98).add(0.02);
   mat.metalnessNode = clamp(fresnel.mul(1.6), 0.0, 0.9).mul(float(1).sub(foam));
+  // the river partly clear: its bed shows through where you look down into it, the surface a mirror toward the
+  // horizon, white water solid, and from underneath a bright window up to the sky
+  mat.transparent = true;
+  mat.opacityNode = mix(clamp(max(float(0.58).add(fresnel.mul(0.9)), foam), 0.0, 1.0), float(0.7), float(1).sub(float(frontFacing)));
 
   // Sediment-laden estuary: deep blue-green grey ↔ silty olive grey; thin sunlit crests transmit a greener tint
   mat.colorNode = Fn(() => {

@@ -374,7 +374,7 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   const random = randomSource(options.seed);
   const start = Math.max(ctx.currentTime, finite(options.when, ctx.currentTime));
   const intensity = clamp(finite(options.intensity, 1));
-  const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, door: 0.45, thud: 0.5 };
+  const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, plunge: 0.9, door: 0.45, thud: 0.5 };
   if (!Object.hasOwn(levels, kind) || intensity === 0) return { endTime: start, dispose() {} };
   const gain = ctx.createGain();
   gain.gain.value = intensity * levels[kind];
@@ -464,6 +464,14 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
     }
   } else if (kind === 'splash') {
     play(resources.splashes[Math.floor(random() * resources.splashes.length)], start, 0.9 + random() * 0.2);
+  } else if (kind === 'plunge') {
+    // a car or bike hitting the water: the paddle's splash slowed into a deep whump, a crash of spray over it, and the
+    // thrown water pattering back down a moment later
+    const n = resources.splashes.length, v = Math.floor(random() * n);
+    play(resources.splashes[v], start, 0.42 + random() * 0.06, 1);
+    play(resources.splashes[(v + 1) % n], start + 0.02, 0.62 + random() * 0.08, 0.8);
+    play(resources.splashes[(v + 2) % n], start + 0.05, 1.05 + random() * 0.1, 0.5 * intensity);
+    for (let i = 0; i < 5; i++) play(resources.splashes[(v + i) % n], start + 0.45 + i * 0.09 + random() * 0.08, 1.5 + random() * 0.5, 0.18 * intensity);
   } else if (kind === 'thud') {
     // a body against the car: the crash's dull chassis thump, lower and without the metal
     const variant = Math.floor(random() * resources.crashes.body.length);

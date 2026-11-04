@@ -31,7 +31,7 @@ function helicopterLoad(entity, keys, verticalSpeed) {
   return unit((grounded ? 0.12 : 0.45)
     + 0.28 * Math.max(collective, 0) - 0.16 * Math.max(-collective, 0)
     + 0.15 * unit(verticalSpeed / 16) - 0.08 * unit(-verticalSpeed / 16)
-    + 0.1 * Math.abs(forward) + 0.12 * unit(Math.abs(entity.speed) / 52));
+    + 0.1 * Math.abs(forward) + 0.12 * unit(Math.abs(entity.speed) / 89.4));
 }
 
 function roadLoad(speed, acceleration, maxAcceleration) {

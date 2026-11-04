@@ -34,6 +34,7 @@ import { vehicleContact, resolveVehicleContact } from './vehicle-physics.js';
 import { STADIUM, bowlSurface, carSurface, radiiAt } from './stadium-shape.js';
 import { hot, log, rumble } from '../lamp-game.js';
 import { dumpTruckGeo, excavatorGeo, truckWheelGeo, TRUCK_WHEELS } from './road-work.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MOTO_SPECS, HELMET_OF, buildMotoGeometry, buildMotoWheel, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
 
 // Player models, animation and movement for walking, driving, cycling and flying.
@@ -73,7 +74,8 @@ const CAR_HANDLING = {
   cybertruck: { mass: 3100, speed: 40, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.4, cornering: 7.8, wheelbase: 3.81, steer: 8, roll: 0.012, pitch: 0.026 },
   van: { mass: 2700, speed: 30, acceleration: 3.2, powerSpeed: 11, brake: 7.5, grip: 7.2, cornering: 7, wheelbase: 3.6, steer: 6.5, roll: 0.02, pitch: 0.036 },
   // motorcycles (motorcycles.js): light, quick off the line, leaning into bends
-  sportbike: { mass: 290, speed: 70, acceleration: 10, powerSpeed: 26, brake: 11, grip: 13, cornering: 15, wheelbase: 1.4, steer: 14, roll: 0, pitch: 0.03 },
+  // the sport bike turns on a dime: sticky tires, a quick wheel and a wide lock
+  sportbike: { mass: 290, speed: 70, acceleration: 10, powerSpeed: 26, brake: 13, grip: 24, cornering: 30, wheelbase: 1.4, steer: 30, lock: 0.9, yaw: 22, roll: 0, pitch: 0.03 },
   cruiser: { mass: 380, speed: 48, acceleration: 6.5, powerSpeed: 16, brake: 9, grip: 10, cornering: 11, wheelbase: 1.65, steer: 10, roll: 0, pitch: 0.025 },
   scooter: { mass: 190, speed: 26, acceleration: 4.5, powerSpeed: 9, brake: 8, grip: 10, cornering: 12, wheelbase: 1.3, steer: 14, roll: 0, pitch: 0.025 },
   touring: { mass: 470, speed: 52, acceleration: 6, powerSpeed: 18, brake: 9, grip: 10, cornering: 10, wheelbase: 1.62, steer: 9, roll: 0, pitch: 0.022 },
@@ -106,6 +108,44 @@ const EXIT_SPEED = 4;
 const CHUTE_HEIGHT = 7;
 // The helicopter's ceiling: high enough for a long skydive (about half a minute of free fall); audio-sources.js has it too
 const HELI_CEILING = 1500;
+// The player as they look on foot, on the bike and in the kayak alike (pedestrians.js: the seed dresses them)
+const PLAYER_LOOK = { seed: 4.2, scale: 1.0, girth: 1.02, hair: 0.18 };
+
+// White wireless earbuds in the player's ears while their music plays (radio.js): in the head bone's space (+Y up the
+// head, +Z the face, PersonRig.headPosition), a glossy bud in each ear with its short stem hanging down toward the jaw
+const EARBUD_MAT = new THREE.MeshStandardNodeMaterial({ color: 0xf6f6f4, roughness: 0.22, metalness: 0.0 });
+const EARBUD_GEO = (() => {
+  const parts = [];
+  for (const side of [-1, 1]) {
+    const bud = new THREE.SphereGeometry(0.0105, 12, 8);
+    bud.scale(0.8, 1, 1.05);
+    bud.translate(side * 0.0925, 0.083, -0.004);
+    const stem = new THREE.CapsuleGeometry(0.0036, 0.026, 3, 8);
+    stem.rotateX(-0.28);
+    stem.rotateZ(side * 0.1);
+    stem.translate(side * 0.0935, 0.064, 0.002);
+    parts.push(bud, stem);
+  }
+  return mergeGeometries(parts.map((g) => g.toNonIndexed()));
+})();
+function makeEarbuds(scene, who) {
+  // the scene outlives a change to the code: take away the pair a previous run left in it
+  for (const old of scene.children.filter((c) => c.name === `PlayerEarbuds-${who}`)) scene.remove(old);
+  const m = new THREE.Mesh(EARBUD_GEO, EARBUD_MAT);
+  m.name = `PlayerEarbuds-${who}`;
+  m.visible = false;
+  m.castShadow = false;
+  scene.add(m);
+  return m;
+}
+// set the earbuds on a rig's head as it's posed now, or hide them
+function placeEarbuds(buds, rig, on) {
+  buds.visible = Boolean(on && rig.headPosition);
+  if (!buds.visible) return;
+  buds.position.copy(rig.headPosition);
+  buds.quaternion.copy(rig.headQuaternion);
+  buds.scale.setScalar(rig.s);
+}
 // The walking camera, which the fall and the bus change for a while and give back
 const WALK_CAMERA = { d: 4.8, h: 2.4, y: -0.35 };
 
@@ -620,7 +660,7 @@ class ThirdPersonControllerManager {
     // One skinned person, posed in world space every frame by its rig (walk, run, turn, jump)
     const crowd = new PersonCrowd(1, { farDistance: Infinity });
     crowd.meshes.forEach((m) => this.scene.add(m));
-    const rig = new PersonRig({ seed: 4.2, scale: 1.0, girth: 1.02, hair: 0.18, armSwing: 1.0 });
+    const rig = new PersonRig({ ...PLAYER_LOOK, armSwing: 1.0 });
 
     // Soft Under-Foot Contact Shadow (AO)
     const shadowGeo = new THREE.PlaneGeometry(0.85, 0.85);
@@ -638,6 +678,7 @@ class ThirdPersonControllerManager {
       mesh: root,
       crowd,
       rig,
+      earbuds: makeEarbuds(this.scene, 'person'),
       position: new THREE.Vector3(-30.2, TOWN_BOUNDS.sidewalkHeight, SPAWN_Z + 12),
       heading: Math.PI,
       speed: 0,
@@ -997,7 +1038,7 @@ class ThirdPersonControllerManager {
     // helmet rides on its head
     const riderCrowd = new PersonCrowd(1, { farDistance: Infinity });
     riderCrowd.meshes.forEach((m) => this.scene.add(m));
-    const riderRig = new PersonRig({ seed: 12.8, scale: 1.0, girth: 0.97, hair: 0.1 });
+    const riderRig = new PersonRig(PLAYER_LOOK); // the player themselves, as dressed on foot
     const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.125, 14, 12), helmetMat);
     helmet.scale.set(0.95, 0.68, 1.28);
     this.scene.add(helmet);
@@ -1029,6 +1070,7 @@ class ThirdPersonControllerManager {
       riderCrowd,
       riderRig,
       helmet,
+      earbuds: makeEarbuds(this.scene, 'cyclist'),
       headLight,
       position: new THREE.Vector3(-18.2, 0.0, SPAWN_Z - 8),
       heading: Math.PI,
@@ -1226,7 +1268,7 @@ class ThirdPersonControllerManager {
     // The paddler (see pedestrians.js), sitting in the cockpit with their hands on the shaft
     const paddlerCrowd = new PersonCrowd(1, { farDistance: Infinity });
     paddlerCrowd.meshes.forEach((m) => this.scene.add(m));
-    const paddlerRig = new PersonRig({ seed: 31.4, scale: 1.0, girth: 1.0, hair: 0.3 });
+    const paddlerRig = new PersonRig(PLAYER_LOOK);
 
     const kayakShadowGeo = new THREE.PlaneGeometry(0.9, 3.9);
     kayakShadowGeo.rotateX(-Math.PI * 0.5);
@@ -1253,6 +1295,7 @@ class ThirdPersonControllerManager {
       ripples,
       paddlerCrowd,
       paddlerRig,
+      earbuds: makeEarbuds(this.scene, 'kayak'),
       seat: new THREE.Vector3(0, 0.02, -0.14),
       hands: [new THREE.Vector3(), new THREE.Vector3()],
       twist: 0,
@@ -1711,17 +1754,21 @@ class ThirdPersonControllerManager {
         h.quaternion.copy(p.rig.headQuaternion);
         h.scale.setScalar(p.rig.s);
         h.updateMatrixWorld(true);
+        placeEarbuds(p.earbuds, p.rig, this.earbuds && !h.isMesh); // not under a helmet
       } else if (!p.riding && !p.onBus && (this.activeMode === 'person' || dx * dx + dz * dz <= maxDistSq)) {
         p._charHidden = false;
         if (p.mesh) p.mesh.visible = true;
         const air = p.position.y - this.getGroundHeight(p.position.x, p.position.z, 'person');
         if (p.chute) p.rig.skydive(dt, p.position.x, p.position.y + 0.5 + 0.45 * p.chute.open, p.position.z, p.heading, p.chute.flat || 0, p.chute.bank || 0, p.chute.track || 0, p.chute.open);
         else if (p.fallen?.getUp >= 0) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, 0, true, DIVE_GET_UP + p.fallen.getUp);
+        else if (p.swimming) p.rig.swim(dt, p.position.x, (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1) + Math.min(0, p.position.y + 1 - (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1)), p.position.z, p.heading, Math.min(1, Math.abs(p.speed) / 1.8));
         else if (!p.fallen) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, air > 0.02 ? air : 0);
         p.crowd.begin();
         p.crowd.add(p.rig, 0);
         p.crowd.end();
+        placeEarbuds(p.earbuds, p.rig, this.earbuds && this.activeMode === 'person');
       } else if (!p._charHidden) {
+        p.earbuds.visible = false;
         p.rig.placed = false;
         p.crowd.begin();
         p.crowd.end();
@@ -1755,6 +1802,7 @@ class ThirdPersonControllerManager {
           b.riderCrowd.end();
           b.helmet.quaternion.copy(b.riderRig.headQuaternion);
           b.helmet.position.set(0, 0.175, -0.012).applyQuaternion(b.helmet.quaternion).add(b.riderRig.headPosition);
+          placeEarbuds(b.earbuds, b.riderRig, this.earbuds && this.activeMode === 'cyclist');
           b._posedX = b.position.x;
           b._posedY = b.position.y;
           b._posedZ = b.position.z;
@@ -1767,6 +1815,7 @@ class ThirdPersonControllerManager {
         b.riderCrowd.end();
         if (b.riderCrowd.updates > 2) {
           if (b.helmet) b.helmet.visible = false;
+          b.earbuds.visible = false;
           b._riderHidden = true;
           b._posedX = NaN;
         }
@@ -1785,9 +1834,11 @@ class ThirdPersonControllerManager {
         k.paddlerCrowd.begin();
         k.paddlerCrowd.add(k.paddlerRig, 0);
         k.paddlerCrowd.end();
+        placeEarbuds(k.earbuds, k.paddlerRig, this.earbuds && this.activeMode === 'kayak');
       } else if (!k._paddlerHidden) {
         k.paddlerCrowd.begin();
         k.paddlerCrowd.end();
+        k.earbuds.visible = false;
         if (k.paddlerCrowd.updates > 2) k._paddlerHidden = true;
       }
     }
@@ -2214,8 +2265,10 @@ class ThirdPersonControllerManager {
       p.position.y = this.getGroundHeight(p.position.x, p.position.z, 'person');
       return;
     }
-    const maxSpeed = 8.2;
-    const turnRate = 2.6;
+    // in water over their head they swim: slower, turning slower, held at the surface; out where it's shallow again
+    const swimming = !!p.swimming;
+    const maxSpeed = swimming ? 2.6 : 8.2;
+    const turnRate = swimming ? 1.7 : 2.6;
 
     let targetSpeed = 0;
     if (this.keys.forward) targetSpeed = maxSpeed * this.keys.forward;
@@ -2233,6 +2286,20 @@ class ThirdPersonControllerManager {
     this.resolveHorizontalCollision(p.position, 0.48);
 
     const groundY = this.getGroundHeight(p.position.x, p.position.z, 'person');
+    const level = riverDepth(p.position.x, p.position.z) > 0.08 ? waterLevel(p.position.x, p.position.z) : null;
+    const deep = level != null ? level - groundY : 0;
+    // a jump or a fall into the river goes under first, then bobs up; wading in, they push off once it's chest deep
+    if (level != null && deep > (swimming ? 1.05 : 1.3) && (swimming || p.position.y <= level - 1.0 + 0.05)) {
+      if (!swimming) { p.swimming = true; log('[swim] the player is swimming'); }
+      const rest = level - 1.0;
+      p.verticalVel = p.position.y < rest ? Math.min(p.verticalVel * Math.exp(-dt * 5) + 9 * dt, 3)
+        : p.verticalVel * Math.exp(-dt * 6) - (p.position.y - rest) * 20 * dt;
+      p.position.y = Math.max(groundY, p.position.y + p.verticalVel * dt);
+      p.grounded = false;
+      this.groundShadow(p, p.position.y - 100); // no shadow on the water
+      return;
+    }
+    if (swimming) { p.swimming = false; p.position.y = Math.max(p.position.y, groundY); log('[swim] the player stood up in the shallows'); }
     const grounded = p.grounded ?? true;
     if (this.keys.up && grounded) {
       p.verticalVel = 5.2;
@@ -2275,7 +2342,7 @@ class ThirdPersonControllerManager {
     const steps = Math.ceil(dt * 120);
     const step = dt / steps;
     const steerResponse = 1 - Math.exp(-D.steer * step);
-    const yawResponse = 1 - Math.exp(-11 * step);
+    const yawResponse = 1 - Math.exp(-(D.yaw || 11) * step);
     const tireResponse = 1 - Math.exp(-4 * step);
     let lockedNow = 0;
     for (let i = 0; i < steps; i++) {
@@ -2301,7 +2368,7 @@ class ThirdPersonControllerManager {
 
       // Full lock at parking speeds, progressively less steering at road speeds.
       const turn = D.wheelbase * D.cornering;
-      const maxSteer = Math.atan(turn / Math.max(speed * speed, turn / Math.tan(0.60)));
+      const maxSteer = Math.atan(turn / Math.max(speed * speed, turn / Math.tan(D.lock || 0.60)));
       c.steerAngle += (steerInput * maxSteer - c.steerAngle) * steerResponse;
       const yawLimit = steeringGrip / Math.max(2, Math.abs(speed)) * (1 + 1.5 * locked);
       const targetYaw = Math.max(-yawLimit, Math.min(yawLimit, speed * Math.tan(c.steerAngle) / D.wheelbase * (1 + 1.2 * locked)));
@@ -2328,12 +2395,12 @@ class ThirdPersonControllerManager {
       const targetPitch = -Math.max(-1, Math.min(1, acceleration / D.acceleration)) * D.pitch;
       // a car's body rolls out of a bend with the tyres' pull; a bike leans into it, as far as the bend needs
       const turnRate = (nextSin * cos - nextCos * sin) / step;
-      const targetRoll = c.bike ? Math.max(-0.7, Math.min(0.7, -Math.atan(c.speed * turnRate / 9.8)))
+      const targetRoll = c.bike ? Math.max(-0.85, Math.min(0.85, -Math.atan(c.speed * turnRate / 9.8)))
         : Math.max(-0.09, Math.min(0.09, correction / step * D.roll));
       c.pitchVel += ((targetPitch - c.chassisPivot.rotation.x) * 68 - c.pitchVel * 11.2) * step;
       c.rollVel += ((targetRoll - c.chassisPivot.rotation.z) * 68 - c.rollVel * 11.2) * step;
       c.chassisPivot.rotation.x = Math.max(-0.22, Math.min(0.22, c.chassisPivot.rotation.x + c.pitchVel * step));
-      const rollMax = c.bike ? 0.7 : 0.26;
+      const rollMax = c.bike ? 0.85 : 0.26;
       c.chassisPivot.rotation.z = Math.max(-rollMax, Math.min(rollMax, c.chassisPivot.rotation.z + c.rollVel * step));
       c.heaveVel += (-c.heaveY * 85 - c.heaveVel * 12) * step;
       c.heaveY = Math.max(-0.08, Math.min(0.14, c.heaveY + c.heaveVel * step));
@@ -2712,7 +2779,7 @@ class ThirdPersonControllerManager {
 
   updateHelicopter(dt, elapsed) {
     const h = this.entities.helicopter;
-    const maxHorizSpeed = 52.0;
+    const maxHorizSpeed = 89.4; // 200 mph
     // it climbs faster once well above the rooftops, so the ceiling is a minute and a half away, not three
     const maxVertSpeed = 16.0 + 14 * Math.min(1, Math.max(0, (h.position.y - 250) / 250));
 
@@ -2729,7 +2796,7 @@ class ThirdPersonControllerManager {
     else if (this.keys.down) vertInput = -this.keys.down;
 
     if (fwdInput !== 0) {
-      h.speed += fwdInput * 24.0 * dt;
+      h.speed += fwdInput * 32.0 * dt;
       h.speed = Math.max(-maxHorizSpeed * 0.6, Math.min(maxHorizSpeed, h.speed));
     } else {
       h.speed *= Math.max(0, 1 - dt * 1.8);

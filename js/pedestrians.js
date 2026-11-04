@@ -1145,6 +1145,18 @@ const smooth = (e0, e1, x) => {
   return t * t * (3 - 2 * t);
 };
 const lerp = (a, b, t) => a + (b - a) * t;
+// a breaststroke, as hand and foot targets through one stroke (phase 0 to 1): [phase, x, y, z] in the chest's and the
+// pelvis's frames, eased between
+const SWIM_ARMS = [[0, 0.07, 0.62, 0.1], [0.35, 0.44, 0.38, 0.2], [0.6, 0.14, 0.06, 0.27], [0.8, 0.06, 0.3, 0.18], [1, 0.07, 0.62, 0.1]];
+const SWIM_LEGS = [[0, 0.1, -0.9, -0.03], [0.45, 0.11, -0.88, -0.04], [0.7, 0.3, -0.52, -0.3], [0.85, 0.4, -0.84, -0.06], [1, 0.1, -0.9, -0.03]];
+const _armKey = [0, 0, 0], _legKey = [0, 0, 0];
+const keyed = (frames, ph, out) => {
+  let i = 0;
+  while (i < frames.length - 2 && ph > frames[i + 1][0]) i++;
+  const a = frames[i], b = frames[i + 1], t = smooth(a[0], b[0], ph);
+  for (let j = 0; j < 3; j++) out[j] = lerp(a[j + 1], b[j + 1], t);
+  return out;
+};
 const ease = (dt, tau) => 1 - Math.exp(-dt / tau); // share of the way a first-order lag covers in dt
 let _easeDt = -1;
 let _e03 = 0, _e045 = 0, _e07 = 0, _e10 = 0, _e12 = 0, _e15 = 0, _e22 = 0, _e30 = 0, _e35 = 0;
@@ -1942,6 +1954,54 @@ class PersonRig {
       _pole.set(side * 0.35, 0, 1).applyQuaternion(_qPelvis);
       const ankle = this.limb(LIMB.thigh[i], LIMB.shin[i], _hip, _target, THIGH * s, SHIN * s, _pole, _front);
       this.writeFoot(i, ankle, _qa.copy(_qPelvis).multiply(qX(_q, 0.9 * f)), 0);
+    }
+  }
+
+  // Swimming, at the river's surface `level`: still (`swim` 0) they tread water upright, head and shoulders out, hands
+  // sculling and legs cycling; moving (`swim` 1) they lie out flat in a breaststroke, head up, the hands pulling out
+  // and round under the chest while the legs draw up, then a frog kick as the hands shoot forward into the glide
+  swim(dt, x, level, z, heading, swim) {
+    const s = this.s;
+    if (!this.placed) this.placed = true;
+    dt = Math.min(Math.max(dt, 1e-4), 0.1);
+    this.time += dt;
+    this.swimPhase = ((this.swimPhase || 0) + dt * (0.6 + 0.35 * swim)) % 1;
+    this.x = x;
+    this.z = z;
+    this.yaw = heading;
+    this.vx = this.vz = this.tvx = this.tvz = this.speed = this.gait = this.run = 0;
+    this.diving = false;
+    const t = this.time, k = smooth(0, 1, swim), ph = this.swimPhase;
+    // the body rides a little forward in each glide and sinks back as the arms recover
+    const surge = Math.sin(ph * Math.PI * 2) * 0.05 * k;
+    const pitch = lerp(0.25, 1.32, k);
+    qY(_qRoot, heading);
+    _qPelvis.copy(_qRoot).multiply(qX(_q, pitch));
+    _pelvis.set(x, level - lerp(0.78, 0.24, k) * s + surge, z);
+    this.pelvisY = _pelvis.y;
+    this.writeBone(BONE.PELVIS, _qPelvis, _pelvis);
+    _qChest.copy(_qRoot).multiply(qX(_q, pitch - 0.12 * k));
+    this.writeBone(BONE.CHEST, _qChest, this.jointFrom(BONE.PELVIS, BONE.CHEST, _qPelvis, _pelvis, _chest));
+    // the face stays out of the water, looking ahead
+    _qa.copy(_qRoot).multiply(qX(_q, lerp(0.05, 0.35, k) + 0.08 * Math.sin(ph * Math.PI * 2) * k));
+    this.writeBone(BONE.HEAD, _qa, this.jointFrom(BONE.CHEST, BONE.HEAD, _qChest, _chest, _v));
+    _front.set(0, 0, 1).applyQuaternion(_qChest);
+    const arm = keyed(SWIM_ARMS, ph, _armKey), leg = keyed(SWIM_LEGS, ph, _legKey);
+    for (let i = 0; i < 2; i++) {
+      const side = SIDES[i];
+      const scull = Math.sin(t * 4.2 + i * Math.PI), cycle = Math.sin(t * 3.1 + i * Math.PI);
+      // a point in the chest's or the pelvis's frame (+y along the spine to the head, +z the belly, +x left)
+      this.jointFrom(BONE.CHEST, LIMB.upperArm[i], _qChest, _chest, _shoulder);
+      _target.set(side * lerp(0.4 + 0.08 * scull, arm[0], k), lerp(-0.05, arm[1], k), lerp(0.3 + 0.05 * scull, arm[2], k))
+        .multiplyScalar(s).applyQuaternion(_qChest).add(_chest);
+      _pole.set(side * 0.8, -0.3, -0.5).applyQuaternion(_qChest);
+      this.limb(LIMB.upperArm[i], LIMB.forearm[i], _shoulder, _target, UPPER_ARM * s, (FOREARM + 0.07) * s, _pole, _front, side * ARM_BIND_ABDUCTION);
+      this.jointFrom(BONE.PELVIS, LIMB.thigh[i], _qPelvis, _pelvis, _hip);
+      _target.set(side * lerp(0.17, leg[0], k), lerp(-0.72 + 0.07 * cycle, leg[1], k), lerp(0.06 * cycle, leg[2], k))
+        .multiplyScalar(s).applyQuaternion(_qPelvis).add(_pelvis);
+      _pole.set(side * lerp(0.3, 0.75, k), 0, 0.8).applyQuaternion(_qPelvis);
+      const ankle = this.limb(LIMB.thigh[i], LIMB.shin[i], _hip, _target, THIGH * s, SHIN * s, _pole, _front);
+      this.writeFoot(i, ankle, _qa.copy(_qPelvis).multiply(qX(_q, lerp(0.3, 1.1, k))), 0);
     }
   }
 

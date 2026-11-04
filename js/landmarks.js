@@ -288,10 +288,14 @@ function buildBigHouse(group, colliders) {
   bv.width = 1024; bv.height = 420;
   const bx = bv.getContext('2d');
   bx.fillStyle = '#00274c'; bx.fillRect(0, 0, 1024, 420);
-  bx.font = '900 360px "Arial Black", "Helvetica Neue", Arial, sans-serif';
-  bx.textAlign = 'center'; bx.textBaseline = 'middle';
-  bx.lineJoin = 'miter'; bx.lineWidth = 16; bx.strokeStyle = '#ffcb05';
-  bx.fillStyle = '#ffcb05'; bx.fillText('M', 512, 226);
+  // the field's own Block M outline (slab serifs, the V to a point), not a font's M
+  {
+    const k = 44;
+    bx.beginPath();
+    BLOCK_M.forEach(([x, y], i) => (i ? bx.lineTo : bx.moveTo).call(bx, 512 + x * k, 210 - y * k));
+    bx.closePath();
+    bx.fillStyle = '#ffcb05'; bx.fill();
+  }
   const backTex = new THREE.CanvasTexture(bv);
   backTex.colorSpace = THREE.SRGBColorSpace;
   backTex.anisotropy = 8;

@@ -137,6 +137,7 @@ class GamepadControls {
     const toggleMap = edge(9), closeMap = edge(1);
     const cycleMode = Number(Boolean(edge(5))) - Number(Boolean(edge(4)));
     const cycleCamera = edge(3), recenter = edge(11), getInOut = edge(2);
+    const radio = Number(Boolean(edge(15))) - Number(Boolean(edge(14)));
     this.previousButtons = pressed;
 
     const target = document.activeElement;
@@ -168,6 +169,7 @@ class GamepadControls {
     if (cycleCamera) this.callbacks.onCycleCamera?.(1);
     if (revision !== this.revision) return;
     if (recenter) this.camera.resetOrbit();
+    if (radio) this.callbacks.onRadio?.(radio);
 
     const mode = this.controller.activeMode;
     const driving = mode === 'car' || mode === 'cyclist';

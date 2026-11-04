@@ -1069,7 +1069,6 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       const craftsman = storeys === 1.5 || (!historic && storeys === 1 && id(17) < 0.3);
       const porchSeen = look >> 9 & 3;
       const hasPorch = porchSeen ? porchSeen === 2 && segLen >= 2.6 : segLen >= 3.4 && id(8) < (historic ? 0.85 : ranch ? 0.3 : 0.65);
-      const nSteps = Math.max(1, Math.round(fh / 0.18)), riser = fh / nSteps;
       const sw = craftsman ? 1.8 : 1.5;
       let outD;
       if (hasPorch) {
@@ -1138,21 +1137,44 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       }
       // steps down from the porch or stoop to the sloped lawn
       const stepRGB = hasPorch ? lin(DECK) : lin(CONCRETE);
-      let stepsUsed = 0;
-      for (let k = 1; k <= 20; k++) {
-        const top = deckY - k * riser;
-        const p = Q(doorT, outD + (k - 0.5) * 0.3);
-        const pL = Q(doorT - sw * 0.5, outD + (k - 0.5) * 0.3);
-        const pR = Q(doorT + sw * 0.5, outD + (k - 0.5) * 0.3);
-        const gC = groundHeight(p.x, p.z), gL = groundHeight(pL.x, pL.z), gR = groundHeight(pR.x, pR.z);
-        // the flight ends where its middle meets the lawn (on a lot sloping sideways the low side's lawn is banked up
-        // to the step, not followed down by more of them); each step still reaches below the lowest of it
-        const lawnAtStep = (gC * 2 + gL + gR) / 4 + LAWN_Y, lawnMinAtStep = Math.min(gC, gL, gR) + LAWN_Y;
-        if (k > 1 && top <= lawnAtStep - 0.04) break;
-        const stepBase = Math.min(lawnMinAtStep - 0.35, top - riser - 0.35);
-        steps.push(p.x, stepBase, p.z, yaw, sw, top - stepBase, 0.3, ...stepRGB);
-        stepsUsed = k;
-        if (top <= lawnAtStep + 0.09) break;
+      // the flight runs out from the porch or stoop until it meets the lawn: it reaches the ground at the first spot
+      // the stair can get down to at a comfortable pitch (risers about 19 cm on 28 cm treads). Where the yard falls away
+      // too fast for that before the sidewalk, the stair stays as short as it can and its steps get taller instead,
+      // up to a steep 30 cm, never a long wall of steps marching out to the street
+      const lawnAt = (d) => {
+        const pC = Q(doorT, d), pL = Q(doorT - sw * 0.5, d), pR = Q(doorT + sw * 0.5, d);
+        const gC = groundHeight(pC.x, pC.z), gL = groundHeight(pL.x, pL.z), gR = groundHeight(pR.x, pR.z);
+        return { mid: (gC * 2 + gL + gR) / 4 + LAWN_Y, low: Math.min(gC, gL, gR) + LAWN_Y };
+      };
+      const outP = Q(doorT, outD);
+      const reach = Math.max(0.3, distanceToStreet(outP.x, outP.z, N.x, N.z) - 4.5 - 0.6);
+      let run = 0, drop = 0;
+      for (let d = 0.28; d <= reach + 0.001; d += 0.14) {
+        const h = deckY - lawnAt(outD + d).mid;
+        run = d; drop = h;
+        if (h <= d * 0.68) break;
+      }
+      // steeper than comfortable: shorten it to what the tallest steps can make, as far out as the ground lets
+      if (drop > run * 0.68) {
+        for (let d = 0.28; d <= run; d += 0.14) {
+          const h = deckY - lawnAt(outD + d).mid;
+          if (h <= d * 1.2) { run = d; drop = h; break; }
+        }
+      }
+      let flight = 0;
+      if (drop > 0.1) {
+        // about 19 cm risers, fewer (and taller) where the treads would be shallower than 24 cm, never over 30 cm
+        const n = Math.max(1, Math.ceil(drop / 0.3), Math.min(Math.round(drop / 0.19), Math.floor(run / 0.24) + 1));
+        const riser = drop / n, tread = n > 1 ? run / (n - 1) : run;
+        // n - 1 steps; the last rise is onto the lawn itself
+        for (let k = 1; k < n; k++) {
+          const top = deckY - k * riser;
+          const d = (k - 0.5) * tread;
+          const p = Q(doorT, outD + d);
+          const stepBase = Math.min(lawnAt(outD + d).low - 0.35, top - riser - 0.35);
+          steps.push(p.x, stepBase, p.z, yaw, sw, top - stepBase, tread + 0.02, ...stepRGB);
+        }
+        flight = n > 1 ? (n - 1) * tread : 0;
       }
       // the porch light by the door and the house number on the other side
       const lp = Q(doorT - 0.9, 0.08);
@@ -1166,7 +1188,7 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       }
       // a front walk from the steps to the sidewalk, following the ground; it stops at the sidewalk's back edge
       // (4.6 m from the curb: the tree lawn, then the sidewalk from 2.9 m, as build-annarbor.py lays them)
-      const startD = outD + (stepsUsed || nSteps) * 0.3;
+      const startD = outD + flight;
       const s0 = Q(doorT, startD);
       const toStreet = distanceToStreet(s0.x, s0.z, N.x, N.z);
       const walkLen = toStreet - 4.5;

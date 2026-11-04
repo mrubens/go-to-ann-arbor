@@ -5,6 +5,7 @@ import { pass, mrt, output, normalView, positionView, metalness, roughness, vec2
 import { ssr } from 'three/addons/tsl/display/SSRNode.js';
 import { createPostProcessing } from './post-processing.js';
 import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
+import { CarRadio } from './radio.js';
 import { getLocationLabel, isTypingInField, ROADS, LANDMARKS, TELEPORT_LOCATIONS } from './city-config.js';
 import { buildKayakLaunches } from './kayak-launches.js';
 import { buildCityGrid, restoreCityGrid } from './city-grid.js';
@@ -31,10 +32,11 @@ import { CameraSystem, CAMERA_PRESETS } from './cameras.js';
 import { LightingSystem, sunTimes } from './lighting.js';
 import { createKnockdowns } from './knockdowns.js';
 import { createHydrantSpray } from './hydrant-spray.js';
+import { createWaterSplash } from './water-splash.js';
 import { createSkidEffects } from './skid-effects.js';
 import { CityMapSystem } from './city-map.js';
 import { setupSceneCulling, updateSceneCulling, cullAlso, showShadowStandIns } from './scene-culling.js';
-import { loadTerrain, setOnTerrain, groundHeight, waterLevel, streamGround, updateGroundStreaming } from './terrain.js';
+import { loadTerrain, setOnTerrain, groundHeight, waterLevel, riverDepth, streamGround, updateGroundStreaming } from './terrain.js';
 import { buildCascades, CASCADE_START } from './cascades.js';
 import { buildRiverPeople } from './river-people.js';
 import { CityAudioSystem } from './audio-system.js';
@@ -367,6 +369,8 @@ async function initApp() {
   // a hydrant knocked off its main gushes water (hydrant-spray.js)
   const hydrantSpray = createHydrantSpray(scene);
   const skidEffects = createSkidEffects(scene);
+  // the car, sport bike or bicycle going into the river and out again (water-splash.js)
+  const waterSplash = createWaterSplash(scene);
   const gushList = [];
   const knockdowns = createKnockdowns({
     onFall: (it, speed) => {
@@ -699,8 +703,10 @@ async function initApp() {
     onCycleCamera: cycleCamera,
     onGetInOut: getInOrOut,
     onToggleMap: () => mapSystem.toggleFullMap(!mapSystem.isFullMapOpen),
-    onCloseMap: () => mapSystem.toggleFullMap(false)
+    onCloseMap: () => mapSystem.toggleFullMap(false),
+    onRadio: (dir) => carRadio.tune(dir)
   });
+  const carRadio = new CarRadio();
 
   // The guide to each mode's controls, written once: the keys the city reads (by their codes, as controllers.js and the
   // keydown handler below have them) and the controller's buttons, sticks and triggers (as gamepad-controls.js reads
@@ -708,17 +714,17 @@ async function initApp() {
   const orbit = { keys: ['Drag'], pad: [STICK.RIGHT], does: 'Orbit' };
   const controlHints = {
     person: [{ keys: ['KeyW', 'KeyS'], does: 'Walk / Run' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
-      { pad: [STICK.LEFT], does: 'Walk / Run & turn' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Jump' }, orbit],
+      { pad: [STICK.LEFT], does: 'Walk / Run & turn' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Jump' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }],
     car: [{ keys: ['KeyW', 'KeyS'], pad: [TRIGGER.RT, TRIGGER.LT], does: 'Drive / Reverse' },
       { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Steer' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Handbrake' },
-      { keys: ['KeyB'], does: 'Horn' }, { pad: [STICK.RIGHT], does: 'Orbit' }],
+      { keys: ['KeyB'], does: 'Horn' }, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Radio' }, { pad: [STICK.RIGHT], does: 'Orbit' }],
     cyclist: [{ keys: ['KeyW', 'KeyS'], pad: [TRIGGER.RT, TRIGGER.LT], does: 'Pedal / Brake' },
-      { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Lean & Turn' }, orbit],
+      { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Lean & Turn' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }],
     helicopter: [{ keys: ['KeyW', 'KeyS'], does: 'Pitch' }, { keys: ['KeyA', 'KeyD'], does: 'Yaw' },
       { pad: [STICK.LEFT], does: 'Pitch & Yaw' }, { keys: ['Space', 'KeyE'], pad: [TRIGGER.RT], does: 'Ascend' },
       { keys: ['KeyQ', 'KeyC'], pad: [TRIGGER.LT], does: 'Descend' }],
     kayak: [{ keys: ['KeyW', 'KeyS'], does: 'Paddle / Back' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
-      { pad: [STICK.LEFT], does: 'Paddle & turn' }, orbit]
+      { pad: [STICK.LEFT], does: 'Paddle & turn' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }]
   };
   // Getting in and out, in every mode
   for (const [mode, hints] of Object.entries(controlHints)) {
@@ -1247,6 +1253,9 @@ async function initApp() {
       case 'KeyN':
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) audioSystem.setEnabled(!audioSystem.enabled);
         break;
+      case 'KeyR':
+        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) carRadio.tune(e.shiftKey ? -1 : 1);
+        break;
       case 'KeyB':
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity());
         break;
@@ -1418,14 +1427,33 @@ async function initApp() {
     gamepadControls.supply(f.pads[0]);
     gamepadControls.update(dt);
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
+    {
+      const cm = controllerManager, look = cm.carLook;
+      const mode = cm.activeMode, inCar = mode === 'car' && !cm.entities.car.bike;
+      carRadio.update(dt, { inCar, carKey: look && `${look.kind}:${look.hex}:${look.style ?? 0}`,
+        own: Boolean(look && isOwnLook(look)), phones: !inCar && mode !== 'helicopter', soundOn: audioSystem.enabled });
+      cm.earbuds = carRadio.earbuds; // white earbuds on the player while one plays (controllers.js)
+    }
     // parked cars a crash shoved, sliding to a stop (parked-cars.js), and found where they are now
     for (const col of parkedCars.step(dt, (p) => controllerManager.settleParked(p))) controllerManager.refreshCollider(col);
+    {
+      const cm = controllerManager, mode = cm.activeMode;
+      const ent = mode === 'car' ? cm.entities.car : mode === 'cyclist' ? cm.entities.cyclist : mode === 'person' ? cm.entities.person : null;
+      const hit = waterSplash.track(ent, mode === 'car' ? (ent.bike ? 'bike' : 'car') : mode, dt);
+      if (hit) {
+        audioSystem.cue(hit.in ? 'plunge' : 'splash', hit, hit.in ? hit.strength : 0.6 + hit.strength * 0.4);
+        if (hit.in) rumble(0, 0.5 * hit.strength, 0.8 * hit.strength, 0.3);
+        log(`[splash] ${hit.in ? 'into' : 'out of'} the river at ${Math.round(hit.strength * 100)}%`);
+      }
+      waterSplash.update(dt, cameraSystem.camera);
+    }
     cameraSystem.update(dt, elapsed);
     tickRecording(dt);
     // the camera under the river's surface: murky green fog and a tint over the view
     {
       const cp = cameraSystem.camera.position, level = waterLevel(cp.x, cp.z);
-      const under = level != null && cp.y < level - 0.05 && groundHeight(cp.x, cp.z) < level ? 1 : 0;
+      // (the river's level runs on over the land beside it, so only where the river really is: not in the stadium's bowl)
+      const under = level != null && riverDepth(cp.x, cp.z) > 0.08 && cp.y < level - 0.05 && groundHeight(cp.x, cp.z) < level ? 1 : 0;
       if (lightingSystem.uUnder) lightingSystem.uUnder.value = under;
       if (under !== lastUnder) {
         lastUnder = under;

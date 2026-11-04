@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { Fn, attribute, color, float, mix, smoothstep, positionWorld, vertexColor, mx_noise_float, mx_worley_noise_float } from 'three/tsl';
 import { nearDrop } from './cascades.js';
 import { riverbedHeight, riverDepth, waterLevel, bridgeDecks } from './terrain.js';
 
@@ -29,10 +30,11 @@ function subdivide(geometry, tooBig) {
 const longest = (a, b, c) => Math.max((a[0] - b[0]) ** 2 + (a[2] - b[2]) ** 2, (b[0] - c[0]) ** 2 + (b[2] - c[2]) ** 2,
   (c[0] - a[0]) ** 2 + (c[2] - a[2]) ** 2);
 
-function meshOf(pos, material, name, colors = null) {
+function meshOf(pos, material, name, colors = null, wet = null) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   if (colors) g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  if (wet) g.setAttribute('wet', new THREE.Float32BufferAttribute(wet, 1));
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, material);
   m.name = name;
@@ -41,17 +43,42 @@ function meshOf(pos, material, name, colors = null) {
   return m;
 }
 
+// The banks' colors, and under the water a river bottom of dirt: dark brown silt, mottled with lighter and darker
+// mud a few meters across, faint ripples the current leaves in it, and now and then a small stone sunk in it
+function riverbedMaterial() {
+  const mat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.98 });
+  mat.colorNode = Fn(() => {
+    const p = positionWorld.xz;
+    const wet = attribute('wet', 'float');
+    const broad = mx_noise_float(p.mul(0.07)).mul(0.5).add(0.5);
+    const mottle = mx_noise_float(p.mul(0.45).add(5.7)).mul(0.5).add(0.5);
+    const grain = mx_noise_float(p.mul(3.1).add(11.2)).mul(0.5).add(0.5);
+    // ripples: soft ridges a hand apart, bent by the noise so they never run ruler-straight
+    const ripple = p.x.mul(0.9).add(p.y.mul(1.7)).add(mx_noise_float(p.mul(0.3)).mul(3.0)).sin().mul(0.5).add(0.5);
+    const silt = mix(color(0x2e251a), color(0x4a3a27), broad);
+    const dirt = mix(silt, mix(color(0x3a2e1f), color(0x5b4830), grain), smoothstep(0.35, 0.75, mottle).mul(0.55));
+    const ridged = dirt.mul(ripple.mul(0.16).add(0.9));
+    // a few pebbles: only the brightest of small cells, half buried
+    const cells = mx_worley_noise_float(p.mul(1.9));
+    const pick = mx_noise_float(p.mul(1.9).floor().add(3.1)).mul(0.5).add(0.5);
+    const pebble = smoothstep(0.82, 0.9, pick).mul(float(1).sub(smoothstep(0.18, 0.3, cells)));
+    const bed = mix(ridged, color(0x5e5648), pebble.mul(0.8));
+    return mix(vertexColor(), bed, wet);
+  })();
+  return mat;
+}
+
 // The banks and bed, and the water over them. `geos` are the water's polygons, flat at y = 0
 function buildRiver(group, geos, waterMat) {
   const river = new THREE.Group();
   river.name = 'HuronRiver';
   river.userData.terrain = 'set';
   // The banks: cut fine (3 m) where the ground slopes down to the bed, coarse (40 m) over the bed itself
-  const bankPos = [], bankCol = [];
+  const bankPos = [], bankCol = [], bankWet = [];
   // the lawn's own green on the top, a deeper, shaggier green down the bank, a narrow strip of mud at the water
   const lawn = new THREE.Color(0x4f8a2e).convertSRGBToLinear(), grass = new THREE.Color(0x3f6b27).convertSRGBToLinear();
   const mud = new THREE.Color(0x5a4c35).convertSRGBToLinear();
-  const silt = new THREE.Color(0x4a4632).convertSRGBToLinear(), c = new THREE.Color();
+  const silt = new THREE.Color(0x3a2e20).convertSRGBToLinear(), c = new THREE.Color();
   const sloped = (p) => { const d = riverDepth(p[0], p[2]); return d > 0.001 && d < 0.999; };
   // around the Argo Cascades (cascades.js), where the channel's levels step down beside land the map calls water
   const byCascades = (a, b, k) => Math.max(a[0], b[0], k[0]) > 140 && Math.min(a[0], b[0], k[0]) < 660
@@ -83,6 +110,8 @@ function buildRiver(group, geos, waterMat) {
       else if (above > -0.3) c.copy(mud).lerp(grass, (above + 0.3) / 0.55);
       else c.copy(silt).lerp(mud, Math.max(0, (above + 1.2) / 0.9));
       bankCol.push(c.r, c.g, c.b);
+      // how far under the water this point is, for the bed's dirt (riverbedMaterial)
+      bankWet.push(Math.max(0, Math.min(1, (0.05 - above) / 0.35)));
     }
     // The water: flat at the river's level, cut every 20 m so it follows the level down the river
     // and every 60 cm over the Argo Cascades' drops, so each step shows (cascades.js)
@@ -105,16 +134,17 @@ function buildRiver(group, geos, waterMat) {
   }
   if (bankPos.length) {
     // in tiles, so only what's in view is drawn
-    const bankMat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.97 });
+    const bankMat = riverbedMaterial();
     const TILE = 700, tiles = new Map();
     for (let i = 0; i < bankPos.length; i += 9) {
       const key = Math.floor((bankPos[i] + bankPos[i + 3] + bankPos[i + 6]) / 3 / TILE) * 1000
         + Math.floor((bankPos[i + 2] + bankPos[i + 5] + bankPos[i + 8]) / 3 / TILE);
-      if (!tiles.has(key)) tiles.set(key, [[], []]);
-      const [tp, tc] = tiles.get(key);
+      if (!tiles.has(key)) tiles.set(key, [[], [], []]);
+      const [tp, tc, tw] = tiles.get(key);
       for (let k = 0; k < 9; k++) { tp.push(bankPos[i + k]); tc.push(bankCol[i + k]); }
+      for (let k = 0; k < 3; k++) tw.push(bankWet[i / 3 + k]);
     }
-    for (const [tp, tc] of tiles.values()) river.add(meshOf(tp, bankMat, 'RiverBanks', tc));
+    for (const [tp, tc, tw] of tiles.values()) river.add(meshOf(tp, bankMat, 'RiverBanks', tc, tw));
   }
   if (waterPos.length) {
     // in tiles, so only what's in view is drawn

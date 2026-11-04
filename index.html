@@ -87,6 +87,8 @@
       <symbol id="i-sound" viewBox="0 0 24 24"><path d="m11 4-5 4H3v8h3l5 4V4ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></symbol>
       <symbol id="i-sound-off" viewBox="0 0 24 24"><path d="m11 4-5 4H3v8h3l5 4V4ZM16 9l6 6M22 9l-6 6"/></symbol>
       <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m7 9.5 5 5 5-5"/></symbol>
+      <symbol id="i-earbuds" viewBox="0 0 24 24"><path d="M7 4.5a3 3 0 0 1 3 3v1.5a2 2 0 0 1-2 2v8M17 4.5a3 3 0 0 0-3 3v1.5a2 2 0 0 0 2 2v8"/><circle cx="7.2" cy="7.5" r="2.4"/><circle cx="16.8" cy="7.5" r="2.4"/></symbol>
+      <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4 9h16v11H4zM6 9l12-5"/><circle cx="9" cy="14.5" r="2.5"/><path d="M14 13h4M14 16h4"/></symbol>
       <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M14.5 6.5 9 12l5.5 5.5"/></symbol>
       <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9.5 6.5 5.5 5.5-5.5 5.5"/></symbol>
       <symbol id="i-camera" viewBox="0 0 24 24"><rect x="2.8" y="6.5" width="12.4" height="11" rx="2.4"/><path d="m15.2 10.4 6-3.4v10l-6-3.4"/></symbol>
@@ -260,6 +262,19 @@
           <svg class="icon" aria-hidden="true"><use href="#i-chevron-right"/></svg>
         </button>
       </div>
+      <div id="car-radio" class="camera-switch car-radio" hidden>
+        <button id="radio-prev" class="icon-btn" type="button" title="Previous station" aria-label="Previous station">
+          <svg class="icon" aria-hidden="true"><use href="#i-chevron-left"/></svg>
+        </button>
+        <button id="radio-current" class="camera-current radio-current" type="button" title="Next station [R]">
+          <svg class="icon" aria-hidden="true"><use href="#i-radio"/></svg>
+          <span class="radio-text"><span id="radio-station">Radio off</span><span id="radio-now">Ann Arbor stations</span></span>
+          <kbd data-key="KeyR" data-pad="RIGHT">R</kbd>
+        </button>
+        <button id="radio-next" class="icon-btn" type="button" title="Next station [R]" aria-label="Next station">
+          <svg class="icon" aria-hidden="true"><use href="#i-chevron-right"/></svg>
+        </button>
+      </div>
     </section>
   </div>
 
@@ -366,7 +381,7 @@
   </section>
 
 
-<div id="lamp-credit">Based on <a href="https://github.com/mrdoob/slop-newyork" target="_blank" rel="noopener">Slop New York</a> by Mr.doob · <a href="https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&amp;commit=6a6dee81938914b815105b295fb6fe336a5a48aa&amp;from=page" target="_blank" rel="noopener">Open in Lamp</a> · <a href="#" id="lamp-remix-open">Remix…</a></div>
+<div id="lamp-credit">Based on <a href="https://github.com/mrdoob/slop-newyork" target="_blank" rel="noopener">Slop New York</a> by Mr.doob · <a href="https://lamp.dev/w/D4vNNnfErs-go-to-ann-arbor" target="_blank" rel="noopener">Open in Lamp</a> · <a href="#" id="lamp-remix-open">Remix…</a></div>
 <div id="lamp-remix" hidden>
   <div class="lamp-remix-head">Make Go To Ann Arbor yours<button type="button" id="lamp-remix-close" aria-label="Close">×</button></div>
   <p>Say what you'd change. Lamp makes the change and keeps your data.</p>
@@ -375,7 +390,7 @@
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of Go To Ann Arbor with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":null,"origin":{"commit":"6a6dee81938914b815105b295fb6fe336a5a48aa","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"49a9c8854690cf04aa1fc1cfe0b7109961f1b5a4","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');
