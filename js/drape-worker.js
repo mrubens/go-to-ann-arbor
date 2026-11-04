@@ -8,8 +8,9 @@ onmessage = (e) => {
   const results = [], transfer = [];
   for (const p of pieces) {
     const out = drapeLayer(ground, p, p.tolerance);
-    results.push({ count: out.count, attrs: out.attrs });
+    results.push({ count: out.count, attrs: out.attrs, index: out.index });
     for (const a of out.attrs) transfer.push(a.array.buffer);
+    if (out.index) transfer.push(out.index.buffer);
   }
   postMessage({ results }, transfer);
 };

@@ -19,7 +19,7 @@ import {
 import { cityUniforms, createSteamMaterial, createTreeGrateMaterial, createGodRayMaterial } from './tsl-materials.js';
 import { createTreeField } from './trees.js';
 import { REAL_TREES, REAL_TREE_KINDS, REAL_TREE_HEIGHTS } from './tree-geodata.js';
-import { placeStreetTrees } from './tree-placements.js';
+import { placeStreetTrees, dropCanopyFill } from './tree-placements.js';
 import { createFoodCartParts } from './street-props.js';
 import { pavedPlazaRects, bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes } from './city-grid.js';
 import { bryantParkLawn } from './landmarks.js';
@@ -844,18 +844,30 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
       furnPart(new THREE.ConeGeometry(Math.SQRT1_2, 1, 4).rotateY(Math.PI / 4).scale(7.8, 1.3, 6.4), 0x4f3a30, 0, 3.47, 0),
       fBox(1.8, 0.05, 0.76, WOOD, 0, 0.72, 0), fBox(1.8, 0.04, 0.26, WOOD, 0, 0.42, 0.62), fBox(1.8, 0.04, 0.26, WOOD, 0, 0.42, -0.62),
       fBox(0.08, 0.72, 0.08, IRON, -0.7, 0, 0), fBox(0.08, 0.72, 0.08, IRON, 0.7, 0, 0)
+    ]),
+    // a Little Free Library: a book box with a gabled roof and a glass door (+z) on a post
+    library: mergeGeometries([
+      fBox(0.1, 1.05, 0.1, 0x5e4630, 0, 0, 0), fBox(0.3, 0.04, 0.3, 0x5e4630, 0, 1.0, 0),
+      fBox(0.58, 0.46, 0.42, 0xa8412f, 0, 1.04, 0), fBox(0.62, 0.03, 0.46, 0xefe9dc, 0, 1.02, 0),
+      fBox(0.4, 0.3, 0.02, 0x9fb7c4, 0, 1.12, 0.215), fBox(0.46, 0.03, 0.03, 0xefe9dc, 0, 1.42, 0.215),
+      fBox(0.03, 0.06, 0.03, 0xd4b24a, 0.15, 1.26, 0.235),
+      furnPart(new THREE.CylinderGeometry(0.3, 0.3, 0.42, 3).rotateX(Math.PI / 2).rotateZ(Math.PI).scale(1.12, 0.6, 1), 0xa8412f, 0, 1.59, 0),
+      furnPart(new THREE.BoxGeometry(0.44, 0.03, 0.52), 0x3b3633, -0.15, 1.65, 0, 0, 0.75),
+      furnPart(new THREE.BoxGeometry(0.44, 0.03, 0.52), 0x3b3633, 0.15, 1.65, 0, 0, -0.75)
     ])
   };
   // kinds as build-street-furniture.py numbers them, with their footprints (w along x, d along z)
   const FURN_KINDS = [['bench', 1.9, 0.6], ['trash', 0.6, 0.6], ['table', 1.9, 1.6], ['grill', 0.7, 0.5],
     ['fountain', 0.6, 0.6], ['rack', 1.4, 0.8], ['shelter', 7.6, 6.2]];
   const furnMatrices = Object.fromEntries(Object.keys(FURN_SHAPES).map((k) => [k, []]));
+  const furnSites = { trash: [], bench: [] }; // where each knockable one stands, in the order of its instance
   const putFurniture = (kind, x, z, yaw, w, d) => {
     dummy.position.set(x, FURN_LAWN, z);
     dummy.rotation.set(0, yaw, 0);
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     furnMatrices[kind].push(dummy.matrix.clone());
+    furnSites[kind]?.push({ x, z });
     const c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw));
     addFootprint(x, z, w * c + d * s, w * s + d * c, true);
   };
@@ -896,11 +908,25 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
     if (!kind || !blockAt(x, z)) continue; // a point in a street is a slip of the map
     putFurniture(kind[0], x, z, AM[i + 3], kind[1], kind[2]);
   }
+  // Little Free Libraries, where OpenStreetMap has them, turned to face the nearest street
+  const LIB = streetFurniture?.libraries || [];
+  for (let i = 0; i < LIB.length; i += 2) {
+    const x = LIB[i], z = LIB[i + 1];
+    if (!blockAt(x, z)) continue;
+    dummy.position.set(x, FURN_LAWN - 0.04, z);
+    dummy.rotation.set(0, Math.PI / 2 - towardStreet(x, z), 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    furnMatrices.library.push(dummy.matrix.clone());
+    addFootprint(x, z, 0.6, 0.6, true);
+  }
   // only the shelters cast shadows: a bench's or a hydrant's is too small to be worth its draws in every cascade
   let hydrantMesh = null;
+  const furnMeshes = {};
   for (const k of Object.keys(FURN_SHAPES)) {
     const inst = addMatrixArrayInstanced(FURN_SHAPES[k], furnMat, furnMatrices[k], k === 'shelter');
     if (k === 'hydrant') hydrantMesh = inst;
+    furnMeshes[k] = inst;
     if (inst) {
       inst.userData.cullDistance = k === 'shelter' ? 500 : 280;
       if (k !== 'shelter') inst.receiveShadow = true;
@@ -1163,7 +1189,8 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
   let sidewalkTreePositions = placeStreetTrees(REAL_TREES, treePositions,
     (x, z) => !inPlaza(x, z, 1.5) && isClearOfPoles(x, z, 2.2), REAL_TREE_KINDS, REAL_TREE_HEIGHTS);
   for (const tree of sidewalkTreePositions) treePositions.push(tree);
-  const treeField = createTreeField(scene, treePositions, colliders,
+  const keptTrees = dropCanopyFill(treePositions);
+  const treeField = createTreeField(scene, keptTrees, colliders,
     { stream: TIER.stream, at: TIER.stream ? groundStreamCenter() : null });
   group.add(treeField.group);
   sidewalkTreePositions = sidewalkTreePositions.filter((t) => treeField.sites.has(t));
@@ -1412,6 +1439,9 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
   }
   // hydrants break off their flange at a bump and fly, and the water main under them gushes (knockdowns.js)
   if (hydrantMesh) hydrantSites.forEach((h, i) => obstacles.push({ x: h.x, z: h.z, r: 0.2, kind: 'hydrant', height: 0.8, parts: [hydrantMesh, i] }));
+  // and trash cans and park benches are thrown, tumbling, by a car that hits them
+  if (furnMeshes.trash) furnSites.trash.forEach((t, i) => obstacles.push({ x: t.x, z: t.z, r: 0.3, kind: 'trash', height: 0.9, parts: [furnMeshes.trash, i] }));
+  if (furnMeshes.bench) furnSites.bench.forEach((b, i) => obstacles.push({ x: b.x, z: b.z, r: 0.6, kind: 'bench', height: 0.8, parts: [furnMeshes.bench, i] }));
   return { group, footprints, signalClock, signalIntersections, audioSignals, treeField, obstacles, update };
 }
 

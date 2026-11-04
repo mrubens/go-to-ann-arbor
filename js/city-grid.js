@@ -65,6 +65,7 @@ import { buildPlaygrounds } from './playgrounds.js';
 import { buildGolf, buildTrails } from './golf.js';
 import { buildRiver } from './river.js';
 import { riverDepth, drawOver } from './terrain.js';
+import { LIFT } from './ground-lifts.js';
 import { cascadeGaps } from './cascades.js';
 
 // Live construction data consumed by the building and street-detail builders after buildCityGrid().
@@ -1523,7 +1524,7 @@ function buildCityGrid(scene) {
   // Unified Roadway Asphalt Deck (Y = 0.0) filling the town's edge
   const roadMat = createRoadSurfaceMaterial();
   const roadMesh = createFlatPolygonMesh(TOWN_EDGE, 0.0, roadMat, true);
-  roadMesh.userData.terrainTolerance = 0.16; // Lamp: as the other ground layers; the road markings sit 10 cm over it (road-paint.js)
+  roadMesh.userData.terrainTolerance = 0.16; // Lamp: as the other ground layers; the road markings sit a few millimetres over it (road-paint.js)
   group.add(roadMesh);
 
   // =========================================================================
@@ -1546,7 +1547,7 @@ function buildCityGrid(scene) {
   const slabGeos = [];
   const curbGeos = [];
   const hedgeGeos = [];
-  const SW_TOP = 0.22;
+  const SW_TOP = LIFT.slab;
   // Ann Arbor: a park's or a golf course's slab (an odd-shaped lawn block) is only its sidewalk ring (and a little under the lawn's edge), so on a hill the
   // concrete, draped on the ground apart from the lawn, can't show through it
   const bankLawn = []; // the lawn's edge along the river, where the ring has no sidewalk
@@ -1575,7 +1576,7 @@ function buildCityGrid(scene) {
       // no sidewalk along the riverbank: the lawn runs down to the water there
       if (facesWater(p, q, nx / W, nz / W)) {
         // lawn instead, from the block's edge in to where the lawn starts
-        const ox = -nx / W * 0.6, oz = -nz / W * 0.6, g = 0.225;
+        const ox = -nx / W * 0.6, oz = -nz / W * 0.6, g = LIFT.bank;
         const a = [p.x + ox, g, p.z + oz], b2 = [q.x + ox, g, q.z + oz], c = [q.x + nx, g, q.z + nz], d = [p.x + nx, g, p.z + nz];
         bankLawn.push(...a, ...c, ...b2, ...a, ...d, ...c);
         continue;
@@ -1613,7 +1614,7 @@ function buildCityGrid(scene) {
       else roadSidewalks.push({ minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ });
     } else {
       // curb (granite) ring under a sidewalk slab inset by 0.25 m, like the instanced pair below
-      const curb = createExtrudedPolygonMesh(b.poly, 0.0, 0.18, curbMat).geometry;
+      const curb = createExtrudedPolygonMesh(b.poly, 0.0, LIFT.curb, curbMat).geometry;
       curbGeos.push(curb);
       const inner = offsetPolygonInward(b.poly, 0.25);
       if (b.lawn && !b.median && b.area > 400 && ringSlab(b)) { /* only its sidewalk ring */ }
@@ -1666,13 +1667,14 @@ function buildCityGrid(scene) {
 
   rectSlabs.forEach((blk, i) => {
     dummy.rotation.set(0, 0, 0);
-    dummy.position.set(blk.cx, 0.125, blk.cz);
-    dummy.scale.set(blk.w - 0.5, 0.19, blk.d - 0.5);
+    // the slab's top at SW_TOP and the curb's at LIFT.curb, under the lawn (LIFT.lawn) like the outlined blocks'
+    dummy.position.set(blk.cx, (0.03 + SW_TOP) / 2, blk.cz);
+    dummy.scale.set(blk.w - 0.5, SW_TOP - 0.03, blk.d - 0.5);
     dummy.updateMatrix();
     swInstanced.setMatrixAt(i, dummy.matrix);
 
-    dummy.position.set(blk.cx, 0.095, blk.cz);
-    dummy.scale.set(blk.w, 0.17, blk.d);
+    dummy.position.set(blk.cx, (0.01 + LIFT.curb) / 2, blk.cz);
+    dummy.scale.set(blk.w, LIFT.curb - 0.01, blk.d);
     dummy.updateMatrix();
     curbInstanced.setMatrixAt(i, dummy.matrix);
   });
@@ -1753,15 +1755,13 @@ function buildCityGrid(scene) {
     geo.translate(0, y, 0);
     return geo;
   };
-  // Lamp: 12 cm over the sidewalk's slab (SW_TOP) under it, so with coarser terrain subdivision (0.16 m tolerance)
-  // the slab won't show through the grass as wedges of concrete
-  const LAWN_Y = 0.34;
+  // Lamp: just over the sidewalk's slab (SW_TOP) at its edge; cut along the same triangles, the two can't cross
+  const LAWN_Y = LIFT.lawn;
   const hashDrive = (x, z) => { const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return v - Math.floor(v); };
   const drivewayConcreteMat = new THREE.MeshStandardNodeMaterial({ color: 0xa29e96, roughness: 0.93 });
   // a home's blacktop: a weathered mid gray, so it reads as a driveway beside the lawn rather than a hole in it
   const drivewayBlacktopMat = new THREE.MeshStandardNodeMaterial({ color: 0x5c5d60, roughness: 0.95 });
-  // drawn in front of the lawn under them wherever the two meet: both are laid on the slopes cut their own way, so a
-  // few millimetres apart the lawn would show through the driveways and front walks in wedges (drawOver, terrain.js)
+  // drawn in front of the lawn under them wherever the two meet, so the two don't flicker far off (drawOver, terrain.js)
   for (const m of [drivewayConcreteMat, drivewayBlacktopMat]) drawOver(m);
   const lawnGeos = [];
   for (const rings of GEO.lawns) lawnGeos.push(flatGeo(rings.map(toRing), LAWN_Y));
@@ -1957,7 +1957,18 @@ function buildCityGrid(scene) {
   const sidewalks = roadSidewalks;
   // Player colliders of the South Street Viaduct's columns, ramps and portal
   const colliders = (fdrViaduct && fdrViaduct.colliders) || [];
-  return { group, sidewalks, footprints, highwayLanes, colliders };
+  // Lamp: what the other parts read from this module, handed back with the grid, so a kept grid gives them back when
+  // the module runs again in place (restoreCityGrid) instead of leaving them empty (the parks' and woods' trees)
+  const shared = { bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes, pavedPlazaRects, sidewalkBlocks, fdrViaduct,
+    streetGroundSurfaces };
+  return { group, sidewalks, footprints, highwayLanes, colliders, shared };
+}
+
+// Puts back what a kept grid shared (buildCityGrid's `shared`) after this module ran again in place
+function restoreCityGrid(shared) {
+  if (!shared) return;
+  ({ bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes, pavedPlazaRects, sidewalkBlocks, fdrViaduct,
+    streetGroundSurfaces } = shared);
 }
 
 // =====================================================================================================================
@@ -2939,6 +2950,7 @@ function buildUnderpassPortal(frames, acc, quad, lights, colliders) {
 
 export {
   buildCityGrid,
+  restoreCityGrid,
   getStreetGroundHeight,
   batchStaticGroupMeshes,
   bigParkClearings,

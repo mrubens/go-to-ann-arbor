@@ -33,6 +33,11 @@ const HERITAGE = [
 ];
 const BRICKS = [0x8e4a38, 0x9a5240, 0x7c3b2c, 0x6b4a37, 0x7b5944, 0xa86a4c];
 const STONES = [0x9a9286, 0x857d70, 0xa89f8e];
+// the lawns sit this far over the ground (city-grid.js), and a house's first floor and front steps with them
+const LAWN_Y = LIFT.lawn;
+// how far up a house's wall the uphill lawn may reach on a sloping lot
+const UPHILL = 0.7, DOWNHILL = 0.8, BANKED = 1.5;
+import { LIFT } from './ground-lifts.js';
 const STUCCO = [0xe6dcc4, 0xd7cbb0, 0xc9bfa8, 0xe9e2d2];
 const SHAKES = [0x8a6a4a, 0x6e5a45, 0x7d7a68, 0x5f6b55];
 // a building look's wall color indexes its material's palette (clapboard: SIDING, then HERITAGE)
@@ -783,7 +788,6 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     const ring = ringArea(ring0) < 0 ? [...ring0].reverse() : ring0; // counter-clockwise in x, z: walls face out
     const fb = orientedBox(ring);
     const area = Math.abs(ringArea(ring));
-    const g = r.ground ?? 0;
     const garage = r.garage || area < 45;
     const id = (k) => hash(r.cx, r.cz, k);
     // what the assessor and a street photo say about it, where they do
@@ -803,13 +807,39 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     const M = rects[0], wingRects = rects.slice(1);
     wings += wingRects.length;
 
+    // Sample the highest, lowest and mean terrain across the decomposed house rectangles and polygon vertices. The
+    // first-floor sill `g + fh` sits over the mean lawn (`LAWN_Y`, LIFT.lawn), letting the uphill lawn reach at most
+    // UPHILL up the wall, as a house is graded into its slope, so the 1 m survey's real banks don't stand every
+    // house on a flight of steps; the masonry foundation skirt (`base`) reaches down below the downhill lawn.
+    let minG = r.minGround ?? groundHeight(r.cx, r.cz);
+    let maxG = groundHeight(r.cx, r.cz), sumG = maxG, nG = 1;
+    const sample = h0 => {
+      if (h0 < minG) minG = h0;
+      if (h0 > maxG) maxG = h0;
+      sumG += h0; nG++;
+    };
+    for (const p of ring) sample(groundHeight(p.x, p.z));
+    for (const R of rects) {
+      for (const u of [R.u0, (R.u0 + R.u1) * 0.5, R.u1]) {
+        for (const v of [R.v0, (R.v0 + R.v1) * 0.5, R.v1]) {
+          const pt = P(u, v);
+          sample(groundHeight(pt.x, pt.z));
+        }
+      }
+    }
+    // (not the footprint's highest ground the city's records carry, which stood every hillside house on the street)
+    // On a steep bank the sill stays within DOWNHILL of the lowest lawn, the uphill side then dug in as deep as BANKED
+    const steep = maxG - minG > UPHILL * 2;
+    const g = LAWN_Y + (steep ? Math.max(Math.min(sumG / nG, minG + DOWNHILL), maxG - BANKED)
+      : Math.max(sumG / nG, maxG - UPHILL));
+
     // Storeys as the assessor has them (ranch, storey and a half, two storey), else from the surveyed height (the LiDAR
     // roof average, which reads low), a storey and a half where the second floor lives under the roof
     const h = Math.max(3, r.height);
     const said = [0, 1, 1.5, 2, 0][look >> 18 & 7] || 0;
     const storeys = garage ? 0 : said || (h < 4.6 ? 1 : h < 6.6 ? 1.5 : h < 10 ? 2 : 3);
     const ranch = storeys === 1 && (said === 1 || !historic);
-    const fh = garage ? 0.12 : historic ? 0.75 + 0.3 * id(21) : ranch ? 0.3 + 0.2 * id(21) : 0.5 + 0.35 * id(21);
+    const fh = garage ? 0.12 : historic ? 0.6 + 0.25 * id(21) : ranch ? 0.25 + 0.15 * id(21) : 0.45 + 0.25 * id(21);
 
     // Walls: clapboard in Ann Arbor's colors, about one in five brick, a few stone, stucco or cedar shakes
     const m = id(2);
@@ -937,7 +967,7 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
 
     // Roofs first (they say where the soffits are), then the walls under them
     const frames = rects.map((R, k) => roofOf(hc, R, roofSpecs[k]));
-    const base = g - 0.6;
+    const base = Math.min(r.minGround ?? g, minG, g) - 0.6;
     rects.forEach((R, k) => {
       const spec = roofSpecs[k], F = frames[k];
       const endSides = spec.type === 'hip' || spec.type === 'flat' ? [] : spec.along === 'u' ? [1, 3] : [0, 2];
@@ -1014,7 +1044,7 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       if ((type === 'gable' || type === 'gambrel') && !endFacesFront) {
         const b = MF.hb * 0.3 * (id(16) < 0.5 ? -1 : 1);
         const p3 = MF.W(sgn * (MF.ha + 0.32), b, 0), p = { x: p3[0], z: p3[2] };
-        addBox(c, p, MF.bDir.x, MF.bDir.z, 1.1, 0.62, g - 0.3, MF.top - 0.4, chim);
+        addBox(c, p, MF.bDir.x, MF.bDir.z, 1.1, 0.62, base, MF.top - 0.4, chim);
         addBox(c, p, MF.bDir.x, MF.bDir.z, 0.72, 0.6, MF.top - 0.4, ridgeY + 0.7, chim);
         addBox(c, p, MF.bDir.x, MF.bDir.z, 0.84, 0.72, ridgeY + 0.7, ridgeY + 0.82, capRGB);
       } else {
@@ -1051,7 +1081,8 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
         const ph = Math.min(deckY + 2.65, blockSoffit - 0.45);
         outD = pd;
         // the deck on its skirt, the ceiling, posts (on brick piers on a craftsman porch), beams
-        addBox(c, Q(doorT, pd / 2), dir.x, dir.z, pw, pd, g - 0.4, deckY - 0.1, matKind === M_BRICK ? hc.sc : lin(0x6d6a64));
+        const skirtBase = Math.min(base, groundHeight(Q(t0, pd).x, Q(t0, pd).z) - 0.4, groundHeight(Q(t1, pd).x, Q(t1, pd).z) - 0.4);
+        addBox(c, Q(doorT, pd / 2), dir.x, dir.z, pw, pd, skirtBase, deckY - 0.1, matKind === M_BRICK ? hc.sc : lin(0x6d6a64));
         addBox(c, Q(doorT, pd / 2 + 0.03), dir.x, dir.z, pw + 0.08, pd + 0.06, deckY - 0.1, deckY, lin(DECK));
         const nPosts = pw > 6.2 ? 4 : 2;
         for (let k = 0; k < nPosts; k++) {
@@ -1086,30 +1117,42 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
         // shrubs either side of the steps, and at the porch's ends
         for (const s of [-1, 1]) {
           const p = Q(doorT + s * (sw / 2 + 0.75), pd + 0.6);
-          shrubs.push(p.x, groundHeight(p.x, p.z), p.z, 0.5 + id(24 + s) * 0.3, ...lin(pick(SHRUBS, id(26 + s))));
+          shrubs.push(p.x, groundHeight(p.x, p.z) + LAWN_Y, p.z, 0.5 + id(24 + s) * 0.3, ...lin(pick(SHRUBS, id(26 + s))));
           const t = s < 0 ? t0 - 0.9 : t1 + 0.9;
           if (t > 0.6 && t < S.L - 0.6) {
             const q = Q(t, 0.8);
-            shrubs.push(q.x, groundHeight(q.x, q.z), q.z, 0.6 + id(28 + s) * 0.35, ...lin(pick(SHRUBS, id(29 + s))));
+            shrubs.push(q.x, groundHeight(q.x, q.z) + LAWN_Y, q.z, 0.6 + id(28 + s) * 0.35, ...lin(pick(SHRUBS, id(29 + s))));
           }
         }
       } else {
         // a stoop: a landing at the door
         outD = 1.3;
-        addBox(c, Q(doorT, 0.65), dir.x, dir.z, 1.9, 1.3, g - 0.3, deckY, lin(CONCRETE));
+        const stoopP = Q(doorT, 0.65);
+        const stoopBase = Math.min(base, groundHeight(stoopP.x, stoopP.z) - 0.4);
+        addBox(c, stoopP, dir.x, dir.z, 1.9, 1.3, stoopBase, deckY, lin(CONCRETE));
         for (const s of [-1, 1]) for (const t of [doorT + s * 1.9, doorT + s * 3.4]) {
           if (t < 0.6 || t > S.L - 0.6) continue;
           const p = Q(t, 0.75);
-          shrubs.push(p.x, groundHeight(p.x, p.z), p.z, 0.45 + id(31 + t) * 0.3, ...lin(pick(SHRUBS, id(33 + t))));
+          shrubs.push(p.x, groundHeight(p.x, p.z) + LAWN_Y, p.z, 0.45 + id(31 + t) * 0.3, ...lin(pick(SHRUBS, id(33 + t))));
         }
       }
-      // steps down from the porch or stoop
+      // steps down from the porch or stoop to the sloped lawn
       const stepRGB = hasPorch ? lin(DECK) : lin(CONCRETE);
-      for (let k = 1; k <= nSteps; k++) {
+      let stepsUsed = 0;
+      for (let k = 1; k <= 20; k++) {
         const top = deckY - k * riser;
-        if (top <= g + 0.02) break;
         const p = Q(doorT, outD + (k - 0.5) * 0.3);
-        steps.push(p.x, g - 0.3, p.z, yaw, sw, top - (g - 0.3), 0.3, ...stepRGB);
+        const pL = Q(doorT - sw * 0.5, outD + (k - 0.5) * 0.3);
+        const pR = Q(doorT + sw * 0.5, outD + (k - 0.5) * 0.3);
+        const gC = groundHeight(p.x, p.z), gL = groundHeight(pL.x, pL.z), gR = groundHeight(pR.x, pR.z);
+        // the flight ends where its middle meets the lawn (on a lot sloping sideways the low side's lawn is banked up
+        // to the step, not followed down by more of them); each step still reaches below the lowest of it
+        const lawnAtStep = (gC * 2 + gL + gR) / 4 + LAWN_Y, lawnMinAtStep = Math.min(gC, gL, gR) + LAWN_Y;
+        if (k > 1 && top <= lawnAtStep - 0.04) break;
+        const stepBase = Math.min(lawnMinAtStep - 0.35, top - riser - 0.35);
+        steps.push(p.x, stepBase, p.z, yaw, sw, top - stepBase, 0.3, ...stepRGB);
+        stepsUsed = k;
+        if (top <= lawnAtStep + 0.09) break;
       }
       // the porch light by the door and the house number on the other side
       const lp = Q(doorT - 0.9, 0.08);
@@ -1121,17 +1164,18 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
           plates.push(pp.x, deckY + 1.6, pp.z, Math.atan2(N.x, N.z), num, String(num).length);
         }
       }
-      // a front walk from the steps to the sidewalk, following the ground
-      const startD = outD + nSteps * 0.3;
+      // a front walk from the steps to the sidewalk, following the ground; it stops at the sidewalk's back edge
+      // (4.6 m from the curb: the tree lawn, then the sidewalk from 2.9 m, as build-annarbor.py lays them)
+      const startD = outD + (stepsUsed || nSteps) * 0.3;
       const s0 = Q(doorT, startD);
       const toStreet = distanceToStreet(s0.x, s0.z, N.x, N.z);
-      const walkLen = toStreet - 2.0;
+      const walkLen = toStreet - 4.5;
       if (walkLen > 0.8 && walkLen < 30) {
         const n = Math.ceil(walkLen / 2.5), walkRGB = lin(CONCRETE);
         for (let k = 0; k < n; k++) {
           const d0 = startD + (walkLen * k) / n, d1 = startD + (walkLen * (k + 1)) / n;
           const p = [Q(doorT - 0.6, d0), Q(doorT + 0.6, d0), Q(doorT + 0.6, d1), Q(doorT - 0.6, d1)]
-            .map((q) => [q.x, groundHeight(q.x, q.z) + 0.05, q.z]);
+            .map((q) => [q.x, groundHeight(q.x, q.z) + LAWN_Y + 0.03, q.z]);
           sQuad(c, p[0], p[1], p[2], p[3], walkRGB);
         }
       }

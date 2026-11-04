@@ -461,8 +461,9 @@ function facadeCell(windowWidth, floorHeight, boxLocal, cornerPier = 0, footprin
   const cellUV = vec2(fract(gridU), fract(gridV));
   const fw = vec2(fwidth(gridU), fwidth(gridV));
 
-  // Ground floor is strictly floor index 0 (gridV < 1.0) so floor 1 is never sliced in half!
-  const floor0 = float(1.0).sub(step(1.0, gridV));
+  // Ground floor is strictly floor index 0 (0.0 <= gridV < 1.0) so floor 1 is never sliced in half and
+  // hillside foundation walls below ground (gridV < 0) are never mistaken for ground-floor storefronts/windows!
+  const floor0 = step(0.0, gridV).mul(float(1.0).sub(step(1.0, gridV)));
   const wall = float(1.0).sub(isRoof);
   // Lamp: a shop wall's ground floor is its storefront (createStorefront); every other ground floor has the same
   // windows as the floors above, with a building's entrance set into it (createBuildingEntrance)
@@ -1084,9 +1085,10 @@ function createPreWarBuildingMaterial(opts = {}) {
     });
 
     const wallTint = mix(mix(cStone, backTint, back), signPaint.xyz, signPaint.w);
-    // Trim stone on the band courses, the storefront fascia and the coping capping every wall
+    // Trim stone on the band courses, the storefront fascia, the coping capping every wall, and the hillside foundation plinth
     const trimMix = max(isCornice.mul(0.62), coping.mul(0.8));
-    const masonryTint = mix(wallTint, cTrim, trimMix)
+    const foundationPlinth = float(1.0).sub(smoothstep(0.18, 0.24, vCoord)).mul(float(1.0).sub(isRoof));
+    const masonryTint = mix(mix(wallTint, cTrim, trimMix), mix(cTrim, cStone, 0.35).mul(0.78), foundationPlinth)
       .mul(brickRnd.mul(0.14).add(1.0))
       .mul(brickShiftVec);
     const masonryWithMortar = mix(masonryTint, masonryTint.mul(0.62), mortarJoint);
@@ -3187,7 +3189,9 @@ function createWaterMaterial() {
 /**
  * Central Park & Manhattan Park Lush Multi-Octave Turf, Clover & Mowing Stripes TSL Material
  */
-function createParkLawnMaterial(isMeadow = false) {
+// `mown` ({ width, lift }): a golf course's fairway, tee or green, the same grass cut closer: a touch lighter (`lift`)
+// in soft stripes `width` metres wide across its `mow` attribute's direction, so it reads as mown turf on the lawn
+function createParkLawnMaterial(isMeadow = false, mown = null) {
   const mat = new THREE.MeshStandardNodeMaterial({
     metalness: 0.0,
     roughness: 0.86
@@ -3209,7 +3213,14 @@ function createParkLawnMaterial(isMeadow = false) {
       cGrassMid,
       macroPatch.mul(0.45).add(midClover.mul(0.35)).add(mowStripe.mul(0.20))
     );
-    return mix(baseLawn, cGrassSun, microBlade.mul(0.38));
+    const grass = mix(baseLawn, cGrassSun, microBlade.mul(0.38));
+    if (!mown) return grass;
+    const angle = attribute('mow', 'float');
+    const v = dot(wp, vec2(angle.sin().negate(), angle.cos())).div(mown.width);
+    const fw = max(fwidth(v), 0.001);
+    // soft-edged stripes, fading to their average where they get thinner than a few pixels
+    const band = mix(smoothstep(fw.negate(), fw, abs(fract(v).sub(0.5)).sub(0.25)), float(0.5), smoothstep(0.08, 0.3, fw));
+    return grass.mul(band.mul(0.12).add(1.0 + mown.lift));
   })();
 
   mat.normalNode = Fn(() => {

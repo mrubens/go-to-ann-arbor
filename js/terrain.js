@@ -1,6 +1,7 @@
 // js/terrain.js
 // The height of the ground over Ann Arbor, in metres above the street level the rest of the city was drawn at (y = 0),
-// from data/elevation.bin.gz (made by Assets/Tools/build-annarbor.py from the open Terrain Tiles). Heights are 0 in the water and ease to 0
+// from data/elevation.bin.gz and, under the city, the finer data/ground.bin.gz (both made by Assets/Tools/build-ground.py
+// from the USGS 3DEP 1 m bare-earth survey, Assets/Tools/fetch-3dep.py). Heights are 0 in the water and ease to 0
 // near the shore, so whatever sits at the waterline (seawalls, waterfront highways, piers, bridge landings) stays
 // where it was drawn.
 //
@@ -15,7 +16,8 @@ import { hot, asset, log, work } from '../lamp-game.js';
 import { STADIUM, radiiAt, bowlSurface } from './stadium-shape.js';
 import { GEO } from './city-geodata.js';
 import { carveCascades, cascadeDepth, cascadeLevel } from './cascades.js';
-import { baseHeight, digAt, levelAt, onDeck, BUCKET, bucketKey, drapeLayer, CORE_SOURCE } from './ground-core.js';
+import { baseHeight, digAt, levelAt, onDeck, BUCKET, bucketKey, drapeLayer, CORE_SOURCE, coreHeight, inCore, splitsOf, CORE_FLOOR } from './ground-core.js';
+import { LIFT } from './ground-lifts.js';
 
 let grid = null; // { x0, z0, step, cols, rows, heights: Float32Array }
 
@@ -23,7 +25,7 @@ let grid = null; // { x0, z0, step, cols, rows, heights: Float32Array }
 // read once; the parts of the city built on them name what this returns as one of their inputs.
 async function loadTerrain(url = './data/elevation.bin.gz') {
   grid = await hot(import.meta).keep('heightsAndRiver', () => readHeights(url),
-    { from: [url.replace(/^\.\//, ''), 'js/cascades.js'] });
+    { from: [url.replace(/^\.\//, ''), 'js/cascades.js', 'data/river.bin.gz', 'data/ground.bin.gz', 'js/ground-core.js'] });
   return grid;
 }
 
@@ -50,10 +52,51 @@ async function readHeights(url) {
     const g = { x0, z0, step, cols, rows, heights };
     digBowl(g);
     g.river = await readRiver(g, './data/river.bin.gz');
+    await readCore(g, './data/ground.bin.gz');
     return g;
   } catch (error) {
     console.warn('[terrain] no ground heights, the city stays flat:', error);
     return null;
+  }
+}
+
+// data/ground.bin.gz (GRD1, from build-ground.py): the city's ground on a 4 m grid from the USGS's 1 m survey, its
+// streets graded level across, as each sample less the one before it in centimetres. The stadium's bowl and the river's
+// bed are dug into it here, then it's made into one mesh of right triangles that strays no more than 10 cm from them
+// (25 cm in its smallest triangles, about 11 m across and less, which are cut again only at a bank or a street's edge)
+// (ground-core.js), which the ground layers are all cut along, and a coarser one for the ground under the city.
+const CORE_TOLERANCE = 0.1, UNDER_TOLERANCE = 0.5, CORE_SMALLEST = 4, SMALL_STRAY = 2.5;
+async function readCore(g, url) {
+  try {
+    const began = performance.now();
+    const bytes = await unzipped(url);
+    if (new TextDecoder().decode(new Uint8Array(bytes, 0, 4)) !== 'GRD1') throw new Error('unknown format');
+    const [x0, z0, step, n] = new Float32Array(bytes, 4, 4);
+    const size = Math.round(n), delta = new Int16Array(bytes, 20, size * size), heights = new Float32Array(size * size);
+    for (let i = 0, run = 0; i < heights.length; i++) { run += delta[i]; heights[i] = run / 100; }
+    const fine = { x0, z0, step, cols: size, rows: size, heights };
+    digBowl(fine);
+    g.stadiumGround = fine.stadiumGround;
+    const r = g.river;
+    if (r) {
+      const c0 = Math.max(0, Math.floor((r.dx0 - x0) / step)), c1 = Math.min(size - 1, Math.ceil((r.dx0 + r.dcols * r.dstep - x0) / step));
+      const w0 = Math.max(0, Math.floor((r.dz0 - z0) / step)), w1 = Math.min(size - 1, Math.ceil((r.dz0 + r.drows * r.dstep - z0) / step));
+      for (let w = w0; w <= w1; w++) for (let c = c0; c <= c1; c++) {
+        const x = x0 + c * step, z = z0 + w * step, f = digAt(r, x, z);
+        if (!(f > 0)) continue;
+        const i = w * size + c, h = heights[i];
+        const bed = cascadeLevel(x, z, levelAt(r, x, z)) - cascadeDepth(x, z, 1.8);
+        if (bed < h) heights[i] = h + (bed - h) * f;
+      }
+    }
+    const cm = new Uint16Array(size * size);
+    for (let i = 0; i < cm.length; i++) cm[i] = Math.max(0, Math.min(65535, Math.round((heights[i] - CORE_FLOOR) * 100)));
+    const core = { x0, z0, step, size, cm, split: null };
+    [core.split, g.coreUnder] = splitsOf(core, [CORE_TOLERANCE, UNDER_TOLERANCE], CORE_SMALLEST, SMALL_STRAY);
+    g.core = core;
+    log(`[terrain] the city's ground ${size} × ${size} at ${step} m, in ${Math.round(performance.now() - began)} ms`);
+  } catch (error) {
+    console.warn('[terrain] no fine ground, the 10 m heights instead:', error);
   }
 }
 
@@ -200,6 +243,11 @@ function digBowl(g) {
   }
 }
 
+// The city's mesh of triangles (readCore) and the bits of its coarser cut, or null without it
+function cityGround() {
+  return grid?.core ? { core: grid.core, under: grid.coreUnder } : null;
+}
+
 // The ground around Michigan Stadium, which its rim and field are measured from
 function stadiumGround() {
   return grid?.stadiumGround ?? 0;
@@ -210,12 +258,17 @@ function stadiumGround() {
 function groundHeight(x, z) {
   if (!grid) return 0;
   const r = grid.river;
+  if (grid.core && inCore(grid.core, x, z)) {
+    const h = coreHeight(grid.core, x, z);
+    return r ? onDeck(r, x, z, h) : h;
+  }
   return r ? onDeck(r, x, z, riverbedHeight(x, z)) : baseHeight(grid, x, z);
 }
 
 // The ground at (x, z) under any bridge: the river's banks and bed where it's dug out
 function riverbedHeight(x, z) {
   if (!grid) return 0;
+  if (grid.core && inCore(grid.core, x, z)) return coreHeight(grid.core, x, z);
   let h = baseHeight(grid, x, z);
   const r = grid.river;
   const f = r ? digAt(r, x, z) : 0;
@@ -623,12 +676,27 @@ function layerOfInstances(mesh) {
   return { count, attrs: names.map((name, k) => ({ name, array: arrays[k], itemSize: base.attributes[name].itemSize, normalized: false })) };
 }
 
+// A cut layer as a mesh, packed for the GPU: its normals and colours a byte each (three.js widens them to four), and
+// its index 16-bit where it has few enough vertices. Cut along the city's mesh, the ground's layers have many more
+// vertices than they had, and this keeps them about the size they were.
 function geometryOfLayer(layer) {
   const g = new THREE.BufferGeometry();
-  for (const a of layer.attrs) g.setAttribute(a.name, new THREE.BufferAttribute(a.array, a.itemSize, a.normalized));
+  for (const a of layer.attrs) g.setAttribute(a.name, packedAttribute(a));
+  if (layer.index) {
+    const n = layer.attrs[0].array.length / layer.attrs[0].itemSize;
+    g.setIndex(new THREE.BufferAttribute(n < 65536 && layer.index instanceof Uint32Array ? Uint16Array.from(layer.index) : layer.index, 1));
+  }
   g.computeBoundingBox();
   g.computeBoundingSphere();
   return g;
+}
+function packedAttribute(a) {
+  const { name, array, itemSize } = a;
+  if (array instanceof Float32Array && (name === 'normal' || name === 'color')) {
+    if (name === 'normal') return new THREE.BufferAttribute(Int8Array.from(array, (v) => Math.round(Math.max(-1, Math.min(1, v)) * 127)), itemSize, true);
+    if (array.every((v) => v >= 0 && v <= 1)) return new THREE.BufferAttribute(Uint8Array.from(array, (v) => Math.round(v * 255)), itemSize, true);
+  }
+  return new THREE.BufferAttribute(array, itemSize, a.normalized);
 }
 
 // Triangles longer than this are halved (at their longest edge's middle, as the cut itself does) before the layer is
@@ -734,12 +802,14 @@ const groundData = new WeakMap();
 function groundOfGrid(g) {
   if (!groundData.has(g)) {
     const r = g.river;
-    const ground = { x0: g.x0, z0: g.z0, step: g.step, cols: g.cols, rows: g.rows, heights: g.heights, river: r && {
+    const c = g.core;
+    // on the city's mesh a worker needs only it and the bridges' decks
+    const ground = c ? { core: c, river: r && { buckets: r.buckets } } : { x0: g.x0, z0: g.z0, step: g.step, cols: g.cols, rows: g.rows, heights: g.heights, river: r && {
       dx0: r.dx0, dz0: r.dz0, dstep: r.dstep, dcols: r.dcols, drows: r.drows, dig: r.dig.slice(),
       lx0: r.lx0, lz0: r.lz0, lstep: r.lstep, lcols: r.lcols, lrows: r.lrows, level: r.level, buckets: r.buckets
     } };
     const decks = r ? JSON.stringify(r.bridges) : '';
-    const key = fingerprint([g.heights, ...(r ? [ground.river.dig, r.level] : []),
+    const key = fingerprint([g.heights, ...(c ? [c.cm, c.split] : []), ...(r ? [r.dig, r.level] : []),
       textBytes(`${g.x0} ${g.z0} ${g.step} ${g.cols} ${g.rows} ${r ? [r.dx0, r.dz0, r.dstep, r.dcols, r.lx0, r.lz0, r.lstep, r.lcols].join(' ') : ''}`),
       textBytes(decks), textBytes(CORE_SOURCE)]);
     groundData.set(g, { ground, key });
@@ -826,7 +896,17 @@ async function cutOnCores(ground, jobs) {
   return parts.map((list, j) => {
     list.sort((x, y) => x[0] - y[0]);
     const count = list.reduce((n, [, r]) => n + r.count, 0);
-    return { count, attrs: jobs[j].layer.attrs.map((a, k) => {
+    let index;
+    // (on the city's mesh the pieces come back indexed: their indexes put one after another, each past those before)
+    if (list.length && list[0][1].index) {
+      index = new Uint32Array(list.reduce((n, [, r]) => n + r.index.length, 0));
+      let at = 0, base = 0;
+      for (const [, r] of list) {
+        for (let i = 0; i < r.index.length; i++) index[at + i] = r.index[i] + base;
+        at += r.index.length; base += r.count;
+      }
+    }
+    return { count, index, attrs: jobs[j].layer.attrs.map((a, k) => {
       const array = new a.array.constructor(count * a.itemSize);
       let at = 0;
       for (const [, r] of list) { array.set(r.attrs[k].array, at); at += r.attrs[k].array.length; }
@@ -844,11 +924,19 @@ async function drapeLayers(part, jobs) {
   const missing = jobs.filter((j, i) => !(j.tiles = saved[i]));
   if (missing.length) {
     for (const job of missing) job.layer = splitLong(job.make());
-    const cut = await cutOnCores(ground, missing);
-    missing.forEach((j, i) => {
-      j.tiles = j.instances || cut[i].count > 30000 ? tilesOfLayer(cut[i]) : [cut[i]];
-      j.layer = null;
-    });
+    if (grid.core) {
+      // on the city's mesh the cut comes back indexed: a big layer is put in its tiles first and each tile cut
+      const parts = missing.map((j) => (j.instances || j.layer.count > 30000 ? tilesOfLayer(j.layer) : [j.layer]));
+      const cut = await cutOnCores(ground, parts.flatMap((list, i) => list.map((layer) => ({ layer, tolerance: missing[i].tolerance }))));
+      let at = 0;
+      missing.forEach((j, i) => { j.tiles = cut.slice(at, (at += parts[i].length)); j.layer = null; });
+    } else {
+      const cut = await cutOnCores(ground, missing);
+      missing.forEach((j, i) => {
+        j.tiles = j.instances || cut[i].count > 30000 ? tilesOfLayer(cut[i]) : [cut[i]];
+        j.layer = null;
+      });
+    }
     writeSaved(part, jobs.map((j) => j.key), missing.map((j) => [j.key, j.tiles]));
   }
   return missing.length;
@@ -984,7 +1072,8 @@ function updateGroundStreaming(x, z) {
     // a part a change built again leaves its old layers out of the scene
     let top = layer.group;
     while (top.parent) top = top.parent;
-    layer.away = top.isScene ? 0 : layer.away + 1;
+    // (counted only once it's been in the scene: a part still being set on the ground hasn't put it there yet)
+    if (top.isScene) { layer.placed = true; layer.away = 0; } else if (layer.placed) layer.away++;
     for (const [k, mesh] of layer.built) {
       if (tileDistance(k, x, z) < stream.radius + AWAY) continue;
       mesh.removeFromParent();
@@ -1041,8 +1130,9 @@ function setOnTerrain(root, tolerance = 0.16) {
       if (isIdentity(obj.matrixWorld)) {
         // Road markings carry each vertex's offset to its strip's edge (`side`), which a cut would average away:
         // they're built in short lengths instead and only laid on the ground; lines and points can't be cut
+        // (on the city's mesh every mesh is cut along its triangles, the markings too: an edge's cut interpolates them)
         const cut = obj.isMesh && !obj.geometry.attributes.side ? obj.userData.terrainTolerance ?? tolerance : 0;
-        if (cut) jobs.push({ obj, inputs: geometryInputs(obj.geometry), make: () => layerOfGeometry(obj.geometry), tolerance: cut });
+        if (cut || (grid.core && obj.isMesh)) jobs.push({ obj, inputs: geometryInputs(obj.geometry), make: () => layerOfGeometry(obj.geometry), tolerance: cut });
         else if (obj.isMesh) {
           const tiles = meshOnGround(obj, drapeGeometry(obj.geometry, 0));
           if (tiles) replace.push([obj, tiles]);
@@ -1100,6 +1190,7 @@ function setOnTerrain(root, tolerance = 0.16) {
     // has few vertices over a small area, is drawn whole)
     const big = jobs.filter((job) => {
       if (job.instances) return true;
+      if (job.obj.userData.cullDistance) return false; // already in chunks, hidden far off (road-paint.js)
       const geo = job.obj.geometry;
       if (!geo.boundingBox) geo.computeBoundingBox();
       const { min, max } = geo.boundingBox;
@@ -1129,9 +1220,9 @@ function setOnTerrain(root, tolerance = 0.16) {
 // A flat layer laid on another (a driveway on the lawn, a fairway on the grass) drawn in front of it as if `lift`
 // metres higher: each vertex is moved along its own line of sight toward the camera, so it covers the same pixels and
 // only its depth changes, by what a lift of `lift` comes to at the angle it's seen from (capped far off at a glance).
-// Both layers are cut to follow the slopes their own way and can stray a few cm apart, so a few mm of real height
-// between them isn't enough: the one under would show through in wedges.
-function drawOver(mat, lift = 0.06) {
+// On the city's mesh both are cut along the same triangles, so this only keeps two layers at nearly one height from
+// flickering into each other far off, where the depth buffer can't tell a few millimetres apart.
+function drawOver(mat, lift = LIFT.over) {
   const toCamera = cameraPosition.sub(positionWorld);
   const dir = normalize(toCamera);
   const pull = min(float(lift).div(max(abs(dir.y), 0.02)), toCamera.length().mul(0.5));
@@ -1141,7 +1232,7 @@ function drawOver(mat, lift = 0.06) {
 }
 
 export {
-  drawOver,
+  drawOver, cityGround,
   loadTerrain, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
   tessellate, drapeGeometry, liftGeometry, liftInstances, setOnTerrain,
   streamGround, updateGroundStreaming, groundStreamStats, groundStreamCenter

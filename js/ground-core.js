@@ -151,9 +151,255 @@ export function tessellateLayer(layer, tolerance, minEdge, h) {
   };
 }
 
+// ---- The city's ground as one mesh of right triangles (g.core, terrain.js) -----------------------------------------
+// Heights in centimetres on a square grid of 2^k + 1 samples a side, and which of the grid's right triangles are cut in
+// two (a bit each, at the middle of its long edge, as Martini, mapbox's terrain mesher, cuts them): the cut is made
+// wherever the triangle strays from the samples under it by more than the tolerance, and a triangle is cut whenever
+// one inside it is, so neighbours always share their edges. The ground is flat across each uncut triangle. Every
+// ground layer is cut along the same edges and raised by the same planes (cutToGround), so a road, the sidewalk beside
+// it and the lawn behind it stay their own height apart on any slope, and can't cross.
+
+// (kept 100 m up, so the river's bed, dug below the city's base, stays in range)
+export const CORE_FLOOR = -100;
+export const coreHeightAt = (c, i) => c.cm[i] * 0.01 + CORE_FLOOR;
+const isSplit = (c, i) => (c.split[i >> 3] >> (i & 7)) & 1;
+
+// Which uncut triangle (fx, fz) (in samples from the grid's corner) lies on, as its corners [ax, az, bx, bz, cx, cz]
+// (a-b its long edge, c its right angle), written into `t`
+function leafOf(c, fx, fz, t) {
+  const max = c.size - 1, size = c.size;
+  let ax, az, bx, bz, cx, cz;
+  if (fx >= fz) { ax = 0; az = 0; bx = max; bz = max; cx = max; cz = 0; }
+  else { ax = max; az = max; bx = 0; bz = 0; cx = 0; cz = max; }
+  for (;;) {
+    if (Math.abs(ax - cx) + Math.abs(az - cz) <= 1) break;
+    const mx = (ax + bx) >> 1, mz = (az + bz) >> 1;
+    if (!isSplit(c, mz * size + mx)) break;
+    // its halves (c, a, m) and (b, c, m), either side of the line from c to m
+    const side = (mx - cx) * (fz - cz) - (mz - cz) * (fx - cx);
+    const sa = (mx - cx) * (az - cz) - (mz - cz) * (ax - cx);
+    if (side * sa >= 0) { const nx = ax, nz = az; ax = cx; az = cz; bx = nx; bz = nz; }
+    else { ax = bx; az = bz; bx = cx; bz = cz; }
+    cx = mx; cz = mz;
+  }
+  t[0] = ax; t[1] = az; t[2] = bx; t[3] = bz; t[4] = cx; t[5] = cz;
+  return t;
+}
+
+// The height at (fx, fz) on the plane through a triangle's corners
+function onPlane(c, t, fx, fz) {
+  const [ax, az, bx, bz, cx, cz] = t, size = c.size;
+  const det = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+  const l1 = ((bz - cz) * (fx - cx) + (cx - bx) * (fz - cz)) / det;
+  const l2 = ((cz - az) * (fx - cx) + (ax - cx) * (fz - cz)) / det;
+  return l1 * coreHeightAt(c, az * size + ax) + l2 * coreHeightAt(c, bz * size + bx) + (1 - l1 - l2) * coreHeightAt(c, cz * size + cx);
+}
+
+const scratch = new Int32Array(6);
+// The ground's height at (x, z) on the city's mesh (held to its edge outside it)
+export function coreHeight(c, x, z) {
+  const max = c.size - 1;
+  let fx = (x - c.x0) / c.step, fz = (z - c.z0) / c.step;
+  fx = fx < 0 ? 0 : fx > max ? max : fx;
+  fz = fz < 0 ? 0 : fz > max ? max : fz;
+  return onPlane(c, leafOf(c, fx, fz, scratch), fx, fz);
+}
+export const inCore = (c, x, z) => x >= c.x0 && z >= c.z0 && x <= c.x0 + (c.size - 1) * c.step && z <= c.z0 + (c.size - 1) * c.step;
+
+// Which triangles to cut so none strays more than `tolerance` metres from the heights: Martini's errors, worked out
+// from the smallest triangles up, each as the most any triangle inside it strays. Answers the bits for each tolerance.
+// A triangle `smallest` samples or less across its short sides is cut only where it strays `small` times the tolerance:
+// a bank or a street's edge, not every hummock of a lawn.
+export function splitsOf(c, tolerances, smallest = 1, small = 1) {
+  const size = c.size, max = size - 1, errors = new Float32Array(size * size);
+  const numTriangles = max * max * 2 - 2, numParents = numTriangles - max * max;
+  for (let i = numTriangles - 1; i >= 0; i--) {
+    let id = i + 2, ax = 0, az = 0, bx = 0, bz = 0, cx = 0, cz = 0;
+    if (id & 1) { bx = bz = cx = max; } else { ax = az = cz = max; }
+    while ((id >>= 1) > 1) {
+      const mx = (ax + bx) >> 1, mz = (az + bz) >> 1;
+      if (id & 1) { bx = ax; bz = az; ax = cx; az = cz; } else { ax = bx; az = bz; bx = cx; bz = cz; }
+      cx = mx; cz = mz;
+    }
+    const m = ((az + bz) >> 1) * size + ((ax + bx) >> 1);
+    let err = Math.abs((c.cm[az * size + ax] + c.cm[bz * size + bx]) * 0.005 - c.cm[m] * 0.01);
+    if (Math.abs(ax - cx) + Math.abs(az - cz) <= smallest) err /= small;
+    let e = errors[m] > err ? errors[m] : err;
+    if (i < numParents) {
+      const l = errors[((az + cz) >> 1) * size + ((ax + cx) >> 1)], r = errors[((bz + cz) >> 1) * size + ((bx + cx) >> 1)];
+      if (l > e) e = l;
+      if (r > e) e = r;
+    }
+    errors[m] = e;
+  }
+  return tolerances.map((tolerance) => {
+    const split = new Uint8Array((size * size + 7) >> 3);
+    for (let i = 0; i < errors.length; i++) if (errors[i] > tolerance) split[i >> 3] |= 1 << (i & 7);
+    return split;
+  });
+}
+
+// The mesh's uncut triangles by these bits (splitsOf), as ax, az, bx, bz, cx, cz in samples, one after another
+export function coreTriangles(c, split = c.split) {
+  const size = c.size, max = size - 1, out = [];
+  const walk = (ax, az, bx, bz, cx, cz) => {
+    const mx = (ax + bx) >> 1, mz = (az + bz) >> 1;
+    if (Math.abs(ax - cx) + Math.abs(az - cz) > 1 && (split[(mz * size + mx) >> 3] >> ((mz * size + mx) & 7)) & 1) {
+      walk(cx, cz, ax, az, mx, mz);
+      walk(bx, bz, cx, cz, mx, mz);
+    } else out.push(ax, az, bx, bz, cx, cz);
+  };
+  walk(0, 0, max, max, max, 0);
+  walk(max, max, 0, 0, 0, max);
+  return out;
+}
+
+// A layer cut along the city's mesh and each vertex raised by the ground's plane under it: a layer's triangle is split
+// along each long edge it crosses, down the tree of triangles to the uncut ones, every attribute interpolated where an
+// edge crosses it. Upright faces (a curb's) are cut the same way, so they stand as tall on a slope as on the flat.
+export function cutToGround(c, layer) {
+  const { attrs, count } = layer;
+  const sizes = attrs.map((a) => a.itemSize);
+  const offsets = [];
+  let stride = 0;
+  for (const size of sizes) { offsets.push(stride); stride += size; }
+  const P = offsets[attrs.findIndex((a) => a.name === 'position')];
+  const size = c.size, max = size - 1, inv = 1 / c.step;
+  let out = new Float64Array(Math.max(64, count * stride * 2));
+  let used = 0;
+  const leaf = new Int32Array(6);
+  const emit = (poly, t) => {
+    const n = poly.length;
+    if (n < 3) return;
+    const need = (n - 2) * 3 * stride;
+    if (used + need > out.length) { const grown = new Float64Array(Math.max(out.length * 2, used + need)); grown.set(out); out = grown; }
+    // (copies raised, never the polygon's own vertices: the piece beside it shares them and is cut after)
+    const lift = poly.map((v) => onPlane(c, t, gx(v), gz(v)));
+    const put = (k) => { out.set(poly[k], used); out[used + P + 1] += lift[k]; used += stride; };
+    for (let k = 1; k + 1 < n; k++) { put(0); put(k); put(k + 1); }
+  };
+  const gx = (v) => Math.min(max, Math.max(0, (v[P] - c.x0) * inv));
+  const gz = (v) => Math.min(max, Math.max(0, (v[P + 2] - c.z0) * inv));
+  const EPS = 1e-7;
+  const lerp = (a, b, t) => { const m = new Float64Array(stride); for (let k = 0; k < stride; k++) m[k] = a[k] + (b[k] - a[k]) * t; return m; };
+  // The polygon cut by the line through (px, pz) and (qx, qz): the part on the side `s` (+1/-1) of it and the other
+  const cut = (poly, px, pz, qx, qz) => {
+    const ex = qx - px, ez = qz - pz, len = Math.hypot(ex, ez);
+    const d = poly.map((v) => (ex * (gz(v) - pz) - ez * (gx(v) - px)) / len);
+    let pos = false, neg = false;
+    for (const x of d) { if (x > EPS) pos = true; else if (x < -EPS) neg = true; }
+    if (!neg) return [poly, null];
+    if (!pos) return [null, poly];
+    const a = [], b = [];
+    for (let i = 0; i < poly.length; i++) {
+      const j = (i + 1) % poly.length, u = poly[i], w = poly[j], du = d[i], dw = d[j];
+      if (du >= -EPS) a.push(u);
+      if (du <= EPS) b.push(u);
+      if ((du > EPS && dw < -EPS) || (du < -EPS && dw > EPS)) { const m = lerp(u, w, du / (du - dw)); a.push(m); b.push(m); }
+    }
+    return [a.length >= 3 ? a : null, b.length >= 3 ? b : null];
+  };
+  const walk = (poly, ax, az, bx, bz, cx, cz) => {
+    const mx = (ax + bx) >> 1, mz = (az + bz) >> 1;
+    if (!(Math.abs(ax - cx) + Math.abs(az - cz) > 1 && isSplit(c, mz * size + mx))) {
+      leaf[0] = ax; leaf[1] = az; leaf[2] = bx; leaf[3] = bz; leaf[4] = cx; leaf[5] = cz;
+      emit(poly, leaf);
+      return;
+    }
+    // the half with a in it lies on a's side of the line from c to m
+    const [pa, pb] = cut(poly, cx, cz, mx, mz);
+    const aSide = (mx - cx) * (az - cz) - (mz - cz) * (ax - cx) > 0;
+    const withA = aSide ? pa : pb, withB = aSide ? pb : pa;
+    if (withA) walk(withA, cx, cz, ax, az, mx, mz);
+    if (withB) walk(withB, bx, bz, cx, cz, mx, mz);
+  };
+  const vertex = (i) => {
+    const v = new Float64Array(stride);
+    for (let n = 0; n < attrs.length; n++) for (let k = 0; k < sizes[n]; k++) v[offsets[n] + k] = attrs[n].array[i * sizes[n] + k];
+    return v;
+  };
+  const inside = (t, fx, fz) => {
+    const [ax, az, bx, bz, cx, cz] = t;
+    const s1 = (bx - ax) * (fz - az) - (bz - az) * (fx - ax);
+    const s2 = (cx - bx) * (fz - bz) - (cz - bz) * (fx - bx);
+    const s3 = (ax - cx) * (fz - cz) - (az - cz) * (fx - cx);
+    return (s1 >= -1e-9 && s2 >= -1e-9 && s3 >= -1e-9) || (s1 <= 1e-9 && s2 <= 1e-9 && s3 <= 1e-9);
+  };
+  for (let i = 0; i < count; i += 3) {
+    const tri = [vertex(i), vertex(i + 1), vertex(i + 2)];
+    // most triangles are small: when the uncut triangle under its middle holds all three corners it's laid whole
+    const mx = (gx(tri[0]) + gx(tri[1]) + gx(tri[2])) / 3, mz = (gz(tri[0]) + gz(tri[1]) + gz(tri[2])) / 3;
+    leafOf(c, mx, mz, leaf);
+    if (tri.every((v) => inside(leaf, gx(v), gz(v)))) { emit(tri, leaf); continue; }
+    // else down the tree from its two halves, either side of the grid's diagonal
+    const [up, down] = cut(tri, 0, 0, max, max);
+    // the side of the diagonal (0,0)-(max,max) where (max, 0) lies is the negative one here
+    if (down) walk(down, 0, 0, max, max, max, 0);
+    if (up) walk(up, max, max, 0, 0, 0, max);
+  }
+  const vertices = used / stride;
+  return {
+    count: vertices,
+    attrs: attrs.map((a, k) => {
+      const Kind = a.array.constructor;
+      const whole = Kind !== Float32Array && Kind !== Float64Array;
+      const data = new Kind(vertices * sizes[k]);
+      for (let v = 0; v < vertices; v++) for (let j = 0; j < sizes[k]; j++) {
+        const value = out[v * stride + offsets[k] + j];
+        data[v * sizes[k] + j] = whole ? Math.round(value) : value;
+      }
+      return { name: a.name, array: data, itemSize: a.itemSize, normalized: a.normalized };
+    })
+  };
+}
+
+// A cut layer with each vertex the pieces share kept once (to the millimetre, every other attribute alike) and an index
+// of its triangles: the cut lays every polygon as a fan, so most vertices come several times over
+export function indexLayer(layer) {
+  const { attrs, count } = layer;
+  const P = attrs.findIndex((a) => a.name === 'position');
+  const seen = new Map(), keep = new Int32Array(count), index = new Uint32Array(count);
+  let unique = 0;
+  for (let v = 0; v < count; v++) {
+    let key = '';
+    for (let n = 0; n < attrs.length; n++) {
+      const { array, itemSize } = attrs[n], q = n === P ? 1000 : 10000;
+      for (let k = 0; k < itemSize; k++) key += Math.round(array[v * itemSize + k] * q) + ',';
+    }
+    let i = seen.get(key);
+    if (i === undefined) { seen.set(key, (i = unique++)); keep[i] = v; }
+    index[v] = i;
+  }
+  return {
+    count: unique, index,
+    attrs: attrs.map((a) => {
+      const data = new a.array.constructor(unique * a.itemSize);
+      for (let i = 0; i < unique; i++) for (let k = 0; k < a.itemSize; k++) data[i * a.itemSize + k] = a.array[keep[i] * a.itemSize + k];
+      return { name: a.name, array: data, itemSize: a.itemSize, normalized: a.normalized };
+    })
+  };
+}
+
+// How far a bridge's deck lifts the ground at (x, z) over the city's mesh (0 off every deck)
+function deckLift(g, x, z) {
+  const r = g.river;
+  if (!r || !r.buckets.has(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)))) return 0;
+  const h = coreHeight(g.core, x, z);
+  return onDeck(r, x, z, h) - h;
+}
+
 // A layer cut to follow the ground (unless `tolerance` is 0) and every vertex raised by the ground under it. The
-// layer's own position array is raised in place when it isn't cut.
+// layer's own position array is raised in place when it isn't cut. On the city's mesh (g.core) every layer is cut
+// along its triangles, and only where a bridge's deck lifts it cut finer by `tolerance` as well, and comes back indexed.
 export function drapeLayer(g, layer, tolerance) {
+  if (g.core) {
+    let out = cutToGround(g.core, layer);
+    const lift = (x, z) => deckLift(g, x, z);
+    if (tolerance) out = tessellateLayer(out, tolerance, 10, lift);
+    const pos = out.attrs.find((a) => a.name === 'position').array;
+    for (let i = 0; i < pos.length; i += 3) pos[i + 1] += lift(pos[i], pos[i + 2]);
+    return indexLayer(out);
+  }
   const h = (x, z) => groundOf(g, x, z);
   const out = tolerance ? tessellateLayer(layer, tolerance, 10, h) : layer;
   const pos = out.attrs.find((a) => a.name === 'position').array;
@@ -162,5 +408,6 @@ export function drapeLayer(g, layer, tolerance) {
 }
 
 // What the cutting depends on, as text, so a change to any of it makes the saved ground layers again (terrain.js)
-export const CORE_SOURCE = [baseHeight, digAt, levelAt, onDeck, riverbedOf, groundOf, tessellateLayer, drapeLayer]
+export const CORE_SOURCE = [baseHeight, digAt, levelAt, onDeck, riverbedOf, groundOf, tessellateLayer, drapeLayer,
+  leafOf, onPlane, coreHeight, cutToGround, deckLift, indexLayer]
   .map((f) => f.toString()).join('\n');

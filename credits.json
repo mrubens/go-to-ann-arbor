@@ -7,7 +7,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "186723198ee231f3fd05f2609bc1ab332fd93076",
+      "commit" : "e6ceff2c8105f55c59bf4387099979620a6e9c18",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"
@@ -57,6 +57,12 @@
       "license" : "CC0-1.0",
       "name" : "ambientCG materials",
       "url" : "https://ambientcg.com"
+    },
+    {
+      "author" : "U.S. Geological Survey",
+      "license" : "LicenseRef-US-Government-Public-Domain",
+      "name" : "3D Elevation Program (3DEP) 1 m bare-earth elevation model",
+      "url" : "https://www.usgs.gov/3d-elevation-program"
     },
     {
       "author" : "City of Ann Arbor",
@@ -193,12 +199,6 @@
       "license" : "None",
       "name" : "Parcels with assessor's year built and storeys",
       "url" : "https://a2maps.a2gov.org/a2arcgis/rest/services/WaterServiceLeadMaterialAll/MapServer/3"
-    },
-    {
-      "author" : "Ken MacInnis",
-      "commit" : "1bf1070944c70f0845098fdc3d82749ebdaf67dc",
-      "name" : "GPU and memory optimizations (pull request #1)",
-      "url" : "https://github.com/kcm/go-to-ann-arbor/tree/perf/gpu-and-memory-optimizations"
     }
   ]
 }

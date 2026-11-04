@@ -6,7 +6,8 @@ import { ssr } from 'three/addons/tsl/display/SSRNode.js';
 import { createPostProcessing } from './post-processing.js';
 import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
 import { getLocationLabel, isTypingInField, ROADS, LANDMARKS, TELEPORT_LOCATIONS } from './city-config.js';
-import { buildCityGrid } from './city-grid.js';
+import { buildKayakLaunches } from './kayak-launches.js';
+import { buildCityGrid, restoreCityGrid } from './city-grid.js';
 import { buildOutskirts } from './outskirts.js';
 import { buildLandmarks } from './landmarks.js';
 import { buildRailways } from './railways.js';
@@ -46,6 +47,7 @@ import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
 import { waterDisturb } from './tsl-materials.js';
 import { buildRoadWork } from './road-work.js';
+import { buildPotholes } from './potholes.js';
 
 // In its own window on the Mac the top strip is the title bar, which takes the clicks: the top panels sit below it
 if (window.webkit?.messageHandlers?.lampNative && /Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) document.documentElement.classList.add('mac-window');
@@ -207,6 +209,7 @@ async function initApp() {
     return made;
   }, { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/cascades.js', 'js/river.js', 'js/tsl-materials.js'] });
   const cityGrid = grid.made;
+  restoreCityGrid(cityGrid.shared);
   markInit('cityGrid');
   // Lamp: the Argo Cascades' rocks and white water, on the steps of their water (cascades.js)
   const cascadesPart = live.keep('cascades', () => cityPart((g) => buildCascades(g, waterLevel)), { inputs: [heights, grid] });
@@ -258,7 +261,7 @@ async function initApp() {
     const made = buildStreetDetails(g, allColliders, streetFurniture);
     await setOnTerrain(g.getObjectByName('StreetDetails'));
     return made;
-  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js'] });
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js'] });
   const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
@@ -272,15 +275,16 @@ async function initApp() {
     ...details.made.footprints,
     ...allColliders.filter((c) => !c.obb
       && (c.minY ?? 0) - groundHeight((c.minX + c.maxX) * 0.5, (c.minZ + c.maxZ) * 0.5) < 3.5)
-  ], details.made.signalIntersections, cityClosures)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details], from: [CITY_MAP, 'data/city-closures.json'] });
+  ], details.made.signalIntersections, cityClosures)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details], from: [CITY_MAP, 'data/city-closures.json', 'js/pedestrian-system.js'] });
   const trafficSystem = traffic.made;
   markInit('traffic');
   const highway = live.keep('highwayTraffic', () => cityPart((g) => createHighwayTraffic(g, grid.made.highwayLanes)), { inputs: [grid], from: [CITY_MAP] });
   const highwayTraffic = highway.made;
   await showLoadingStage('Adding road markings...');
-  const roadPaint = live.keep('roadPaint', () => cityPart((g) => {
+  const roadPaint = await live.keep('roadPaint', () => cityPart(async (g) => {
     const made = buildRoadPaint(g, traffic.made.network);
-    setOnTerrain(made, 0); // vertex by vertex: its strips come cut to length (road-paint.js)
+    // (waited for: its strips are read for the cut, so they're handed to the GPU only once they're on the ground)
+    await setOnTerrain(made, 0); // its strips come cut to length (road-paint.js)
     // in chunks, culled out of sight and far off (scene-culling.js); thin far strips are widened on screen
     made.traverse((o) => {
       if (!o.isMesh) return;
@@ -307,6 +311,10 @@ async function initApp() {
   // Cars parked in the lots and along the main streets downtown, solid to the player (parked-cars.js)
   const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack)), { inputs: [heights], from: ['js/parked-cars.js', 'js/railways.js'] });
   const parkedCars = parkedPart.made;
+  // Kayaks pulled up on the river's banks at the parks, to get into there (kayak-launches.js)
+  const launchesPart = live.keep('kayakLaunches', () => cityPart((g) => buildKayakLaunches(g)), { inputs: [heights], from: ['js/kayak-launches.js'] });
+  const kayakLaunches = launchesPart.made;
+  log(`[kayaks] ${kayakLaunches.count} on the banks`);
   for (const c of parkedCars.colliders) allColliders.push(c);
   // streamed, the parked cars near the camera come and go, and their boxes with them (parked-cars.js)
   parkedCars.onColliders = (added, removed) => {
@@ -321,6 +329,12 @@ async function initApp() {
   // Road work: the blocks traffic.js closed, barricaded, coned and dug up (road-work.js); the machines are solid
   const roadWorkPart = live.keep('roadWork', () => cityPart((g) => buildRoadWork(g, traffic.made.closures)), { inputs: [heights, traffic], from: ['js/road-work.js'] });
   const roadWork = roadWorkPart.made;
+  // Potholes from the City's 311 reports (potholes.js, build-potholes.py), felt as a jolt through the car
+  const potholeBytes = await asset('data/potholes.json');
+  const potholeData = potholeBytes ? JSON.parse(new TextDecoder().decode(potholeBytes)) : null;
+  const potholesPart = live.keep('potholes', () => cityPart((g) => buildPotholes(g, potholeData)), { inputs: [heights, grid], from: ['js/potholes.js', 'data/potholes.json'] });
+  const potholes = potholesPart.made;
+  log(`[potholes] ${potholes.count} on the streets`);
   allColliders.push(...roadWork.colliders);
   // Tree trunks, lamp posts, signal poles and sign posts: thin and solid, so the car crashes into them and the bike
   // throws its rider (`thin`: the helicopter flies through them)
@@ -361,7 +375,7 @@ async function initApp() {
     onLand: (it, spin) => audioSystem?.cue(it.kind === 'tree' ? 'thud' : 'crash',
       { x: it.x + it.dx * it.height * 0.6, y: it.g, z: it.z + it.dz * it.height * 0.6 }, Math.min(1, 0.4 + spin * 0.2))
   });
-  const parts = [grid, cascadesPart, riverPeoplePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, planesPart, scootersPart, moonPart];
+  const parts = [grid, cascadesPart, riverPeoplePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, roadWorkPart, potholesPart, planesPart, scootersPart, moonPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -385,7 +399,9 @@ async function initApp() {
   const controllerManager = new ThirdPersonControllerManager(scene, allColliders);
   controllerManager.knockdowns = knockdowns;
   controllerManager.parkedCars = parkedCars;
+  controllerManager.kayakLaunches = kayakLaunches;
   controllerManager.roadWork = roadWork;
+  controllerManager.potholes = potholes;
   controllerManager.railways = railways;
   // the maize sports car, or the black Forester it was before (an older save's own car)
   const isOwnLook = (look) => (look.kind === 'sports' && look.hex === 0xffcb05) || (look.kind === 'forester' && look.hex === 0x16181b);
@@ -482,6 +498,13 @@ async function initApp() {
   }
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
   updateSoundButton();
+  // a wheel through a pothole: a thump under the car
+  const _holeAt = { x: 0, y: 0, z: 0 };
+  controllerManager.onPothole = (x, z, strength) => {
+    _holeAt.x = x; _holeAt.z = z; _holeAt.y = groundHeight(x, z) + 0.3;
+    audioSystem.cue('thud', _holeAt, Math.min(1, 0.25 + strength * 0.6));
+    log(`[pothole] a wheel through one, ${strength.toFixed(2)} hard`);
+  };
   // someone knocked down by the player's car or bike: a thump there and a jolt in the hands
   const _thudAt = { x: 0, y: 0, z: 0 };
   trafficSystem.setPedestrianHitListener?.((x, z, speed) => {
@@ -867,6 +890,16 @@ async function initApp() {
       car.mesh.position.copy(car.position);
       car.mesh.rotation.y = car.heading;
       log(choice.moving ? `[car] took a ${look.kind} out of traffic` : `[car] took a parked ${look.kind}`);
+    }
+    if (choice.beach) {
+      // a kayak off the bank: the player's own goes in the water beside it, facing downstream
+      const k = cm.entities.kayak, put = kayakLaunches.take(choice.beach.i);
+      k.position.set(put.x, put.y ?? k.position.y, put.z);
+      k.heading = cm.downstreamHeading(put.x, put.z, k.heading);
+      k.speed = k.driftX = k.driftZ = k.turnVel = 0;
+      k.mesh.position.copy(k.position);
+      k.mesh.rotation.y = k.heading;
+      log(`[kayak] put in at ${choice.beach.name}`);
     }
     selectMode(choice.mode);
     const at = cm.getActiveEntity().position;

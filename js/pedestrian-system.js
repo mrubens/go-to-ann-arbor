@@ -702,8 +702,8 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     return groundHeight(x, z) + (off < 1.8 ? SIDEWALK_Y : CROSSWALK_Y);
   }
 
-  // A limp body tumbles until it lies still, then the person gets up from where they fell (through the dive's
-  // push-up) if that is near their way; one thrown far off it lies there until nobody sees, then goes home
+  // A limp body tumbles until it lies still, then a few seconds on the person gets up from where they fell (through
+  // the dive's push-up) and steps back to their way; one thrown far off it out of sight just goes home
   function renderRagdoll(p, dt) {
     const draw = !hasView || visible(p.x, p.z, 7);
     const rig = p.rig;
@@ -713,11 +713,13 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     if (rig.rag.done) {
       const t = (p.x - p.ax) * p.ux + (p.z - p.az) * p.uz;
       const off = (p.x - p.ax) * p.uz - (p.z - p.az) * p.ux;
-      if (t > 0 && t < p.len && Math.abs(off) < 4.5 && rig.rag.time > 4) {
+      const near = t > 0 && t < p.len && Math.abs(off) < 4.5;
+      // nobody stays down: one in sight gets up after a few seconds wherever they fell, and walks back to their way
+      if (rig.rag.time > 4 && (near || draw)) {
         p.ragdoll = false;
         rig.ragdolling = false;
         rig.rag.done = false;
-        p.t = t;
+        p.t = Math.min(p.len, Math.max(0, t));
         p.dodge = p.dodgeTarget = off;
         p.diveStart = clock - 1.15;
         p.diveHeading = rig.yaw = rig.ragdollHeading();
@@ -725,7 +727,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
         p.pause = 1;
         p.avoidUntil = clock + PEDESTRIAN_DIVE_DURATION;
         p.restTime = Math.max(p.restTime, clock + 10);
-      } else if (!draw && (rig.rag.time > 4 || Math.abs(off) >= 4.5)) {
+      } else if (!draw && (rig.rag.time > 4 || !near)) {
         p.ragdoll = false;
         rig.ragdolling = false;
         rig.rag.done = false;

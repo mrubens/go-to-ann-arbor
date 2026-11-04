@@ -1346,6 +1346,9 @@ class ThirdPersonControllerManager {
       if (m === 'helicopter' && e.position.y - this.helicopterFloor(e, e.position.y) > 0.8) continue;
       consider(m, e.position.x, e.position.z, reach);
     }
+    // a kayak pulled up on the bank at a put-in (kayak-launches.js)
+    const beach = this.kayakLaunches?.nearest(p.position.x, p.position.z, 3);
+    if (beach && beach.d / 3 < score) { score = beach.d / 3; best = { mode: 'kayak', beach }; }
     const near = parked?.nearest(p.position.x, p.position.z, 4.2);
     if (near) consider('car', near.x, near.z, 4.2, near);
     // a dump truck or excavator at the road work, from beside its cab or tracks
@@ -2060,6 +2063,19 @@ class ThirdPersonControllerManager {
       c.heaveY = Math.max(-0.08, Math.min(0.14, c.heaveY + c.heaveVel * step));
     }
     this.carVertical(c, dt, prevX, prevZ);
+    // a wheel run through a pothole (potholes.js): the body drops and kicks on that corner, and the hands feel it
+    if (this.potholes && !c.airborne && Math.abs(c.speed) > 2) {
+      const hole = this.potholes.jolt(c, this._potholeClock = (this._potholeClock || 0) + dt, c.bike);
+      if (hole) {
+        const s = hole.depth * Math.min(1, Math.abs(c.speed) / 14);
+        c.heaveVel -= 1.6 * s;
+        c.pitchVel += (hole.front ? 1 : -1) * 1.8 * s;
+        if (!c.bike) c.rollVel += hole.side * 1.4 * s;
+        c.speed *= 1 - 0.04 * s;
+        rumble(0, Math.min(1, 0.3 + s * 0.6), Math.min(1, 0.4 + s * 0.6), 0.14);
+        this.onPothole?.(hole.x, hole.z, s);
+      }
+    }
     c.chassisPivot.position.y = c.heaveY;
     // how hard the back tires are sliding (skid-effects.js): locked by the handbrake, or the tail slipping sideways
     c.skid = c.airborne ? 0 : Math.max(0, Math.min(1, Math.max(lockedNow * Math.min(1, Math.abs(c.speed) / 6),

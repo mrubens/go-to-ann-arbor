@@ -1,4 +1,5 @@
 import { blockAt } from './city-config.js';
+import { LIFT } from './ground-lifts.js';
 
 function hashPos(x, y, z) {
   const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
@@ -31,7 +32,20 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
   for (let i = 0; i < points.length; i += 2) {
     const sourceX = points[i], sourceZ = points[i + 1];
     const originalBlock = blockAt(sourceX, sourceZ);
-    if (originalBlock && (originalBlock.park > 0.6 || originalBlock.median)) continue;
+    if (originalBlock?.median) continue;
+    const kind = kinds ? kinds[i / 2] : 255, height = heights ? heights[i / 2] : 0;
+    // Lamp: the city's survey lists its park trees too (157 in Allmendinger Park): a tree in a park, or in a block
+    // far from its curb, stands where it was surveyed, on the lawn, at its real kind and height, in place of the
+    // canopy's fill around it (dropCanopyFill)
+    const standing = () => {
+      if (!isClear(sourceX, sourceZ)) return;
+      const site = { x: sourceX, y: LIFT.lawn, z: sourceZ, scale: 1.2 + hashPos(sourceX, 6.1, sourceZ) * 0.4,
+        species: kind !== 255 ? kind : hashPos(sourceX, 4.4, sourceZ) < 0.5 ? 3 : 4, noPit: true, surveyedPark: true };
+      if (height > 0) site.height = height;
+      sites.push(site);
+      insert(site);
+    };
+    if (originalBlock && originalBlock.park > 0.6) { standing(); continue; }
     const blocks = new Set();
     if (originalBlock) blocks.add(originalBlock);
     else {
@@ -54,7 +68,7 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
         edge = { block, x, z, dx: dx / length, dz: dz / length, distance };
       }
     }
-    if (!edge) continue;
+    if (!edge) { if (originalBlock) standing(); continue; }
     let nx = -edge.dz, nz = edge.dx;
     if (blockAt(edge.x + nx * 0.9, edge.z + nz * 0.9) !== edge.block) { nx = -nx; nz = -nz; }
     // Lamp: Ann Arbor's residential blocks have a grass tree lawn between the curb and the sidewalk (0.6 to 2.9 m in,
@@ -78,7 +92,6 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
     if (!fits && !treeLawn) continue;
 
     const r = hashPos(x, 6.1, z), species = hashPos(x, 4.4, z);
-    const kind = kinds ? kinds[i / 2] : 255, height = heights ? heights[i / 2] : 0;
     const real = (site) => {
       if (kind !== 255) site.species = kind;
       if (height > 0) site.height = height;
@@ -101,4 +114,25 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
   return sites;
 }
 
-export { placeStreetTrees };
+// The canopy's fill trees (city-grid.js, `likeStreet` and no height of their own) within `reach` of a surveyed
+// park tree are left out: the survey has the park's real trees
+function dropCanopyFill(sites, reach = 2.5) {
+  const cells = new Map();
+  for (const t of sites) {
+    if (!t.surveyedPark) continue;
+    const key = Math.floor(t.x / reach) + ',' + Math.floor(t.z / reach);
+    if (!cells.has(key)) cells.set(key, []);
+    cells.get(key).push(t);
+  }
+  if (!cells.size) return sites;
+  return sites.filter((t) => {
+    if (!t.likeStreet || t.height) return true;
+    const cx = Math.floor(t.x / reach), cz = Math.floor(t.z / reach);
+    for (let ix = cx - 1; ix <= cx + 1; ix++) for (let iz = cz - 1; iz <= cz + 1; iz++) {
+      for (const s of cells.get(ix + ',' + iz) || []) if ((s.x - t.x) ** 2 + (s.z - t.z) ** 2 < reach * reach) return false;
+    }
+    return true;
+  });
+}
+
+export { placeStreetTrees, dropCanopyFill };

@@ -1,7 +1,9 @@
 import * as THREE from 'three/webgpu';
 import { positionWorld, vec2, vec3, float, floor, fract, sin, dot, mix, smoothstep, abs, fwidth, min } from 'three/tsl';
 import { TOWN_BOUNDS } from './city-config.js';
-import { groundHeight } from './terrain.js';
+import { groundHeight, cityGround } from './terrain.js';
+import { coreTriangles, coreHeightAt } from './ground-core.js';
+import { log } from '../lamp-game.js';
 
 // Washtenaw County around the detailed city: the real hills and the Huron valley (terrain.js) as farm fields, woodlots
 // and the suburbs' tree cover, out to the fogged horizon. Nothing here is driven on; the city's edge is a lawn border.
@@ -80,7 +82,13 @@ function buildOutskirts(scene) {
   group.add(land);
 
   // under the city, a finer copy just below its streets and lawns: what shows where the city's own ground is too far
-  // away to be drawn, so the hills read as hills from across town
+  // away to be drawn, so the hills read as hills from across town. On the city's mesh (terrain.js) it's that mesh's
+  // coarser cut, under the fine one by more than the most the two can stray apart, so it never shows through.
+  const city = cityGround();
+  if (city) {
+    group.add(undergroundOf(city, B, mat));
+    return finishOutskirts(scene, group, pos, nx, nz, x0, x1, z0, z1, mat);
+  }
   const FS = 20;
   const fx0 = Math.floor(B.minX / FS) * FS, fz0 = Math.floor(B.minZ / FS) * FS;
   const fnx = Math.ceil((B.maxX - fx0) / FS) + 1, fnz = Math.ceil((B.maxZ - fz0) / FS) + 1;
@@ -115,6 +123,10 @@ function buildOutskirts(scene) {
   under.userData.terrain = 'set';
   group.add(under);
 
+  return finishOutskirts(scene, group, pos, nx, nz, x0, x1, z0, z1, mat);
+}
+
+function finishOutskirts(scene, group, pos, nx, nz, x0, x1, z0, z1, mat) {
   // the horizon beyond: level farmland at the heights' edge
   let edge = 0, n = 0;
   for (let i = 0; i < nx; i++) { edge += pos[i * 3 + 1] + pos[((nz - 1) * nx + i) * 3 + 1]; n += 2; }
@@ -126,6 +138,41 @@ function buildOutskirts(scene) {
 
   scene.add(group);
   return { group, colliders: [] };
+}
+
+// The city's mesh, coarsely cut, 0.9 m under it, over the city's bounds
+function undergroundOf({ core, under }, B, mat) {
+  const tri = coreTriangles(core, under), size = core.size;
+  const index = new Map(), pos = [], idx = [];
+  const vertex = (cx, cz) => {
+    const k = cz * size + cx;
+    let i = index.get(k);
+    if (i === undefined) {
+      index.set(k, (i = pos.length / 3));
+      pos.push(core.x0 + cx * core.step, coreHeightAt(core, k) - 0.9, core.z0 + cz * core.step);
+    }
+    return i;
+  };
+  const inX = (v) => core.x0 + v * core.step;
+  const inZ = (v) => core.z0 + v * core.step;
+  for (let t = 0; t < tri.length; t += 6) {
+    const [ax, az, bx, bz, cx, cz] = tri.slice(t, t + 6);
+    if (Math.max(inX(ax), inX(bx), inX(cx)) < B.minX - 50 || Math.min(inX(ax), inX(bx), inX(cx)) > B.maxX + 50) continue;
+    if (Math.max(inZ(az), inZ(bz), inZ(cz)) < B.minZ - 50 || Math.min(inZ(az), inZ(bz), inZ(cz)) > B.maxZ + 50) continue;
+    // facing up (the mesh's triangles all go round the same way, anticlockwise seen from above)
+    idx.push(vertex(ax, az), vertex(bx, bz), vertex(cx, cz));
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  geo.setIndex(new THREE.BufferAttribute(pos.length / 3 > 65535 ? new Uint32Array(idx) : new Uint16Array(idx), 1));
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'CityUnderground';
+  mesh.receiveShadow = true;
+  mesh.userData.terrain = 'set';
+  log(`[outskirts] the ground under the city: ${idx.length / 3} triangles`);
+  return mesh;
 }
 
 export { buildOutskirts };

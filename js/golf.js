@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
-import { attribute, float, vec2, vec3, fract, abs, smoothstep, fwidth, max, dot, positionWorld, mix } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { drawOver } from './terrain.js';
+import { createParkLawnMaterial } from './tsl-materials.js';
 
 // Ann Arbor's golf courses (GEO.golf from build-annarbor.py: OpenStreetMap's fairways, greens, tees and cart paths,
 // with fairways and bunkers filled in where a course isn't mapped): fairways mown in light and dark stripes along their
@@ -18,26 +18,26 @@ function mowAngle(ring) {
   return 0.5 * Math.atan2(2 * xz, xx - zz);
 }
 
+// A ring's corners rounded off (Chaikin, `n` times): the fairways filled in where a course isn't mapped are its open
+// grass less the tree crowns, which leaves them saw-toothed; rounded, they read as mown shapes
+function smooth(ring, n = 3) {
+  let r = ring;
+  for (let k = 0; k < n && r.length >= 3; k++) {
+    const out = [];
+    for (let i = 0; i < r.length; i++) {
+      const p = r[i], q = r[(i + 1) % r.length];
+      out.push({ x: p.x * 0.75 + q.x * 0.25, z: p.z * 0.75 + q.z * 0.25 }, { x: p.x * 0.25 + q.x * 0.75, z: p.z * 0.25 + q.z * 0.75 });
+    }
+    r = out;
+  }
+  return r;
+}
+
 function tagged(geo, angle) {
   const n = geo.attributes.position.count;
   const arr = new Float32Array(n).fill(angle);
   geo.setAttribute('mow', new THREE.BufferAttribute(arr, 1));
   return geo;
-}
-
-// Turf in stripes `width` metres wide across the attribute `mow`'s direction, light and dark
-function mownMaterial(dark, light, width) {
-  const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.95 });
-  const a = attribute('mow', 'float');
-  const across = vec2(a.sin().negate(), a.cos());
-  const v = dot(positionWorld.xz, across).div(width);
-  const fw = max(fwidth(v), 0.001);
-  // a soft edge between stripes, fading to their average where they get thinner than a few pixels
-  const band = smoothstep(fw.negate(), fw, abs(fract(v).sub(0.5)).sub(0.25));
-  const t = mix(band, float(0.5), smoothstep(0.08, 0.3, fw));
-  const c0 = new THREE.Color(dark).convertSRGBToLinear(), c1 = new THREE.Color(light).convertSRGBToLinear();
-  mat.colorNode = mix(vec3(c0.r, c0.g, c0.b), vec3(c1.r, c1.g, c1.b), t);
-  return mat;
 }
 
 // A strip `w` wide along a line of flat x, z pairs, at height y: mitred at each bend (capped where it turns sharply)
@@ -111,7 +111,7 @@ function buildGolf(group, golf, flatGeo, toRing, y) {
   if (!golf) return;
   const fairways = [], greens = [], tees = [], bunkers = [];
   for (const rings of golf.fairways) {
-    const r = rings.map(toRing);
+    const r = rings.map((f) => smooth(toRing(f)));
     fairways.push(tagged(flatGeo(r, y), mowAngle(r[0])));
   }
   for (const rings of golf.tees) {
@@ -119,13 +119,14 @@ function buildGolf(group, golf, flatGeo, toRing, y) {
     tees.push(tagged(flatGeo(r, y + 0.004), mowAngle(r[0])));
   }
   for (const rings of golf.greens) {
-    const r = rings.map(toRing);
+    const r = rings.map((f) => smooth(toRing(f), 2));
     greens.push(tagged(flatGeo(r, y + 0.008), mowAngle(r[0]) + Math.PI / 4));
   }
-  for (const rings of golf.bunkers) bunkers.push(flatGeo(rings.map(toRing), y + 0.006));
-  addMerged(group, fairways, mownMaterial(0x4e8d38, 0x5d9b42, 8), 'GolfFairways');
-  addMerged(group, tees, mownMaterial(0x4f9238, 0x67a94a, 2), 'GolfTees');
-  addMerged(group, greens, mownMaterial(0x5aa043, 0x6db552, 1.5), 'GolfGreens');
+  for (const rings of golf.bunkers) bunkers.push(flatGeo(rings.map((f) => smooth(toRing(f), 2)), y + 0.006));
+  // the course's own lawn, cut closer: a little lighter on the fairways, more on the tees and greens
+  addMerged(group, fairways, createParkLawnMaterial(false, { width: 8, lift: 0.1 }), 'GolfFairways');
+  addMerged(group, tees, createParkLawnMaterial(false, { width: 2, lift: 0.18 }), 'GolfTees');
+  addMerged(group, greens, createParkLawnMaterial(false, { width: 1.5, lift: 0.28 }), 'GolfGreens');
   addMerged(group, bunkers, new THREE.MeshStandardNodeMaterial({ color: 0xe0cfa0, roughness: 1 }), 'GolfBunkers');
   addMerged(group, golf.paths.filter((p) => p.length >= 4).map((p) => ribbon(p, 2.4, y + 0.012)),
     new THREE.MeshStandardNodeMaterial({ color: 0x55575a, roughness: 0.9 }), 'GolfCartPaths');

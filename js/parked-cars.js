@@ -19,7 +19,8 @@ import { TIER } from './device-tier.js';
 const STALL_W = 2.7, MODULE = 18;
 const NEAR = 55, FAR = Math.round(320 * (TIER.farCut || 1));
 const CELL = 250, STREAM_R = 550, LET_GO = 750;
-const LAWN_Y = 0.344; // Lamp: the driveways' height (city-grid.js, LAWN_Y + 0.004)
+const LAWN_Y = LIFT.lawn + 0.004; // Lamp: the driveways' height (city-grid.js, LAWN_Y + 0.004)
+import { LIFT } from './ground-lifts.js';
 
 const MASS = { sedan: 1600, suv: 2100, minivan: 2000, pickup: 2400, van: 2700, sports: 1450, tesla: 1850, ioniq: 2100, cybertruck: 3100, r1s: 2700, r1t: 3000 };
 // (Lamp: three Teslas, two Ioniqs and the odd Cybertruck in every 40)
