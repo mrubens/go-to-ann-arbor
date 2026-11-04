@@ -9,7 +9,7 @@ const TYPES = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1,
 function base64(blob) {
   return new Promise((done, fail) => {
     const r = new FileReader();
-    r.onload = () => done(String(r.result).slice(String(r.result).indexOf(',') + 1));
+    r.onload = () => done(String(r.result).slice(String(r.result).lastIndexOf(',') + 1));
     r.onerror = () => fail(r.error);
     r.readAsDataURL(blob);
   });
@@ -55,9 +55,8 @@ class VideoRecorder {
       if (!e.data?.size) return;
       if (!this.native) { this.parts.push(e.data); return; }
       this.queue = this.queue.then(async () => {
-        if (this.failed) return;
         try { await window.LampNative.call('videoChunk', { data: await base64(e.data) }); }
-        catch (err) { this.failed = true; log('[recording] a part of the video could not be saved'); }
+        catch (err) { if (!this.failed) log(`[recording] a part of the video could not be saved: ${err?.message || err}`); this.failed = true; }
       });
     };
     rec.onstop = () => this.finish();

@@ -506,21 +506,25 @@ async function initApp() {
   if (!recordButton && soundButton) {
     recordButton = document.createElement('button');
     recordButton.id = 'btn-record';
-    recordButton.className = 'tool-btn';
+    recordButton.className = 'tool-btn icon-only';
     recordButton.type = 'button';
     recordButton.setAttribute('aria-pressed', 'false');
     recordButton.innerHTML = '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2"/>'
-      + '<circle cx="12" cy="12" r="4.4" fill="currentColor" stroke="none"/></svg><span class="tool-label rec-time">Record</span>';
+      + '<circle cx="12" cy="12" r="4.4" fill="currentColor" stroke="none"/></svg><span class="rec-time" hidden></span>';
     soundButton.before(recordButton);
   }
   if (recordButton) { recordButton.title = 'Record a video'; recordButton.setAttribute('aria-label', 'Record a video'); }
   const recordLabel = recordButton?.querySelector('.rec-time');
+  if (recordLabel) { recordLabel.classList.remove('tool-label'); recordLabel.textContent = ''; recordLabel.hidden = true; }
+  recordButton?.classList.add('icon-only');
   let recordShown = -1;
   const videoRecorder = new VideoRecorder(renderer.domElement, audioSystem, (on, saved, secs) => {
     recordButton?.setAttribute('aria-pressed', String(on));
     recordButton?.setAttribute('aria-label', on ? 'Stop recording' : 'Record a video');
     if (recordButton) recordButton.title = on ? 'Stop recording' : 'Record a video';
-    if (recordLabel) recordLabel.textContent = on ? '0:00' : 'Record';
+    // just the icon; while it records, the time beside it
+    if (recordLabel) { recordLabel.textContent = on ? '0:00' : ''; recordLabel.hidden = !on; }
+    recordButton?.classList.toggle('icon-only', !on);
     recordShown = -1;
     if (on) showNotice('Recording');
     else if (saved) showNotice(window.LampNative?.available ? `Saved a ${secs} s video to Movies` : 'Video saved');
