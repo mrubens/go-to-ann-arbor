@@ -121,6 +121,7 @@ async function readRiver(g, url) {
     for (let i = 0; i < cm.length; i++) level[i] = cm[i] / 100;
     const r = { dx0, dz0, dstep, dcols, drows, dig, lx0, lz0, lstep, lcols, lrows, level, bridges: [], buckets: new Map() };
     carveCascades(r); // the Argo Cascades' channel, unbroken (cascades.js)
+    joinUnderFootbridges(r);
     buildDecks(g, r);
     console.log(`[terrain] the river's bed ${dcols} × ${drows} at ${dstep} m, ${r.bridges.length} bridges`);
     return r;
@@ -128,6 +129,71 @@ async function readRiver(g, url) {
     console.warn('[terrain] no river bed:', error);
     return null;
   }
+}
+
+// The map's water stops short of a footbridge on each side (it's drawn as two ponds, not one channel under the bridge),
+// so the channel under it is dug through: wherever open water lies within 18 m on both sides of the bridge, the bed
+// runs across between them, easing up to the banks at the channel's sides. Each opening's outline goes in `r.gaps`,
+// for the water's surface (city-grid.js riverGaps).
+function joinUnderFootbridges(r) {
+  r.gaps = [];
+  const R = 18, OPEN = 170 / 255, EASE = 3;
+  for (const b of GEO.riverBridges || []) {
+    if (b[0] !== 2) continue;
+    for (let i = 2; i + 3 < b.length; i += 2) {
+      const ax = b[i], az = b[i + 1], bx = b[i + 2], bz = b[i + 3], len = Math.hypot(bx - ax, bz - az);
+      if (len < 1) continue;
+      const tx = (bx - ax) / len, tz = (bz - az) / len, nx = -tz, nz = tx;
+      // at each metre along it: how far the open water is to either side
+      const cut = [];
+      for (let u = 0; u <= len; u += 1) {
+        const px = ax + tx * u, pz = az + tz * u;
+        let lo = null, hi = null;
+        for (let v = 0; v <= R && (lo === null || hi === null); v += 1) {
+          if (hi === null && digAt(r, px + nx * v, pz + nz * v) >= OPEN) hi = v;
+          if (lo === null && digAt(r, px - nx * v, pz - nz * v) >= OPEN) lo = -v;
+        }
+        cut.push(lo !== null && hi !== null ? [u, lo, hi] : null);
+      }
+      // each run of them is one channel
+      for (let k = 0; k < cut.length;) {
+        if (!cut[k]) { k++; continue; }
+        let e = k;
+        while (e + 1 < cut.length && cut[e + 1]) e++;
+        const run = cut.slice(k, e + 1), u0 = run[0][0], u1 = run.at(-1)[0];
+        k = e + 1;
+        // (only where the water's broken under it: over open water already there's nothing to dig)
+        if (u1 - u0 < 2 || !run.some(([, lo, hi]) => hi - lo > 1)) continue;
+        const across = (u) => run[Math.max(0, Math.min(run.length - 1, Math.round(u - u0)))];
+        // the cells around it, each dug as deep as its place in the channel
+        const pad = R + 2;
+        const c0 = Math.max(0, Math.floor((Math.min(ax, bx) - pad - r.dx0) / r.dstep)), c1 = Math.min(r.dcols - 1, Math.ceil((Math.max(ax, bx) + pad - r.dx0) / r.dstep));
+        const w0 = Math.max(0, Math.floor((Math.min(az, bz) - pad - r.dz0) / r.dstep)), w1 = Math.min(r.drows - 1, Math.ceil((Math.max(az, bz) + pad - r.dz0) / r.dstep));
+        for (let w = w0; w <= w1; w++) for (let c = c0; c <= c1; c++) {
+          const x = r.dx0 + c * r.dstep - ax, z = r.dz0 + w * r.dstep - az, u = x * tx + z * tz, v = x * nx + z * nz;
+          if (u < u0 - 0.5 || u > u1 + 0.5) continue;
+          const [, lo, hi] = across(u);
+          if (v < lo - 1 || v > hi + 1) continue;
+          const side = Math.min(u - u0, u1 - u) / EASE, f = Math.max(0, Math.min(1, side + 0.34));
+          const di = w * r.dcols + c;
+          r.dig[di] = Math.max(r.dig[di], Math.round(255 * f * f * (3 - 2 * f)));
+        }
+        // its water's outline, from bank to bank across the bridge
+        const left = [], right = [];
+        for (const [u, lo, hi] of run) {
+          left.push({ x: ax + tx * u + nx * (lo - 1), z: az + tz * u + nz * (lo - 1) });
+          right.push({ x: ax + tx * u + nx * (hi + 1), z: az + tz * u + nz * (hi + 1) });
+        }
+        r.gaps.push([left.concat(right.reverse())]);
+      }
+    }
+  }
+  if (r.gaps.length) console.log(`[terrain] the channel dug through under ${r.gaps.length} footbridges`);
+}
+
+// The water's surface over the channels dug under footbridges, as outlines like the map's water's ({x, z} rings)
+function riverGaps() {
+  return grid?.river?.gaps || [];
 }
 
 // Each bridge's deck: from the ground at one end to the ground at the other, raised where it's over the water to clear
@@ -185,7 +251,8 @@ function buildDecks(g, r) {
     }
     const deck = { kind: b.kind, w: b.w, half: b.kind === 2 ? b.w / 2 : b.w / 2 + 1.5, length: s, points: S.map((p, i) => [p[0], p[1], L[i], H[i], wet[i]]) };
     r.bridges.push(deck);
-    if (b.kind === 2) continue;
+    // a footbridge's deck isn't the ground (a kayak passes under it), but walkers and bikes go over it (footbridgeTop)
+    const into = b.kind === 2 ? (r.footBuckets ??= new Map()) : r.buckets;
     for (let i = 0; i + 1 < S.length; i++) {
       const seg = { deck, a: deck.points[i], b: deck.points[i + 1] };
       const x0 = Math.min(S[i][0], S[i + 1][0]) - deck.half, x1 = Math.max(S[i][0], S[i + 1][0]) + deck.half;
@@ -193,8 +260,8 @@ function buildDecks(g, r) {
       for (let bx = Math.floor(x0 / BUCKET); bx <= Math.floor(x1 / BUCKET); bx++) {
         for (let bz = Math.floor(z0 / BUCKET); bz <= Math.floor(z1 / BUCKET); bz++) {
           const key = bucketKey(bx, bz);
-          if (!r.buckets.has(key)) r.buckets.set(key, []);
-          r.buckets.get(key).push(seg);
+          if (!into.has(key)) into.set(key, []);
+          into.get(key).push(seg);
         }
       }
     }
@@ -205,6 +272,20 @@ function buildDecks(g, r) {
 function waterLevel(x, z) {
   const r = grid?.river;
   return r ? cascadeLevel(x, z, levelAt(r, x, z)) : null; // stepping down the Argo Cascades (cascades.js)
+}
+
+// The top of a footbridge's deck at (x, z), or -Infinity off every footbridge
+function footbridgeTop(x, z) {
+  const list = grid?.river?.footBuckets?.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
+  if (!list) return -Infinity;
+  let top = -Infinity;
+  for (const { deck, a, b } of list) {
+    const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez || 1;
+    const u = Math.min(1, Math.max(0, ((x - a[0]) * ex + (z - a[1]) * ez) / l2));
+    if (Math.hypot(x - a[0] - ex * u, z - a[1] - ez * u) > deck.half + 0.2) continue;
+    top = Math.max(top, a[3] + (b[3] - a[3]) * u);
+  }
+  return top;
 }
 
 // The bridges' decks: { kind (0 street, 1 railway, 2 footbridge), w, half (half the deck's width), length,
@@ -1281,7 +1362,7 @@ function drawOver(mat, lift = LIFT.over) {
 
 export {
   drawOver, cityGround,
-  loadTerrain, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
+  loadTerrain, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
   tessellate, drapeGeometry, liftGeometry, liftInstances, setOnTerrain,
   streamGround, updateGroundStreaming, groundStreamStats, groundStreamCenter, groundStreamBytes, streamFromSquares, streamNear
 };

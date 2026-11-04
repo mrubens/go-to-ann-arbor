@@ -65,7 +65,7 @@ import { tagLot, createStripeMaterial } from './parking-stripes.js';
 import { buildPlaygrounds } from './playgrounds.js';
 import { buildGolf, buildTrails } from './golf.js';
 import { buildRiver } from './river.js';
-import { riverDepth, drawOver, streamFromSquares } from './terrain.js';
+import { riverDepth, drawOver, streamFromSquares, riverGaps } from './terrain.js';
 import { LIFT } from './ground-lifts.js';
 import { cascadeGaps } from './cascades.js';
 
@@ -1899,7 +1899,7 @@ function buildCityGrid(scene, yards = null) {
   // Their painted stalls (parking-stripes.js)
   if (stripeGeos.length) mergeInto(stripeGeos, createStripeMaterial());
   // The river sunk into its banks, with its bridges (river.js)
-  buildRiver(group, [...WATER_POLYGONS, ...cascadeGaps()].map((rings) => flatGeo(rings, 0)), waterMat);
+  buildRiver(group, [...WATER_POLYGONS, ...cascadeGaps(), ...riverGaps()].map((rings) => flatGeo(rings, 0)), waterMat);
   // Woods (kind 0: oaks & maples, close together), park and cemetery trees (1) and yard trees (2)
   const W = woodsTrees();
   for (let i = 0; i < W.length; i += 3) {

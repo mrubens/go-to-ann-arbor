@@ -967,7 +967,7 @@
 
   // Lamp's own route for a TV app's phone controllers (Lamp.controllers), the way LampAI's calls go.
   Object.defineProperty(LampAI, '_post', { value: post });
-  // One call to one way to Lamp, as LampAI makes it (through the Xbox's host where there is one), for a wish's key claim.
+  // One call to one way to Lamp, as LampAI makes it (through the Xbox's host where there is one), for a project's key claim.
   Object.defineProperty(LampAI, '_exchange', { value: exchange });
 
   /**
@@ -3453,7 +3453,7 @@ window.Lamp = window.Lamp || {};
  *
  * Lamp.controllers.start()                    opens a game for phones on this Wi-Fi; Promise. The phones' page is
  *                                              Phone/index.html, loading lamp-controller.js (its own comment says how);
- *                                              the wish's iPhone or Mac app joins with LampController.
+ *                                              the project's iPhone or Mac app joins with LampController.
  * Lamp.controllers.start({ host: 'game' })    the game itself serves the phones' page and runs their link, with no
  *                                              Lamp: on the Mac, an iPhone or iPad, an LG TV whose package
  *                                              carries the game's service, and the Xbox's own host
@@ -4078,19 +4078,19 @@ function lampLinks(pipe) {
   };
   if (window.Lamp) window.Lamp.controllers = api;
 })(window.setTimeout, window.clearTimeout, window.setInterval, window.clearInterval);
-/* The wish's other apps. Written by Lamp before every build; don't edit.
+/* The project's other apps. Written by Lamp before every build; don't edit.
  *
- * The other apps of this app's wish (an iPhone app, a Mac app, an Android app, a TV app, a game, a screen): which
+ * The other apps of this app's project (an iPhone app, a Mac app, an Android app, a TV app, a game, a screen): which
  * are open now, and messages between them over the home Wi-Fi, through Lamp on the Mac and straight to the apps that
  * listen, so they go on with Lamp closed, with nothing to pair, host or set up. What they say is sealed with a key
- * only the wish's apps have. Each app of the wish is a peer named by its folder in the wish: "tv", "iphone",
+ * only the project's apps have. Each app of the project is a peer named by its folder in the project: "tv", "iphone",
  * "apple" (an app for iPhone and Mac), "mac", "android", "game", "screen"; its kind is the device word the tools
  * use for it.
  *
- * Lamp.wish.start()                  joins the wish's room; call it as the app opens (the other calls do it too)
- * Lamp.wish.peers()                  the wish's other apps open now: [{ peer: 'iphone', kind, name, device, status }]
- * Lamp.wish.apps()                   every other app of the wish, open or not
- * Lamp.wish.peer('iphone')           that app, open or not ({ ..., open, status }); null when the wish has none
+ * Lamp.wish.start()                  joins the project's room; call it as the app opens (the other calls do it too)
+ * Lamp.wish.peers()                  the project's other apps open now: [{ peer: 'iphone', kind, name, device, status }]
+ * Lamp.wish.apps()                   every other app of the project, open or not
+ * Lamp.wish.peer('iphone')           that app, open or not ({ ..., open, status }); null when the project has none
  * Lamp.wish.peer('screen').copies    where it's open now, one for each device: [{ id: 'screen.k3j9x0ab', device, since }]
  * Lamp.wish.peer('iphone').status    { state: 'connected', 'outOfDate' or 'notOpen', reason, lastSeen }: show reason as it is
  *                                     ("Open the iPhone app on your iPhone.", "The iPhone app was last open 5 min
@@ -4102,17 +4102,17 @@ function lampLinks(pipe) {
  * Lamp.wish.send(data, 'iphone')     JSON to one app (each copy of it open now); false (with why in the console)
  *                                     when it wasn't sent
  * Lamp.wish.send(data, copy.id)      to one copy of an app: 'screen.k3j9x0ab'
- * Lamp.wish.send(data)               to every other app of the wish
+ * Lamp.wish.send(data)               to every other app of the project
  * Lamp.wish.onMessage(fn(from, data, copy))   what another app sent: its peer name, its JSON, and which copy of it
  *                                     sent it, to answer that one alone
- * Lamp.wish.state(), status()        this app's link: 'connecting', 'connected', 'alone' (the wish has no other
- *                                     app and no other copy of this one is open), 'away' (neither Lamp nor another app of the wish is reachable), 'ended';
+ * Lamp.wish.state(), status()        this app's link: 'connecting', 'connected', 'alone' (the project has no other
+ *                                     app and no other copy of this one is open), 'away' (neither Lamp nor another app of the project is reachable), 'ended';
  *                                     status() is { state, reason }
  * Lamp.wish.onState(fn(state, status))   fn now and whenever this app's link changes
  * Lamp.wish.me()                     this app's own peer name
  * Lamp.wish.copy()                   this copy's: the app open on this device ('screen.k3j9x0ab')
- * Lamp.wish.values()                 the values the wish's apps share, kept on each device: { list: [...], ... };
- *                                     those kept here come once the page knows its wish, with onChange
+ * Lamp.wish.values()                 the values the project's apps share, kept on each device: { list: [...], ... };
+ *                                     those kept here come once the page knows its project, with onChange
  * Lamp.wish.set('list', value)       sets one here and in every other app, now or when they next meet; null
  *                                     removes it; false (with why in the console) when it wasn't set
  * Lamp.wish.onChange(fn(key, value, from))   a value changed, here (from is me()) or in another app
@@ -4135,22 +4135,22 @@ function lampLinks(pipe) {
  * copy of it, all reach the others and keep the same values, and another copy of this same app is in apps() while
  * it's open. A message or a file is for apps open now; values are for what must outlast an app being closed, and
  * where two apps set one while apart, the later setting wins in both. A phone steering this app as a game
- * controller is Lamp.controllers (above), not this; the wish's own apps that do (LampController) join
+ * controller is Lamp.controllers (above), not this; the project's own apps that do (LampController) join
  * Lamp.controllers through this, the same way as everything else here.
  */
 (function () {
   'use strict';
   var MESSAGE = 16384, VALUE = 8192, VALUES = 65536;
-  // What the wish's apps say to each other, numbered: an app that says another number was built by another Lamp.
+  // What the project's apps say to each other, numbered: an app that says another number was built by another Lamp.
   // 2 brought values, 3 files and a game's controls, 4 copies of one app on several devices, 5 shared collections
-  // (LampStore.shared), 6 the wish's own collections, shared by all its apps, 7 Lamp keeping them too; an app from
+  // (LampStore.shared), 6 the project's own collections, shared by all its apps, 7 Lamp keeping them too; an app from
   // before says none, which counts as 1.
   var WIRE = 7;
-  // Lamp's own name in its room, as the keeper of the wish's shared collections: never one of the wish's apps.
+  // Lamp's own name in its room, as the keeper of the project's shared collections: never one of the project's apps.
   var KEEPER = 'lamp';
-  var REASONS = { connecting: "Connecting to the wish's other apps…",
-                  away: "Can't reach the wish's other apps. Keep this device on the same Wi‑Fi as them." };
-  var UNCLAIMED = 'This app needs Lamp to put it on this TV once more before it can reach the wish\'s other apps: press Play in Lamp on your Mac.';
+  var REASONS = { connecting: "Connecting to the apps that go with this one…",
+                  away: "Can't reach the apps that go with this one. Keep this device on the same Wi‑Fi as them." };
+  var UNCLAIMED = 'This app needs Lamp to put it on this TV once more before it can reach the apps that go with it: press Play in Lamp on your Mac.';
   var C = (function () {
   'use strict';
   // SHA-256, HMAC, AES-256-GCM and X25519 in plain ES5, for TVs whose browsers have no WebCrypto on a page
@@ -4413,10 +4413,10 @@ function lampLinks(pipe) {
   }
   function random(n) {
     var c = window.crypto || window.msCrypto;
-    if (!c || !c.getRandomValues) throw new Error('This browser has no source of random numbers, which the wish\'s apps need to talk.');
+    if (!c || !c.getRandomValues) throw new Error('This browser has no source of random numbers, which the project\'s apps need to talk.');
     return c.getRandomValues(new Uint8Array(n));
   }
-  // Every value the channel derives: an HMAC under the wish's key of a label, a zero byte and what it's about.
+  // Every value the channel derives: an HMAC under the project's key of a label, a zero byte and what it's about.
   function derive(label, key, data) { return hmac(key, concat([utf8(label), new Uint8Array(1), data || new Uint8Array(0)])); }
   function nonce(count) {
     var n = new Uint8Array(12), high = Math.floor(count / 4294967296);
@@ -4429,7 +4429,7 @@ function lampLinks(pipe) {
   var on = { peers: [], apps: [], message: [], state: [], change: [], file: [] };
   var started = false, socket = null, again = null, askTimer = null, beatTimer = null, heard = 0;
   var address = null, mine = '', state = 'connecting', reason = null, retry = 0, away = false, undeliveredSaid = {};
-  // This device's id for the app, made the first time it runs and kept with what it keeps of the wish: the app open
+  // This device's id for the app, made the first time it runs and kept with what it keeps of the project: the app open
   // here and on another device at once are two copies ('screen.k3j9x0ab'), and this one opened again is the same.
   // Made when first needed: a page whose app around it is the peer is told its id instead.
   var copyId = '';
@@ -4441,22 +4441,22 @@ function lampLinks(pipe) {
   // This link's handshake while it's under way, then its seals each way: what goes, and what comes, each counted.
   var hello = null, sent = 0, opened = 0, sendKey = null, openKey = null;
   var bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lampGateway;
-  // In Lamp's WebView2 host on the Xbox the page is https, which may not open the plain links the wish's apps
+  // In Lamp's WebView2 host on the Xbox the page is https, which may not open the plain links the project's apps
   // speak: the host opens them for it and passes each frame both ways as it is (`opener`, below), while
   // everything here, the handshake and the seals included, stays the page's.
   var pipe = !bridge && window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function'
     ? window.chrome.webview : null;
   var device = bridge ? 'TV preview' : pipe ? 'Xbox' : 'TV';
-  // Where Lamp is, filled in by Lamp in the package it puts on a TV, and the wish's key: the preview is given it by
+  // Where Lamp is, filled in by Lamp in the package it puts on a TV, and the project's key: the preview is given it by
   // Lamp through its bridge; a TV asks Lamp for it sealed to a key pair it makes, just after Lamp put the app
   // there (`claim`), and keeps it.
   var installed = /*LAMP_INSTALL*/null;
   var key = null, claiming = null, claims = 0, claimPair = null;
   // In the app of Lamp's own around a game's or a screen's page on the Mac, an iPhone or an iPad, and around a
-  // game's on Android, that app is the wish's peer, with the same LampWish as the wish's Swift and Kotlin apps (it
+  // game's on Android, that app is the project's peer, with the same LampWish as the project's Swift and Kotlin apps (it
   // listens, is found, keeps the values on the device), and this page mirrors it (`hosted`, below); Android's
   // takes text. On the Xbox the page is the peer itself, as on a TV, its links opened by the host. A page served
-  // over https anywhere else can't open the plain links the wish's apps speak, nor ask Lamp itself, and a game's
+  // over https anywhere else can't open the plain links the project's apps speak, nor ask Lamp itself, and a game's
   // page in Lamp's own preview has no way to Lamp at all, so each says so.
   var host = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lampWish;
   if (!host && window.lampWishHost && typeof window.lampWishHost.postMessage === 'function') {
@@ -4465,17 +4465,17 @@ function lampLinks(pipe) {
   if (host) pipe = null;
   var where = window.location ? window.location.protocol : '';
   var stranded = !host && !bridge && !pipe && (where === 'https:' || where === 'lamp-game:');
-  var STRANDED = "Can't reach the wish's other apps on this device yet.";
+  var STRANDED = "Can't reach the apps that go with this one on this device yet.";
   // Two ways to the others, used together: Lamp's room while Lamp is open on the Mac, and a link straight to each
-  // app of the wish that listens (a TV page can't listen itself), at the address it was last reached at or said it
-  // listens, else looked for on this network at the wish's port for it. Each is sealed the same way, with the
-  // wish's key; a message goes the straight way when there is one. So the apps go on talking with Lamp closed.
+  // app of the project that listens (a TV page can't listen itself), at the address it was last reached at or said it
+  // listens, else looked for on this network at the project's port for it. Each is sealed the same way, with the
+  // project's key; a message goes the straight way when there is one. So the apps go on talking with Lamp closed.
   var relayIn = false, lampAway = false, alone = false, relayPresent = {}, roster = [], restored = false;
-  // Lamp's room said Lamp keeps the wish's shared collections: Lamp is shared with as a copy is, under its own name
+  // Lamp's room said Lamp keeps the project's shared collections: Lamp is shared with as a copy is, under its own name
   // (KEEPER), so a page that opens alone gets the latest and what it changes reaches the others when they open.
   var lampKeeps = false;
   // Another copy of this app has been open somewhere (Lamp's room said so), kept on the device: until then a page
-  // whose wish has no other app doesn't look for its copies on the network.
+  // whose project has no other app doesn't look for its copies on the network.
   var copiesSeen = false;
   // Copies (each app on one device) by their peer name, apps by theirs: lastSeen and appsOpen.
   var directs = {}, dialing = {}, nextDial = {}, told = {}, openSince = {}, lastSeen = {}, devices = {}, appsOpen = {};
@@ -4679,7 +4679,7 @@ function lampLinks(pipe) {
     else if (on.file.length) { file.copy = route.peer; emit('file', [appOf(route.peer), file, route.peer]); }
     else file.cancel();
   });
-  // The wish's own apps playing this app's game (LampController): joined to Lamp.controllers while it takes
+  // The project's own apps playing this app's game (LampController): joined to Lamp.controllers while it takes
   // players, each controller of each copy a player of its own ('w' + its copy's peer name + ':' + its id).
   var padHooks = null, padPlayers = {};
   function padKey(peer, id) { return 'w' + peer + (typeof id === 'string' && /^[a-z0-9]{1,16}$/.test(id) ? ':' + id : ''); }
@@ -4797,7 +4797,7 @@ function lampLinks(pipe) {
     var ownOpen = false;
     for (id in open) if (appOf(id) === mine) ownOpen = true;
     if (ownOpen && !copiesSeen) { copiesSeen = true; keep(); setTimeout(lookAgain, 0); }
-    // Alone: nothing else to reach, as an app with no other app in its wish is while no copy of it is open, as
+    // Alone: nothing else to reach, as an app with no other app in its project is while no copy of it is open, as
     // long as none ever was; once one has been, not reaching it is said as for any other app.
     var none = true;
     for (id in open) none = false;
@@ -4915,7 +4915,7 @@ function lampLinks(pipe) {
     // Each handler gets a copy, so changing it changes nothing kept.
     for (var i = 0; i < changed.length; i++) emit('change', [changed[i][0], copyOf(changed[i][1]), appOf(from)]);
   }
-  // What every setting this page has adds up to, sealed with the wish's key: two apps with the same say the same.
+  // What every setting this page has adds up to, sealed with the project's key: two apps with the same say the same.
   function digest() {
     if (!key) return '';
     var parts = [], list = names(entries);
@@ -4938,7 +4938,7 @@ function lampLinks(pipe) {
   function merge(given, from) {
     if (!given || typeof given !== 'object') return;
     var changed = [], list = names(given);
-    // What the store holds may grow, from other apps, to what every app of the wish could have set between them
+    // What the store holds may grow, from other apps, to what every app of the project could have set between them
     // (each sets at most the limit of the whole), twice over for how apps measure: everything they set fits, so
     // they still agree, and an app gone wrong or hostile that floods the others gets no further.
     dropExpired();
@@ -5038,7 +5038,7 @@ function lampLinks(pipe) {
     }
     storage(n + '.values', { values: kept, clock: clock });
   }
-  // What was kept on this TV, once the wish's key is known: taken in beside anything set before then, and said to
+  // What was kept on this TV, once the project's key is known: taken in beside anything set before then, and said to
   // onChange, since a page may have looked at values() before it was there.
   function restoreValues() {
     var k = storage(keptName() + '.values');
@@ -5057,8 +5057,8 @@ function lampLinks(pipe) {
     for (var j = 0; j < changed.length; j++) emit('change', [changed[j][0], copyOf(changed[j][1]), mine]);
   }
 
-  // What the page keeps on the TV, beside LampAI's own: the routes it was told and the wish's key it claimed, and
-  // by the wish's tag who it is, the wish's apps and where each was last reached, so it finds them with Lamp closed.
+  // What the page keeps on the TV, beside LampAI's own: the routes it was told and the project's key it claimed, and
+  // by the project's tag who it is, the project's apps and where each was last reached, so it finds them with Lamp closed.
   function storage(name, value) {
     try {
       if (value === undefined) { var v = window.localStorage.getItem('lamp:' + name); return v === null ? null : JSON.parse(v); }
@@ -5172,7 +5172,7 @@ function lampLinks(pipe) {
     for (var i = 0; i < list.length; i++) if (typeof list[i] === 'string' && /^\d+\.\d+\.\d+\.\d+$/.test(list[i])) { here = list[i]; break; }
   });
 
-  // The wish's key from Lamp, sealed to a key pair made here and now, so nobody else on the network can open it.
+  // The project's key from Lamp, sealed to a key pair made here and now, so nobody else on the network can open it.
   function claim() {
     if (claiming) return claiming;
     var routes = (storage('install.routes') || []).concat(installed && installed.routes || []);
@@ -5247,7 +5247,7 @@ function lampLinks(pipe) {
     } else if (m.t === 'at' && isName(m.peer)) {
       remember(m.peer, m.addresses); lookAgain();
     } else if (m.t === 'apps') {
-      // The wish gained an app or lost one: the others keep what's known of them.
+      // The project gained an app or lost one: the others keep what's known of them.
       setRoster(m.apps || []);
     } else if (m.t === 'message' && typeof m.from === 'string' && m.data !== undefined) {
       // Lamp's own word (the relay's name, which no app has): a change of this page, for lamp.js alone.
@@ -5281,7 +5281,7 @@ function lampLinks(pipe) {
     var c = C.utf8(client), s = C.utf8(server);
     return C.concat([tag, new Uint8Array([c.length]), c, new Uint8Array([s.length]), s, theirs, ours]);
   }
-  // The relay proved it holds the wish's key: this page proves it does too, and both seal from here on.
+  // The relay proved it holds the project's key: this page proves it does too, and both seal from here on.
   function answer(m) {
     var theirs = C.fromBase64(m.nonce), proof = C.fromBase64(m.proof);
     if (!hello || typeof m.peer !== 'string' || m.peer.length < 1 || m.peer.length > 32 || !theirs || theirs.length !== 16 || !proof) return false;
@@ -5309,7 +5309,7 @@ function lampLinks(pipe) {
       if (plain) { try { said = JSON.parse(C.fromUtf8(plain)); } catch (e) {} }
       if (said && typeof said === 'object') return hear(said);
     }
-    say('the link to the wish\'s other apps heard something that was not theirs, and started again.');
+    say('the link to the project\'s other apps heard something that was not theirs, and started again.');
     socket = null; s.close(); lost(0);
   }
   function connect() {
@@ -5347,7 +5347,7 @@ function lampLinks(pipe) {
   function open() {
     if (!started || socket) return;
     if (!key && !bridge) {
-      if (!installed) { setState('away', 'This copy wasn\'t opened from Lamp, so it can\'t reach the wish\'s other apps. Open it from Lamp on your Mac.'); return; }
+      if (!installed) { setState('away', 'This copy wasn\'t opened from Lamp, so it can\'t reach the apps that go with it. Open it from Lamp on your Mac.'); return; }
       // Tried again while the page is open, less often each time, since the claim stays open for a while after
       // Lamp put the app here and the network may just have been down.
       claim().then(function (fresh) { key = fresh; claims = 0; open(); }, function (error) {
@@ -5366,14 +5366,14 @@ function lampLinks(pipe) {
     LampAI._post('/app/wish', { device: device }, 20000).then(function (answer) {
       if (!started) return;
       if (answer.alone) {
-        // The wish has no other app: nothing to join, until one is added.
+        // The project has no other app: nothing to join, until one is added.
         if (answer.me && isName(answer.me.peer)) { mine = appOf(answer.me.peer); setRoster([answer.me]); }
         alone = true; lampAway = false; rebuild();
         askTimer = setTimeout(open, (answer.renew || 300) * 1000);
         return;
       }
       if (bridge && answer.key) { key = C.fromBase64(answer.key); restore(); }
-      if (!answer.socket || !answer.peer || !key || key.length !== 32) throw new Error(answer.error || 'Lamp did not say where the wish\'s apps meet.');
+      if (!answer.socket || !answer.peer || !key || key.length !== 32) throw new Error(answer.error || 'Lamp did not say where the project\'s apps meet.');
       address = answer.socket; mine = appOf(answer.peer); alone = false;
       setRoster(answer.apps || []);
       rebuild();
@@ -5389,8 +5389,8 @@ function lampLinks(pipe) {
     });
   }
 
-  // Straight to a copy of an app of the wish that listens: the same handshake as Lamp's room, that copy taking the
-  // relay's side and naming itself, so only an app holding the wish's key answers it, and only a copy of the app it
+  // Straight to a copy of an app of the project that listens: the same handshake as Lamp's room, that copy taking the
+  // relay's side and naming itself, so only an app holding the project's key answers it, and only a copy of the app it
   // was dialled as (`id`: a copy's peer name, or an app's when it's looked for on the network); the link is then
   // that copy's. `failed` is called if it never gets ready, `settled` once it's over either way.
   function attempt(id, place, failed, settled) {
@@ -5462,7 +5462,7 @@ function lampLinks(pipe) {
   }
 
   // A route to another app on one way (d: a link straight to it; null: Lamp's room), as the files' code takes it:
-  // its messages go sealed on that way, and its pieces as the wish's apps write them (1, a peer's name with its
+  // its messages go sealed on that way, and its pieces as the project's apps write them (1, a peer's name with its
   // length before it, none straight, the transfer's id, the bytes), not the controllers' 8-byte header.
   function routeTo(peer, d) {
     var way = d ? d.way : 'r', k = 'w-' + peer + '-' + way;
@@ -5524,7 +5524,7 @@ function lampLinks(pipe) {
     }
     var p = find(given), peer = String(given).indexOf('.') < 0 && p && p.copies.length ? p.copies[p.copies.length - 1].id : given;
     var d = directs[peer] && directs[peer].ready ? directs[peer] : null, why = null;
-    if (!p) why = 'the wish has no app called "' + given + '".';
+    if (!p) why = 'the project has no app called "' + given + '".';
     else if (!p.open || state !== 'connected') why = p.status.reason || p.name + ' is not open now.';
     else if (copiesFor(peer).indexOf(peer) < 0) why = 'that copy of ' + p.name + ' is not open now.';
     else if (wireOf(peer) < 3) why = outOfDate(p.name, true);
@@ -5541,7 +5541,7 @@ function lampLinks(pipe) {
     return files.send(route, data, info);
   }
 
-  // A game's controls between a wish's app (LampController) and this app's Lamp.controllers.
+  // A game's controls between a project's app (LampController) and this app's Lamp.controllers.
   function sendPad(peer, m) {
     var d = directs[peer] && directs[peer].ready ? directs[peer] : null;
     if (wireOf(peer) < 3) return false;
@@ -5576,7 +5576,7 @@ function lampLinks(pipe) {
       padHooks.input(key, m);
     }
   }
-  // Lamp.controllers taking players, or no longer: the wish's open apps are told, and those that play join.
+  // Lamp.controllers taking players, or no longer: the project's open apps are told, and those that play join.
   var padSource = {
     start: function (h) {
       padHooks = h;
@@ -5612,7 +5612,7 @@ function lampLinks(pipe) {
   function drop(d) { d.end(); }
 
   // Each place in turn, the last reached first; then, once in a while, every address on this network at the
-  // wish's port for that app, a few dozen at a time; then again later, less often each time.
+  // project's port for that app, a few dozen at a time; then again later, less often each time.
   function dial(id, places) {
     if (!places.length) {
       delete dialing[id];
@@ -5627,7 +5627,7 @@ function lampLinks(pipe) {
     var m = /^([A-Za-z0-9.-]{1,253}):(\d{1,5})$/.exec(p);
     return !!m && +m[2] > 0 && +m[2] < 65536 && (bridge || m[1].indexOf('127.') !== 0);
   }
-  // The wish's port for an app: every copy of it listens there, each on its own device.
+  // The project's port for an app: every copy of it listens there, each on its own device.
   function port(id) {
     var ids = [], i;
     for (i = 0; i < roster.length; i++) ids.push(roster[i].peer);
@@ -5738,7 +5738,7 @@ function lampLinks(pipe) {
     // And its shared collections; a shared file asked of a copy that has gone quiet is asked again.
     if (beats % 12 === 0) { var sharers = storePeers(); for (var sj = 0; sj < sharers.length; sj++) sendSums(sharers[sj]); }
     if (beats % 12 === 6) fetchFiles();
-    // A page without the wish's key keeps saying why (open, claim) rather than "Connecting…".
+    // A page without the project's key keeps saying why (open, claim) rather than "Connecting…".
     if (key) rebuild();
     reach();
   }
@@ -5794,7 +5794,7 @@ function lampLinks(pipe) {
         if (text === undefined) { say(what + ' was not set: it holds nothing JSON can.'); return false; }
         var b = bytes(text);
         if (b > VALUE) { say(what + ' of ' + b + ' bytes was not set: a value is at most ' + VALUE + ' bytes as JSON.'); return false; }
-        if (sizeWithout(key) + bytes(key) + Math.max(32, b) > VALUES) { say(what + ' was not set: the wish\'s values would pass ' + VALUES + ' bytes (each name counts 32 bytes at least, and a removed one for a month). Keep to fewer names, and reuse them.'); return false; }
+        if (sizeWithout(key) + bytes(key) + Math.max(32, b) > VALUES) { say(what + ' was not set: the project\'s values would pass ' + VALUES + ' bytes (each name counts 32 bytes at least, and a removed one for a month). Keep to fewer names, and reuse them.'); return false; }
       }
       // Kept as it reads back from JSON, so this page sees what the others will (NaN reads back as null, and
       // so removes it, as it does everywhere).
@@ -5820,7 +5820,7 @@ function lampLinks(pipe) {
     },
     send: function (data, to) {
       api.start();
-      var what = to ? 'a message to "' + to + '"' : 'a message to the wish\'s apps';
+      var what = to ? 'a message to "' + to + '"' : 'a message to the project\'s apps';
       if (state !== 'connected') {
         if (!away) { away = true; say(what + ' was not sent: not connected (' + state + '). Check state() and peers() before sending.'); }
         return false;
@@ -5834,7 +5834,7 @@ function lampLinks(pipe) {
       for (var t = 0; t < targets.length; t++) if (bytes(targets[t]) > bytes(longest)) longest = targets[t];
       // Measured as it goes through Lamp's room to each copy, with its name: the longest, when it's for several.
       var measured = bytes(JSON.stringify({ t: 'send', data: data, to: longest }));
-      if (measured > MESSAGE) { say(what + ' of ' + measured + ' bytes was not sent: a message between the wish\'s apps is at most ' + MESSAGE + ' bytes as JSON.'); return false; }
+      if (measured > MESSAGE) { say(what + ' of ' + measured + ' bytes was not sent: a message between the project\'s apps is at most ' + MESSAGE + ' bytes as JSON.'); return false; }
       // Each app the straight way when there is one, else through Lamp's room.
       for (var i = 0; i < targets.length; i++) {
         var d = directs[targets[i]];
@@ -5864,8 +5864,8 @@ function lampLinks(pipe) {
   // A shared file's bytes on this TV, kept in memory (a TV page has no files of its own): asked again of the
   // others each time the page opens.
   var fileBytes = Object.create(null), fileAsks = {}, fileTries = {}, filesOut = {}, filesSending = {};
-  // A collection's name; "files:" before it for shared files, and "wish:" for one of the wish's own, which every app of
-  // the wish keeps rather than this app's copies.
+  // A collection's name; "files:" before it for shared files, and "wish:" for one of the project's own, which every app of
+  // the project keeps rather than this app's copies.
   function colOk(n) {
     var plain = typeof n === 'string' && n.indexOf('files:') === 0 ? n.slice(6) : n;
     if (typeof plain === 'string' && plain.indexOf('wish:') === 0) plain = plain.slice(5);
@@ -5886,7 +5886,7 @@ function lampLinks(pipe) {
   }
   function heldItem(id, v) { return bytes(id) + (v === undefined ? 32 : Math.max(32, bytes(JSON.stringify(v)))); }
   function heldAll() { var t = 0; for (var n in cols) for (var id in cols[n]) t += cols[n][id].h; return t; }
-  // Only what this app set counts toward its own limit: a wish's own collections also hold what its other apps set,
+  // Only what this app set counts toward its own limit: a project's own collections also hold what its other apps set,
   // which this one can't make room for. An item set before this app knew its own name is its own.
   function isOwn(item) { return !item.c[2] || (!!mine && appOf(item.c[2]) === mine); }
   function heldOwn() { var t = 0; for (var n in cols) for (var id in cols[n]) if (isOwn(cols[n][id])) t += cols[n][id].h; return t; }
@@ -5932,7 +5932,7 @@ function lampLinks(pipe) {
       }
       if (v === undefined && (!had || had.v === undefined)) continue;
       var need = bytes(id) + Math.max(32, v === undefined ? 32 : size), ownHad = had && isOwn(had) ? had.h : 0;
-      // A deletion is never turned down: it takes no more than the item it replaces, so the wish holds no more than before.
+      // A deletion is never turned down: it takes no more than the item it replaces, so the project holds no more than before.
       if (v !== undefined && held - ownHad + need > SHARED) { say(what + ': the item "' + id + '" was not set: this app\'s items in shared collections would pass ' + SHARED + ' bytes (a deleted item counts 32 bytes for a month).'); failed = true; continue; }
       held += need - ownHad;
       var now = Date.now();
@@ -5955,7 +5955,7 @@ function lampLinks(pipe) {
     return putItems(name, list);
   }
   // Who this page shares collections with now: the other copies of this app that speak 5, which share all of them,
-  // and the copies of the wish's other apps that speak 6, which share only the wish's own (shares).
+  // and the copies of the project's other apps that speak 6, which share only the project's own (shares).
   function storePeers() {
     if (!mine) return [];
     var me = myCopy();
@@ -5963,7 +5963,7 @@ function lampLinks(pipe) {
       .concat(relayIn && lampKeeps ? [KEEPER] : []);
   }
   // A collection goes to another copy and is taken from it: this app's own only between its copies, never another
-  // app's of the wish; the wish's own between every app of it.
+  // app's of the project; the project's own between every app of it.
   function shares(name, peer) { return !!mine && peer !== myCopy() && (appOf(peer) === mine || wishWide(name) || peer === KEEPER); }
   function heardStore(m, from) {
     var name, i;
@@ -6179,7 +6179,7 @@ function lampLinks(pipe) {
       storage(n + '.shared', kept);
     }, 1000);
   }
-  // What was kept on this TV, once the wish's key is known: taken in beside anything set before then.
+  // What was kept on this TV, once the project's key is known: taken in beside anything set before then.
   function restoreItems() {
     var n = keptName(), list = storage(n + '.shared');
     if (!(list instanceof Array)) return;
@@ -6247,7 +6247,7 @@ function lampLinks(pipe) {
   var sharedLists = Object.create(null), sharedFolders = Object.create(null);
   // A list the app keeps the same on every copy of it (the same app on a Mac, an iPad, a TV and a photo frame):
   // see LampStore.shared in lamp.js's header.
-  // shared(name, { wish: true }) is the wish's own list, kept the same by every app of the wish rather than this
+  // shared(name, { wish: true }) is the project's own list, kept the same by every app of the project rather than this
   // app's copies; an id key other than "id" is the second argument, as a string or { id: "…" }.
   function shared(name, idKey) {
     var options = idKey && typeof idKey === 'object' ? idKey : {};
@@ -6321,7 +6321,7 @@ function lampLinks(pipe) {
     return folder;
   }
 
-  // The app around the page is the peer: what it says of the wish comes to `window.__lampWish`, and what the page
+  // The app around the page is the peer: what it says of the project comes to `window.__lampWish`, and what the page
   // does goes to it. Kept here as the page's own state is everywhere else, so everything that reads it (peers,
   // apps, values, the status views) is the same code.
   function hosted() {
@@ -6359,7 +6359,7 @@ function lampLinks(pipe) {
       } else if (m.t === 'values') {
         // Every value the app has that differs from the page's copy is said to onChange: those it kept on the
         // device come in its first snapshot, and a page opened again finds them there, as values kept on a TV
-        // are said once the page knows its wish. A change the page made is said as it's made, so it differs
+        // are said once the page knows its project. A change the page made is said as it's made, so it differs
         // from nothing when the app's copy of it comes back.
         var given = m.values && typeof m.values === 'object' ? m.values : {}, by = {}, said = [], k;
         var changed = m.changed instanceof Array ? m.changed : [];
@@ -6405,7 +6405,7 @@ function lampLinks(pipe) {
     };
     api.send = function (data, to) {
       api.start();
-      var what = to ? 'a message to "' + to + '"' : 'a message to the wish\'s apps';
+      var what = to ? 'a message to "' + to + '"' : 'a message to the project\'s apps';
       if (state !== 'connected') {
         if (!away) { away = true; say(what + ' was not sent: not connected (' + state + '). Check state() and peers() before sending.'); }
         return false;
@@ -6414,7 +6414,7 @@ function lampLinks(pipe) {
       var text = data === undefined ? undefined : JSON.stringify(data);
       if (text === undefined) { say(what + ' was not sent: it holds nothing JSON can.'); return false; }
       var measured = bytes(JSON.stringify({ t: 'send', data: data, to: to || '' })) + 32;
-      if (measured > MESSAGE) { say(what + ' of ' + measured + ' bytes was not sent: a message between the wish\'s apps is at most ' + MESSAGE + ' bytes as JSON.'); return false; }
+      if (measured > MESSAGE) { say(what + ' of ' + measured + ' bytes was not sent: a message between the project\'s apps is at most ' + MESSAGE + ' bytes as JSON.'); return false; }
       post({ op: 'send', data: text, to: to || null });
       return true;
     };
@@ -6559,7 +6559,7 @@ function lampLinks(pipe) {
 /* A change while it's open. Written by Lamp before every build; don't edit.
  *
  * Lamp puts a change of this page into each copy open on another device (a TV, the Xbox, an iPad, an Android
- * frame) as soon as it's made, through the wish's room, and the page takes it in place, keeping everything it
+ * frame) as soon as it's made, through the project's room, and the page takes it in place, keeping everything it
  * saved: a change of stylesheets alone is swapped in as the page runs; anything else opens the page again from the
  * new files, which lamp.js, the page's first script, puts in place of the copy's own before any of the page's
  * scripts run. The files are kept for this session only: the copy's own come back when it's opened afresh, and
@@ -6801,7 +6801,7 @@ function lampLinks(pipe) {
     location.reload();
   }
 
-  // One piece of a change, as Lamp sent it through the wish's room: the change is taken once every piece is here.
+  // One piece of a change, as Lamp sent it through the project's room: the change is taken once every piece is here.
   window.__lampPageChange = function (piece) {
     // Lamp asking what this copy has, before it sends a change.
     if (piece && piece.ask) return report('here');

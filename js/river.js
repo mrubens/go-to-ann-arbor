@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Fn, attribute, color, float, mix, smoothstep, positionWorld, vertexColor, mx_noise_float, mx_worley_noise_float } from 'three/tsl';
 import { nearDrop } from './cascades.js';
 import { riverbedHeight, riverDepth, waterLevel, bridgeDecks } from './terrain.js';
@@ -177,6 +178,7 @@ function buildBridges(group) {
   const decks = bridgeDecks();
   if (!decks.length) return;
   const concrete = [], steel = [], wood = [], rail = [];
+  const fb = { planks: [], beams: [], rails: [], concrete: [] }; // the footbridges' smooth parts (footbridge())
 
   for (const d of decks) {
     const P = d.points;
@@ -225,20 +227,7 @@ function buildBridges(group) {
       along(steel, hw - 0.1, 1.5, hw + 0.25, 1.5);
       along(steel, hw + 0.25, 1.5, hw + 0.25, under);
     } else {
-      along(wood, -hw, 0.0, hw, 0.0, false);              // the deck
-      along(wood, hw, 0.0, hw, under);
-      along(concrete, -hw, under, hw, under, false);
-      // railings: a top rail and a mid rail, with posts every couple of metres
-      along(rail, hw, 1.05, hw - 0.08, 1.1);
-      along(rail, hw, 1.1, hw, 0.98);
-      along(rail, hw, 0.55, hw, 0.5);
-      for (let i = 0; i < P.length; i++) {
-        for (const s of [1, -1]) {
-          const [x, y, z] = at(i, (hw - 0.04) * s, 0);
-          const g = new THREE.BoxGeometry(0.07, 1.1, 0.07).toNonIndexed().translate(x, y + 0.55, z);
-          rail.push(...g.attributes.position.array);
-        }
-      }
+      footbridge(d, fb);
     }
     // Piers in the water every 25 m or so, and an abutment where each end meets the bank
     const wet = P.map((p) => riverDepth(p[0], p[1]) > 0.05);
@@ -251,11 +240,15 @@ function buildBridges(group) {
       let i = first;
       while (i < last && P[i][2] < s) i++;
       const top = P[i][3] + under, bed = riverbedHeight(P[i][0], P[i][1]) - 0.4;
-      if (top - bed > 1) pier(d.kind === 1 ? concrete : concrete, i, hw * 2 - (d.kind === 2 ? 0.4 : 1.2), d.kind === 2 ? 0.5 : 1.3, bed, top);
+      if (top - bed > 1) {
+        if (d.kind === 2) footPier(fb, P[i], T[i], hw, bed, P[i][3] - 0.62);
+        else pier(concrete, i, hw * 2 - 1.2, 1.3, bed, top);
+      }
     }
     for (const i of [Math.max(0, first - 1), Math.min(P.length - 1, last + 1)]) {
       const top = P[i][3] + under, bed = riverbedHeight(P[i][0], P[i][1]) - 0.5;
-      if (top - bed > 0.3) pier(concrete, i, hw * 2 + 0.2, 1.6, bed, top + 0.05);
+      if (d.kind === 2) { if (P[i][3] - 0.62 - bed > 0.3) footAbutment(fb, P[i], T[i], hw, bed, P[i][3] - 0.62); }
+      else if (top - bed > 0.3) pier(concrete, i, hw * 2 + 0.2, 1.6, bed, top + 0.05);
     }
   }
 
@@ -266,6 +259,147 @@ function buildBridges(group) {
     const mesh = meshOf(pos, m, name);
     mesh.castShadow = true;
     group.add(mesh);
+  }
+  for (const [list, m, name] of [[fb.planks, mat(0x94785a, 0.85), 'FootbridgePlanks'], [fb.beams, mat(0x6e5640, 0.8), 'FootbridgeBeams'],
+    [fb.rails, mat(0x33393c, 0.45, 0.6), 'FootbridgeRailings'], [fb.concrete, mat(0xa9a49b, 0.9), 'FootbridgeConcrete']]) {
+    if (!list.length) continue;
+    const geo = mergeGeometries(list.map(clean));
+    if (!geo) continue;
+    const mesh = new THREE.Mesh(geo, m);
+    mesh.name = name;
+    mesh.castShadow = mesh.receiveShadow = true;
+    mesh.userData.cullDistance = 1500;
+    group.add(mesh);
+  }
+}
+
+// Every part merged alike: indexed, with positions and normals only
+function clean(g) {
+  if (!g.index) g = mergeVerts(g);
+  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+  if (!g.attributes.normal) g.computeVertexNormals();
+  g.morphAttributes = {};
+  return g;
+}
+function mergeVerts(g) {
+  const n = g.attributes.position.count, idx = [];
+  for (let i = 0; i < n; i++) idx.push(i);
+  g.setIndex(idx);
+  return g;
+}
+
+// A footbridge, drawn smooth: its path through the deck's points as a curve sampled every half metre, a deck of
+// planks laid across it on two glulam beams with fascia boards, and railings of rounded posts, a rounded top rail, a
+// round handrail and a bottom rail with slender balusters between
+function footbridge(d, out) {
+  const P = d.points, hw = d.half;
+  const curve = new THREE.CatmullRomCurve3(P.map((p) => new THREE.Vector3(p[0], p[3], p[1])), false, 'centripetal');
+  const len = curve.getLength(), n = Math.max(4, Math.ceil(len / 0.5));
+  const Q = curve.getSpacedPoints(n);
+  // each sample's frame: forward along the deck (with its slope), left across it (level), up off it
+  const F = Q.map((q, i) => new THREE.Vector3().subVectors(Q[Math.min(n, i + 1)], Q[Math.max(0, i - 1)]).normalize());
+  const Lf = F.map((f) => new THREE.Vector3(-f.z, 0, f.x).normalize());
+  const U = F.map((f, i) => new THREE.Vector3().crossVectors(Lf[i], f).normalize());
+  const at = (i, o, y) => Q[i].clone().addScaledVector(Lf[i], o).addScaledVector(U[i], y);
+  // a cross-section (points [o, y], closed) swept along samples i0..i1 with smooth normals, its ends capped
+  const sweep = (prof, i0 = 0, i1 = n) => {
+    const pos = [], idx = [], m = prof.length;
+    for (let i = i0; i <= i1; i++) for (const [o, y] of prof) pos.push(...at(i, o, y).toArray());
+    for (let i = 0; i < i1 - i0; i++) for (let j = 0; j < m; j++) {
+      const a = i * m + j, b = i * m + ((j + 1) % m), c = a + m, e = b + m;
+      idx.push(a, c, b, b, c, e);
+    }
+    // caps, fanned from the first point of the section
+    const last = (i1 - i0) * m;
+    for (let j = 1; j + 1 < m; j++) { idx.push(0, j, j + 1); idx.push(last, last + j + 1, last + j); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    return g;
+  };
+  // a rounded rectangle's section, w wide and h tall, centered at (o, y), r its corners' radius
+  const rrect = (o, y, w, h, r, seg = 4) => {
+    const pts = [];
+    for (const [cx, cy, a0] of [[w / 2 - r, h / 2 - r, 0], [-w / 2 + r, h / 2 - r, 0.5], [-w / 2 + r, -h / 2 + r, 1], [w / 2 - r, -h / 2 + r, 1.5]]) {
+      for (let k = 0; k <= seg; k++) {
+        const a = (a0 + (k / seg) * 0.5) * Math.PI;
+        pts.push([o + cx + Math.cos(a) * r, y + cy + Math.sin(a) * r]);
+      }
+    }
+    return pts;
+  };
+  const circle = (o, y, r, seg = 12) => Array.from({ length: seg }, (_, k) => [o + Math.cos((k / seg) * Math.PI * 2) * r, y + Math.sin((k / seg) * Math.PI * 2) * r]);
+  // a part placed in sample i's frame at (o, y, along) with the deck's slope
+  const M = new THREE.Matrix4();
+  const put = (g, i, o, y, along = 0) => {
+    const f = F[i], l = Lf[i], u = U[i], p = at(i, o, y).addScaledVector(f, along);
+    // the part's x across the deck (to the right), y up off it, z along it
+    M.makeBasis(l.clone().negate(), u, f).setPosition(p);
+    return g.applyMatrix4(M);
+  };
+  const vertical = (g, i, o, y) => { const p = at(i, o, y); return g.rotateY(Math.atan2(F[i].x, F[i].z)).translate(p.x, p.y, p.z); };
+
+  // the planks: 14 cm boards with 1.5 cm gaps, each a hair off square and its own height, end to end along the curve
+  const step = 0.155, count = Math.floor(len / step);
+  const plank = new THREE.BoxGeometry(hw * 2 - 0.04, 0.05, 0.14, 1, 1, 1);
+  for (let k = 0; k < count; k++) {
+    const s = (k + 0.5) * step, i = Math.min(n - 1, Math.floor((s / len) * n)), along = s - (i / n) * len;
+    const g = plank.clone().translate(0, -0.025 + ((k * 7919) % 5) * 0.002, 0).rotateY((((k * 104729) % 7) - 3) * 0.0015);
+    out.planks.push(put(g, i, 0, 0, along));
+  }
+  // the beams under the deck, and the fascia boards along its edges
+  for (const sgn of [1, -1]) {
+    out.beams.push(sweep(rrect(sgn * (hw - 0.4), -0.38, 0.22, 0.62, 0.04)));
+    out.beams.push(sweep(rrect(sgn * (hw + 0.02), -0.2, 0.06, 0.36, 0.015, 2)));
+  }
+  // cross beams under the planks every 2 m
+  for (let k = 1; k < len / 2; k++) {
+    const i = Math.round(((k * 2) / len) * n);
+    if (i <= 0 || i >= n) continue;
+    out.beams.push(put(new THREE.BoxGeometry(hw * 2 - 0.3, 0.12, 0.1), i, 0, -0.12));
+  }
+  // the railings
+  const H = 1.07;
+  for (const sgn of [1, -1]) {
+    const o = sgn * (hw - 0.05);
+    out.rails.push(sweep(rrect(o, H, 0.12, 0.05, 0.02)));                 // the top rail
+    out.rails.push(sweep(circle(o - sgn * 0.09, 0.92, 0.022)));           // the handrail, held inward
+    out.rails.push(sweep(rrect(o, 0.14, 0.05, 0.05, 0.015, 2)));          // the bottom rail
+    // the posts every 2 m, rounded, with a bracket out to the handrail
+    for (let k = 0; k <= Math.round(len / 2); k++) {
+      const i = Math.round((k / Math.round(len / 2)) * n);
+      const post = new THREE.CylinderGeometry(0.045, 0.05, H + 0.25, 10).translate(0, (H + 0.25) / 2 - 0.25, 0);
+      out.rails.push(vertical(post, i, o + sgn * 0.02, 0));
+      out.rails.push(vertical(new THREE.SphereGeometry(0.06, 10, 6), i, o + sgn * 0.02, H + 0.03));
+      out.rails.push(put(new THREE.CylinderGeometry(0.012, 0.012, 0.1, 6).rotateZ(Math.PI / 2), i, o - sgn * 0.05, 0.92));
+    }
+    // the balusters, every 11 cm
+    const bstep = 0.11, bcount = Math.floor(len / bstep);
+    const baluster = new THREE.CylinderGeometry(0.009, 0.009, H - 0.17, 6, 1, true).translate(0, (H - 0.17) / 2 + 0.165, 0);
+    for (let k = 1; k < bcount; k++) {
+      const s = k * bstep, i = Math.min(n - 1, Math.floor((s / len) * n)), along = s - (i / n) * len;
+      const p = at(i, o, 0).addScaledVector(F[i], along);
+      out.rails.push(baluster.clone().translate(p.x, p.y, p.z));
+    }
+  }
+}
+
+// A footbridge's pier in the water: two round columns under a cap beam, on a footing in the riverbed
+function footPier(out, p, t, hw, bed, top) {
+  const yaw = Math.atan2(t[0], t[1]), h = top - bed;
+  for (const s of [-1, 1]) {
+    const c = new THREE.CylinderGeometry(0.22, 0.26, h, 24).translate(s * (hw - 0.4), bed + h / 2, 0);
+    out.concrete.push(c.rotateY(yaw).translate(p[0], 0, p[1]));
+  }
+  out.concrete.push(new THREE.BoxGeometry(hw * 2 - 0.2, 0.3, 0.55).translate(0, top - 0.15, 0).rotateY(yaw).translate(p[0], 0, p[1]));
+}
+// Where a footbridge meets the bank: a low concrete seat under its beams with wing walls back into the bank
+function footAbutment(out, p, t, hw, bed, top) {
+  const yaw = Math.atan2(t[0], t[1]), h = top - bed;
+  out.concrete.push(new THREE.BoxGeometry(hw * 2 + 0.3, h, 0.9).translate(0, bed + h / 2, 0).rotateY(yaw).translate(p[0], 0, p[1]));
+  for (const s of [-1, 1]) {
+    out.concrete.push(new THREE.BoxGeometry(0.3, h, 2.4).translate(s * (hw + 0.3), bed + h / 2, 0).rotateY(yaw).translate(p[0], 0, p[1]));
   }
 }
 

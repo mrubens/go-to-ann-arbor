@@ -14,6 +14,9 @@ import {
   WATER_POLYGONS
 } from './city-config.js';
 import { groundHeight } from './terrain.js';
+import { layOutHoles } from './golf.js';
+import { AIRPORT } from './airport-data.js';
+import { onAirfield } from './airport.js';
 import { hot } from '../lamp-game.js';
 
 // Lamp: the map systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so a
@@ -40,6 +43,10 @@ const MAP = {
   streets: '#363f4b', // the town inside its edge: the roadway left between the blocks
   shore: '#4f5b6b',
   park: '#19301f',
+  fairway: '#21402a', // golf: fairways a shade brighter than the park, greens brighter still, bunkers sand
+  green: '#2f5c3a',
+  bunker: '#5d5640',
+  airfield: '#3a414b', // Ann Arbor Municipal's runways, taxiways and aprons, like the streets
   parkEdge: '#24432f',
   block: '#1c2128',
   blockEdge: '#272e37',
@@ -189,6 +196,30 @@ function mapLayers() {
   // as city-grid.js / buildings.js treat them
   L.parkLand = new TiledLayer();
   for (const park of GEO.parks || []) for (const ring of park.rings || []) L.parkLand.ring(ring);
+  // Golf: fairways, greens (with the holes golf.js lays out where a course has none mapped) and bunkers
+  const golf = GEO.golf ? layOutHoles(GEO.golf) : null;
+  L.fairways = new TiledLayer();
+  L.greens = new TiledLayer();
+  L.bunkers = new TiledLayer();
+  for (const [layer, list] of [[L.fairways, golf?.fairways], [L.greens, [...(golf?.greens || []), ...(golf?.tees || [])]], [L.bunkers, golf?.bunkers]]) {
+    for (const rings of list || []) layer.ring(rings[0], rings.slice(1));
+  }
+  // Ann Arbor Municipal Airport: its aprons, runways (the grass one as park) and taxiways
+  L.field = new Path2D(); // inside its fence, south of the city's edge: land like the town's
+  addRing(L.field, AIRPORT.bounds);
+  L.airBuildings = new Path2D();
+  for (const b of AIRPORT.buildings) addRing(L.airBuildings, b.ring);
+  L.airport = new Path2D();
+  L.taxiways = new Path2D();
+  L.grassRunway = new Path2D();
+  for (const a of AIRPORT.aprons) addRing(L.airport, a);
+  for (const r of AIRPORT.runways) {
+    const [ax, az] = r.a, [bx, bz] = r.b, l = Math.hypot(bx - ax, bz - az), nx = -(bz - az) / l * r.width / 2, nz = (bx - ax) / l * r.width / 2;
+    addRing(r.grass ? L.grassRunway : L.airport, [ax + nx, az + nz, bx + nx, bz + nz, bx - nx, bz - nz, ax - nx, az - nz]);
+  }
+  for (const t of AIRPORT.taxiways) addLine(L.taxiways, t.line);
+  L.runwayLines = new Path2D();
+  for (const r of AIRPORT.runways) if (!r.grass) addLine(L.runwayLines, [...r.a, ...r.b]);
   L.blocks = new TiledLayer();
   L.parkBlocks = new TiledLayer();
   for (const b of BLOCKS) (b.park > 0.6 && !b.median ? L.parkBlocks : L.blocks).ring(b.poly);
@@ -523,8 +554,8 @@ class CityMapSystem {
     }
     if (fullIslandBtn) {
       fullIslandBtn.addEventListener('click', () => {
-        // Fits all of the city
-        const b = TOWN_BOUNDS;
+        // Fits all of the city, and the airport south of it
+        const b = { ...TOWN_BOUNDS, maxZ: Math.max(TOWN_BOUNDS.maxZ, 7230) };
         const { w, h } = this.fullSize();
         this.viewCenterX = (b.minX + b.maxX) * 0.5;
         this.viewCenterZ = (b.minZ + b.maxZ) * 0.5;
@@ -555,6 +586,15 @@ class CityMapSystem {
       this.fullCanvas.addEventListener('pointerdown', (e) => {
         if (e.button !== 0 || !this.isFullMapOpen || this.panPointerId !== null) return;
         e.preventDefault();
+        // a click in the whole-city overview moves the map there
+        const r0 = this.fullCanvas.getBoundingClientRect();
+        const there = this.overviewHit(e.clientX - r0.left, e.clientY - r0.top);
+        if (there) {
+          this.viewCenterX = there.x;
+          this.viewCenterZ = there.z;
+          this.renderFullMap();
+          return;
+        }
         this.panPointerId = e.pointerId;
         this.fullCanvas.setPointerCapture(e.pointerId);
         this.isPanning = true;
@@ -733,6 +773,7 @@ class CityMapSystem {
 
   // Teleports land in town: inside its edge at that latitude
   clampToTown(p) {
+    if (onAirfield(p.x, p.z)) return p; // inside the airport's fence, south of the city's edge
     const z = Math.max(TOWN_BOUNDS.minZ + 25, Math.min(TOWN_BOUNDS.maxZ - 25, p.z));
     const shore = getTownBoundsAtZ(z);
     const q = { x: Math.max(shore.westX + 12, Math.min(shore.eastX - 12, p.x)), z };
@@ -769,8 +810,13 @@ class CityMapSystem {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    // 1 & 2. The town inside its edge (roadway colour: the streets are the gaps between the blocks)
+    // 1 & 2. The town inside its edge (roadway colour: the streets are the gaps between the blocks), and the airport's
+    // ground inside its fence, joined to it
     ctx.fillStyle = MAP.streets;
+    ctx.fill(L.field);
+    ctx.strokeStyle = MAP.shore;
+    ctx.lineWidth = px(isMinimap ? 1.6 : 2.0);
+    ctx.stroke(L.field);
     ctx.fill(L.town);
     ctx.strokeStyle = MAP.shore;
     ctx.lineWidth = px(isMinimap ? 1.6 : 2.0);
@@ -779,6 +825,14 @@ class CityMapSystem {
     // 3. Parkland, the river, blocks (curb islands) and park blocks
     ctx.fillStyle = MAP.park;
     L.parkLand.each(v, (p) => ctx.fill(p));
+    if (s >= 0.08) {
+      ctx.fillStyle = MAP.fairway;
+      L.fairways.each(v, (p) => ctx.fill(p));
+      ctx.fillStyle = MAP.green;
+      L.greens.each(v, (p) => ctx.fill(p));
+      ctx.fillStyle = MAP.bunker;
+      L.bunkers.each(v, (p) => ctx.fill(p));
+    }
     ctx.fillStyle = MAP.water;
     ctx.fill(L.river);
     ctx.fillStyle = MAP.block;
@@ -796,8 +850,24 @@ class CityMapSystem {
       L.parkBlocks.each(v, (p) => ctx.stroke(p));
     }
 
-    // 5. Building footprints, lowest first
+    // 4. The airport's runways, taxiways and aprons, over the park its fence makes, and the runways' centerlines
+    ctx.fillStyle = MAP.fairway;
+    ctx.fill(L.grassRunway);
+    ctx.fillStyle = MAP.airfield;
+    ctx.fill(L.airport);
+    ctx.strokeStyle = MAP.airfield;
+    ctx.lineWidth = Math.max(11, px(1.2));
+    ctx.stroke(L.taxiways);
+    ctx.strokeStyle = '#d9d6cc';
+    ctx.lineWidth = Math.max(1, px(isMinimap ? 1.2 : 1.6));
+    ctx.setLineDash([px(14), px(10)]);
+    ctx.stroke(L.runwayLines);
+    ctx.setLineDash([]);
+
+    // 5. Building footprints, lowest first (the airport's hangars with them)
     if (s >= 0.18) {
+      ctx.fillStyle = MAP.buildings[1];
+      ctx.fill(L.airBuildings);
       const fp = footprintLayers(this.allBlocks);
       if (fp) {
         for (let i = 0; i < 3; i++) {
@@ -1159,6 +1229,89 @@ class CityMapSystem {
     ctx.restore();
 
     ctx.restore();
+    this.drawOverview(ctx, v, ent);
+  }
+
+  // Lamp: the whole city small in the bottom left, with the part on screen boxed, whenever the view shows less than all
+  // of it; a click in it moves the map there (`overviewHit`)
+  overviewBox(v) {
+    const b = this.limitsBounds || (this.limitsBounds = (() => {
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const ring of CITY_LIMITS) for (const p of ring) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+      }
+      const f = AIRPORT.bounds; // and the airport, south of the line
+      for (let i = 0; i < f.length; i += 2) {
+        minX = Math.min(minX, f[i]); maxX = Math.max(maxX, f[i]); minZ = Math.min(minZ, f[i + 1]); maxZ = Math.max(maxZ, f[i + 1]);
+      }
+      return { minX, maxX, minZ, maxZ };
+    })());
+    if (!Number.isFinite(b.minX)) return null;
+    if (v.minX <= b.minX && v.maxX >= b.maxX && v.minZ <= b.minZ && v.maxZ >= b.maxZ) return null;
+    const pad = 10, side = Math.min(190, v.w * 0.24, v.h * 0.3);
+    const s = side / Math.max(b.maxX - b.minX, b.maxZ - b.minZ) ;
+    const w = (b.maxX - b.minX) * s + pad * 2, h = (b.maxZ - b.minZ) * s + pad * 2;
+    const left = 20, bottom = v.w < 1080 ? 150 : 20;
+    return { b, s, pad, w, h, x: left, y: v.h - bottom - h };
+  }
+
+  drawOverview(ctx, v, ent) {
+    const o = this.overviewBox(v);
+    this.overview = o;
+    if (!o) return;
+    const L = mapLayers(), dpr = v.dpr;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = 'rgba(10, 13, 18, 0.82)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(o.x, o.y, o.w, o.h, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.clip();
+    // the city in world metres, inside the panel
+    const k = o.s * dpr;
+    ctx.setTransform(k, 0, 0, k, dpr * (o.x + o.pad - o.b.minX * o.s), dpr * (o.y + o.pad - o.b.minZ * o.s));
+    ctx.fillStyle = MAP.streets;
+    ctx.fill(L.limits, 'evenodd');
+    ctx.fill(L.field);
+    ctx.fillStyle = MAP.water;
+    ctx.fill(L.river, 'evenodd');
+    ctx.fillStyle = '#4a525e';
+    ctx.fill(L.airport);
+    ctx.strokeStyle = MAP.highway;
+    ctx.lineWidth = 1.4 / o.s;
+    ctx.stroke(L.highways);
+    ctx.strokeStyle = MAP.limits;
+    ctx.lineWidth = 1 / o.s;
+    ctx.stroke(L.limits);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const X = (x) => o.x + o.pad + (x - o.b.minX) * o.s, Y = (z) => o.y + o.pad + (z - o.b.minZ) * o.s;
+    // what's on screen now
+    const x0 = X(v.minX), y0 = Y(v.minZ), x1 = X(v.maxX), y1 = Y(v.maxZ);
+    ctx.fillStyle = 'rgba(255, 194, 26, 0.12)';
+    ctx.strokeStyle = MAP.route;
+    ctx.lineWidth = 1.5;
+    const bw = Math.max(4, x1 - x0), bh = Math.max(4, y1 - y0);
+    ctx.fillRect((x0 + x1 - bw) / 2, (y0 + y1 - bh) / 2, bw, bh);
+    ctx.strokeRect((x0 + x1 - bw) / 2, (y0 + y1 - bh) / 2, bw, bh);
+    // you
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = MAP.halo;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(X(ent.position.x), Y(ent.position.z), 3.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // the world point under (mx, my) in the overview, or null outside it
+  overviewHit(mx, my) {
+    const o = this.overview;
+    if (!o || mx < o.x || mx > o.x + o.w || my < o.y || my > o.y + o.h) return null;
+    return { x: o.b.minX + (mx - o.x - o.pad) / o.s, z: o.b.minZ + (my - o.y - o.pad) / o.s };
   }
 
   renderFullMapStatic(ctx, v) {

@@ -215,6 +215,7 @@ for (const b of BLOCKS) b.district = districtAt(b.cx, b.cz);
 // ---------------------------------------------------------------------------------------------------------------------
 const LANDMARK_SITES = GEO.landmarks;
 const site = (name, fallback) => LANDMARK_SITES[name] || fallback;
+const POINT_AT = { gallup: { x: 3962, z: 316 } };
 const LANDMARKS = [
   ['stadium', 'Michigan Stadium (The Big House)', 'The Big House', 'Michigan Stadium'],
   ['burton', 'Burton Memorial Tower', 'Burton Tower', 'Burton Memorial Tower'],
@@ -238,7 +239,10 @@ const LANDMARKS = [
   ['burnspark', 'Burns Park', 'Burns Park', 'Burns Park']
 ].flatMap(([id, name, short, osm]) => {
   const s = site(osm, null);
-  return s ? [{ id, name, short, x: s.x, z: s.z, district: districtLabel(districtAt(s.x, s.z)) }] : [];
+  if (!s) return [];
+  // Gallup Park's point is its canoe livery, by the docks (gallup-livery.js), not the middle of the park
+  const at = POINT_AT[id] || s;
+  return [{ id, name, short, x: at.x, z: at.z, district: districtLabel(districtAt(at.x, at.z)) }];
 });
 // The Amtrak station on Depot St (by its real place: OpenStreetMap's name for it is just "Ann Arbor")
 LANDMARKS.push({ id: 'amtrak', name: 'Ann Arbor Amtrak Station', short: 'Amtrak', x: 432, z: -905, district: 'Lower Town' });
@@ -262,7 +266,7 @@ const TELEPORT_LOCATIONS = {
   theater: view(541, 40, 523, 20, 2.5), // the Michigan Theater's marquee from across Liberty
   kerrytown: view(208, -586, 175, -556, 1), // Kerrytown's brick market halls
   arb: view(2100, -100, 2250, -220, 0), // the Arb's woods
-  gallup: view(4280, 330, 4420, 430, 0), // Gallup Park's riverside path
+  gallup: view(3989, 321, 3955, 313, 0), // Gallup Park's canoe livery, on the bank by its docks and pedal boats (gallup-livery.js)
   hill: view(736, 8, 770, 36, 1), // Hill Auditorium's columns
   union: view(648, 470, 597, 494, 3), // the Michigan Union's front on State St
   umma: view(640, 425, 690, 450, 1), // UMMA's glass wing
@@ -286,7 +290,8 @@ const TELEPORT_LOCATIONS = {
   leslie: view(1629, -3149, 1841, -3307, 0), // Leslie Park
   skyline: view(-2521, -2642, -2380, -2837, 2), // Skyline High from its lot
   vets: view(-2380, -503, -2441, -421, 0), // Veterans Memorial Park
-  huron: view(3688, -98, 3768, -205, 1) // Huron High School, its spine and round pods from the south-west
+  huron: view(3688, -98, 3768, -205, 1), // Huron High School, its spine and round pods from the south-west
+  airport: view(130, 6052, 130, 6075, 0) // Ann Arbor Municipal's apron by the FBO, facing the parked helicopters (airport.js)
 };
 
 // The city's building names (Bldg_Name, GEO.places): each named building's centre and half its size, in 100 m cells

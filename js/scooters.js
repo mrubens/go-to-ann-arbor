@@ -27,11 +27,14 @@ function createScooters(group) {
   let wait = 0, busy = false, logged = false, regather = 0, triedSample = false;
   const hash = (x, z) => { const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return v - Math.floor(v); };
 
+  // the ones the player rode off on stay gone, though the feed still has them where they stood
+  const ridden = new Set();
+  const keyOf = (x, z) => `${Math.round(x)},${Math.round(z)}`;
   function take(list, from) {
     spots = list.map(([lat, lon]) => {
       const { x, z } = toWorld(lat, lon);
       return { x, z, yaw: hash(x, z) * Math.PI * 2, g: groundHeight(x, z) };
-    });
+    }).filter((s) => !ridden.has(keyOf(s.x, s.z)));
     regather = 0;
     if (!logged) { logged = true; log(`[scooters] ${from}: ${spots.length} standing around town`); }
   }
@@ -82,7 +85,28 @@ function createScooters(group) {
     mesh.instanceMatrix.needsUpdate = true;
   }
 
-  return { update };
+  // the scooter nearest (x, z) within reach, scored by `facing` as the player's other choices are (controllers.js
+  // enterOrExit: on foot, F beside one rides it off, as a bike off a rack)
+  function nearest(x, z, reach, facing = () => 1) {
+    let best = null, score = Infinity;
+    for (const s of spots) {
+      const d = Math.hypot(s.x - x, s.z - z);
+      if (d >= reach) continue;
+      const sc = (d / reach) * facing(s.x, s.z);
+      if (sc < score) { score = sc; best = s; }
+    }
+    return best ? { slot: best, x: best.x, z: best.z, yaw: best.yaw, d: Math.hypot(best.x - x, best.z - z), from: made } : null;
+  }
+  // ride it off: gone from where it stood, and its look for the player's ride
+  function ride(slot) {
+    ridden.add(keyOf(slot.x, slot.z));
+    spots = spots.filter((s) => s !== slot);
+    regather = 0;
+    return { kind: 'escooter', hex: 0x24272b, style: 0 };
+  }
+
+  const made = { update, nearest, take: ride };
+  return made;
 }
 
 export { createScooters };

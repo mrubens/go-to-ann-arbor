@@ -247,4 +247,4 @@ function buildRiverPeople(group) {
   return { update, count: people.length, length };
 }
 
-export { buildRiverPeople };
+export { buildRiverPeople, kayakGeometry, paddleGeometry };

@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { asset, log } from '../lamp-game.js';
+import { asset, log, random } from '../lamp-game.js';
 import { nativeJSON, toWorld } from './live-feeds.js';
 
 // Lamp: the real aircraft over Ann Arbor, from the OpenSky Network's live state vectors (its free API, asked through
@@ -8,10 +8,19 @@ import { nativeJSON, toWorld } from './live-feeds.js';
 // of Ann Arbor Municipal. Each is drawn where it was reported, carried on along its track, climb and speed between
 // reports and eased onto the next. A jet for anything fast or high, a high-wing single for the rest. Lamp's preview
 // has no live feed: there, one moment of the sky saved when this was written (data/planes-sample.json) stands in.
+// The sky is never left empty: while fewer than a few real aircraft are near town (OpenSky's free API runs out of
+// asks after a while, and often few fly right over), made-up flights fill it in: airliners descending east toward
+// Detroit Metro or climbing out of it, a high cruiser now and then with its contrail, and small planes to and from
+// Ann Arbor Municipal. Planes are drawn through the haze (it hid anything more than a few km off) and cruisers leave a
+// contrail, so one seven miles up still shows.
 
 const AREA = { lamin: 41.95, lomin: -84.25, lamax: 42.6, lomax: -83.15 };
 const URL_STATES = `https://opensky-network.org/api/states/all?lamin=${AREA.lamin}&lomin=${AREA.lomin}&lamax=${AREA.lamax}&lomax=${AREA.lomax}`;
-const POLL = 20; // seconds of play between asks
+const POLL = 60; // seconds of play between asks (the free API allows a few hundred a day)
+const GROUND = 270; // m above sea level of the town's streets, the world's y = 0
+const SKY = 3; // made-up flights kept up while fewer real ones are near town
+const NEAR = 25000;
+const ARB = toWorld(42.2229, -83.7456), DTW = toWorld(42.2124, -83.3534);
 const MAX = 48;
 
 function part(geo, x, y, z) { geo.translate(x, y, z); return geo; }
@@ -48,7 +57,14 @@ function propGeometry() {
 
 function createPlanes(group) {
   group.name = 'Planes';
-  const paint = new THREE.MeshStandardNodeMaterial({ color: 0xe9edf1, roughness: 0.45, metalness: 0.15 });
+  const paint = new THREE.MeshStandardNodeMaterial({ color: 0xe9edf1, roughness: 0.45, metalness: 0.15, fog: false });
+  // a contrail: a long thin white streak behind a cruiser, scaled along z to its length
+  const trailGeo = new THREE.BoxGeometry(3, 1.2, 1).translate(0, 0, -0.5);
+  const trails = new THREE.InstancedMesh(trailGeo, new THREE.MeshBasicNodeMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, fog: false, depthWrite: false }), MAX);
+  trails.count = 0;
+  trails.frustumCulled = false;
+  trails.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  group.add(trails);
   const kinds = {
     jet: new THREE.InstancedMesh(jetGeometry(), paint, MAX),
     prop: new THREE.InstancedMesh(propGeometry(), paint, MAX)
@@ -61,15 +77,67 @@ function createPlanes(group) {
   }
 
   const planes = new Map(); // icao24 -> { x, y, z, vx, vy, vz, yaw, pitch, kind, ex, ey, ez, seen }
-  let wait = 0, busy = false, logged = false, sampleAt = null;
+  let wait = 0, busy = false, logged = false, sampleAt = null, real = 0, simId = 0;
+
+  // a made-up flight: an approach to or departure from Detroit Metro passing over or beside town, a cruiser, or a small
+  // plane to or from Ann Arbor Municipal; `along` 0..1 is how far along its path it starts
+  function addFlight(along) {
+    const r = random();
+    let x, z, y, yaw, speed, climb, kind;
+    const off = (random() - 0.5) * 9000; // how far beside town it passes
+    if (r < 0.45) { // airliner: west to east down toward DTW, or out of it climbing west
+      const out = random() < 0.4;
+      kind = 'jet'; speed = 120 + random() * 40;
+      const bx = out ? DTW.x - 4000 : -30000, bz = (out ? DTW.z : off);
+      const tx = out ? -30000 : DTW.x, tz = out ? off : DTW.z;
+      yaw = Math.atan2(tx - bx, -(tz - bz));
+      const len = Math.hypot(tx - bx, tz - bz), t = along * len * 0.7;
+      x = bx + Math.sin(yaw) * t; z = bz - Math.cos(yaw) * t;
+      const y0 = out ? 900 : 4200, y1 = out ? 5000 : 900;
+      climb = ((y1 - y0) / len) * speed; y = y0 + (y1 - y0) * (t / len);
+    } else if (r < 0.65) { // a cruiser at 30,000-38,000 ft, any heading
+      kind = 'jet'; speed = 220 + random() * 25; climb = 0; y = 9000 + random() * 2500 - GROUND;
+      yaw = random() * Math.PI * 2;
+      const t = (along - 0.5) * 50000;
+      x = Math.cos(yaw) * off + Math.sin(yaw) * t; z = Math.sin(yaw) * off - Math.cos(yaw) * t;
+    } else { // a small plane in or out of Ann Arbor Municipal, low over town
+      kind = 'prop'; speed = 50 + random() * 12; climb = 0; y = 450 + random() * 500;
+      const out = random() < 0.5, b = random() * Math.PI * 2, far = 22000;
+      const fx = ARB.x + Math.sin(b) * far, fz = ARB.z - Math.cos(b) * far;
+      const [bx, bz, tx, tz] = out ? [ARB.x, ARB.z, fx, fz] : [fx, fz, ARB.x, ARB.z];
+      yaw = Math.atan2(tx - bx, -(tz - bz));
+      const t = along * far * 0.85;
+      x = bx + Math.sin(yaw) * t; z = bz - Math.cos(yaw) * t;
+    }
+    planes.set(`sim${simId++}`, { x, y, z, vx: Math.sin(yaw) * speed, vy: climb, vz: -Math.cos(yaw) * speed, yaw, kind,
+      ex: 0, ey: 0, ez: 0, callsign: '', sim: true });
+  }
+  let simWait = 0;
+  function keepSkyFull(dt) {
+    simWait -= dt;
+    if (simWait > 0) return;
+    simWait = 2;
+    let sims = 0;
+    for (const [id, p] of planes) {
+      if (!p.sim) continue;
+      // gone past town, or landed at Ann Arbor
+      if (Math.hypot(p.x, p.z) > 34000 || (p.kind === 'prop' && Math.hypot(p.x - ARB.x, p.z - ARB.z) < 600 && p.vz * (ARB.z - p.z) + p.vx * (ARB.x - p.x) < 0)) { planes.delete(id); continue; }
+      sims++;
+    }
+    let near = 0;
+    for (const p of planes.values()) if (!p.sim && Math.hypot(p.x, p.z) < NEAR) near++;
+    const want = Math.max(0, SKY + 2 - near);
+    const first = sims === 0;
+    while (sims < want) { addFlight(first ? random() : random() * 0.15); sims++; }
+  }
 
   function take(states, clock) {
     const seen = new Set();
     for (const s of states || []) {
       const [id, callsign, , , , lon, lat, baro, ground, speed, track, climb, , geo] = s;
       if (ground || lon == null || lat == null || speed == null) continue;
-      const alt = geo ?? baro;
-      if (alt == null) continue;
+      if ((geo ?? baro) == null) continue;
+      const alt = (geo ?? baro) - GROUND;
       const { x, z } = toWorld(lat, lon);
       const yaw = (track ?? 0) * Math.PI / 180;
       const vx = Math.sin(yaw) * speed, vz = -Math.cos(yaw) * speed, vy = climb ?? 0;
@@ -84,7 +152,8 @@ function createPlanes(group) {
         planes.set(id, { x, y: alt, z, vx, vy, vz, yaw, kind, ex: 0, ey: 0, ez: 0, callsign: (callsign || '').trim() });
       }
     }
-    for (const id of planes.keys()) if (!seen.has(id)) planes.delete(id);
+    for (const id of planes.keys()) if (!seen.has(id) && !id.startsWith('sim')) planes.delete(id);
+    real = seen.size;
     if (!logged) {
       logged = true;
       log(`[planes] ${clock}: ${planes.size} aircraft over the area${planes.size ? ` (${[...planes.values()].slice(0, 4).map((p) => p.callsign || 'unnamed').join(', ')}…)` : ''}`);
@@ -105,6 +174,7 @@ function createPlanes(group) {
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ');
   const pos = new THREE.Vector3(), scl = new THREE.Vector3(1, 1, 1);
   function update(dt) {
+    keepSkyFull(dt);
     wait -= dt;
     if (wait <= 0 && !busy) {
       wait = POLL;
@@ -112,10 +182,17 @@ function createPlanes(group) {
       ask().finally(() => { busy = false; });
     }
     const n = { jet: 0, prop: 0 };
+    let nt = 0;
     const ease = Math.min(1, dt / 4);
     for (const p of planes.values()) {
       p.x += p.vx * dt + p.ex * ease; p.ex -= p.ex * ease;
-      p.y = Math.max(60, p.y + p.vy * dt + p.ey * ease); p.ey -= p.ey * ease;
+      if (p.sim && p.kind === 'prop') { // a small plane eases down onto Ann Arbor's runway as it nears it
+        const d = Math.hypot(p.x - ARB.x, p.z - ARB.z), toward = p.vx * (ARB.x - p.x) + p.vz * (ARB.z - p.z) > 0;
+        if (toward && d < 6000) p.vy = -Math.max(0, p.y - 20) / Math.max(1, d / Math.hypot(p.vx, p.vz));
+        else if (!toward && d < 4000) p.vy = 3;
+        else p.vy = 0;
+      }
+      p.y = Math.max(p.sim ? 15 : 60, p.y + p.vy * dt + p.ey * ease); p.ey -= p.ey * ease;
       p.z += p.vz * dt + p.ez * ease; p.ez -= p.ez * ease;
       const mesh = kinds[p.kind];
       if (n[p.kind] >= MAX) continue;
@@ -124,7 +201,15 @@ function createPlanes(group) {
       q.setFromEuler(e);
       m4.compose(pos.set(p.x, p.y, p.z), q, scl);
       mesh.setMatrixAt(n[p.kind]++, m4);
+      if (p.y > 7500 && nt < MAX) { // a contrail, a couple of km long, from the engines back
+        scl.set(1, 1, 1800);
+        m4.compose(pos.set(p.x - Math.sin(p.yaw) * 20, p.y, p.z + Math.cos(p.yaw) * 20), q, scl);
+        trails.setMatrixAt(nt++, m4);
+        scl.set(1, 1, 1);
+      }
     }
+    trails.count = nt;
+    trails.instanceMatrix.needsUpdate = true;
     for (const k of Object.keys(kinds)) {
       kinds[k].count = n[k];
       kinds[k].instanceMatrix.needsUpdate = true;

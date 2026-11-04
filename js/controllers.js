@@ -27,10 +27,12 @@ import {
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
 import { bryantParkLawn } from './landmarks.js';
-import { groundHeight, groundTilt, nearestWater, riverDepth, riverFlow, stadiumGround, waterLevel } from './terrain.js';
+import { groundHeight, groundTilt, nearestWater, riverDepth, riverFlow, stadiumGround, waterLevel, footbridgeTop } from './terrain.js';
 import { WATER_RIPPLES, waterDisturb } from './tsl-materials.js';
 import { cascadeCurrent, cascadeDepth, inCascades, onWeirRocks, pondDraw } from './cascades.js';
 import { polygonContact, polygonContains } from './building-collision.js';
+import { onAirfield, buildStairTruck, PAVE } from './airport.js';
+import { pedalBoatGeometry } from './gallup-livery.js';
 import { vehicleContact, resolveVehicleContact } from './vehicle-physics.js';
 import { STADIUM, bowlSurface, carSurface, radiiAt } from './stadium-shape.js';
 import { hot, log, rumble } from '../lamp-game.js';
@@ -58,49 +60,54 @@ const CAR_DRIVE = {
   rolling: 0.18, drag: 0.0012, coast: 0.6, brake: 9,
   wheelbase: 2.76, grip: 9.5, cornering: 10.5 // Wheelbase (m), tire and steering acceleration limits (m/s²).
 };
-// How each kind of car drives, over CAR_DRIVE: top speed, pull, braking, tire grip, how tight it turns (cornering and
+// How each kind of car drives, over CAR_DRIVE: top speed (the real vehicle's, in m/s), pull, braking, tire grip, how tight it turns (cornering and
 // wheelbase), how quick the steering is (steer) and how far the body leans in a bend (roll) and pitches (pitch)
 const CAR_HANDLING = {
-  sedan: { speed: 38, acceleration: 5 },
-  taxi: { speed: 38, acceleration: 5 },
-  forester: { mass: 1600, speed: 36, acceleration: 4.6, grip: 10, cornering: 10.2, wheelbase: 2.67, roll: 0.014 }, // all-wheel drive
-  suv: { mass: 2000, speed: 34, acceleration: 4.2, brake: 8.5, grip: 8.6, cornering: 9, wheelbase: 2.8, steer: 8, roll: 0.016 },
-  minivan: { mass: 2000, speed: 33, acceleration: 3.8, brake: 8.5, grip: 8.4, cornering: 8.5, wheelbase: 3.03, steer: 7.5, roll: 0.015 },
-  pickup: { mass: 2400, speed: 35, acceleration: 4.8, powerSpeed: 11, brake: 8, grip: 7.8, cornering: 7.6, wheelbase: 3.7, steer: 7, roll: 0.017, pitch: 0.034 },
+  sedan: { speed: 53.6, acceleration: 5 }, // 120 mph, a Camry or Civic
+  taxi: { speed: 53.6, acceleration: 5 },
+  forester: { mass: 1600, speed: 53.6, acceleration: 4.6, grip: 10, cornering: 10.2, wheelbase: 2.67, roll: 0.014 }, // all-wheel drive; 120 mph, a Subaru Forester
+  suv: { mass: 2000, speed: 50.1, acceleration: 4.2, brake: 8.5, grip: 8.6, cornering: 9, wheelbase: 2.8, steer: 8, roll: 0.016 }, // 112 mph, an Outback, RAV4 or CR-V
+  minivan: { mass: 2000, speed: 50.1, acceleration: 3.8, brake: 8.5, grip: 8.4, cornering: 8.5, wheelbase: 3.03, steer: 7.5, roll: 0.015 }, // 112 mph, a Sienna or Odyssey
+  pickup: { mass: 2400, speed: 47.8, acceleration: 4.8, powerSpeed: 11, brake: 8, grip: 7.8, cornering: 7.6, wheelbase: 3.7, steer: 7, roll: 0.017, pitch: 0.034 }, // 107 mph, an F-150
   // the electric cars: heavy, with all their pull from a standstill
-  tesla: { mass: 1850, speed: 44, acceleration: 7.5, powerSpeed: 24, grip: 11, cornering: 11, wheelbase: 2.88, roll: 0.01 },
-  ioniq: { mass: 2100, speed: 40, acceleration: 6.5, powerSpeed: 20, grip: 9.6, cornering: 9.6, wheelbase: 3.0, steer: 8.5, roll: 0.013 },
-  r1s: { mass: 2700, speed: 40, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 9, cornering: 9, wheelbase: 3.08, steer: 8, roll: 0.013 },
-  r1t: { mass: 3000, speed: 40, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.6, cornering: 8.2, wheelbase: 3.45, steer: 7.5, roll: 0.013, pitch: 0.028 },
-  cybertruck: { mass: 3100, speed: 40, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.4, cornering: 7.8, wheelbase: 3.81, steer: 8, roll: 0.012, pitch: 0.026 },
-  van: { mass: 2700, speed: 30, acceleration: 3.2, powerSpeed: 11, brake: 7.5, grip: 7.2, cornering: 7, wheelbase: 3.6, steer: 6.5, roll: 0.02, pitch: 0.036 },
+  tesla: { mass: 1850, speed: 55.9, acceleration: 7.5, powerSpeed: 24, grip: 11, cornering: 11, wheelbase: 2.88, roll: 0.01 }, // 125 mph, a Model 3 or Model Y Long Range
+  ioniq: { mass: 2100, speed: 51.4, acceleration: 6.5, powerSpeed: 20, grip: 9.6, cornering: 9.6, wheelbase: 3.0, steer: 8.5, roll: 0.013 }, // 115 mph, an Ioniq 5
+  r1s: { mass: 2700, speed: 49.2, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 9, cornering: 9, wheelbase: 3.08, steer: 8, roll: 0.013 }, // 110 mph, a Rivian R1S
+  r1t: { mass: 3000, speed: 49.2, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.6, cornering: 8.2, wheelbase: 3.45, steer: 7.5, roll: 0.013, pitch: 0.028 }, // 110 mph, a Rivian R1T
+  cybertruck: { mass: 3100, speed: 58.1, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.4, cornering: 7.8, wheelbase: 3.81, steer: 8, roll: 0.012, pitch: 0.026 }, // 130 mph, the Cybertruck Cyberbeast
+  van: { mass: 2700, speed: 40.2, acceleration: 3.2, powerSpeed: 11, brake: 7.5, grip: 7.2, cornering: 7, wheelbase: 3.6, steer: 6.5, roll: 0.02, pitch: 0.036 }, // 90 mph, a high-roof Sprinter or Transit
   // motorcycles (motorcycles.js): light, quick off the line, leaning into bends
   // the sport bike turns on a dime: sticky tires, a quick wheel and a wide lock
-  sportbike: { mass: 290, speed: 70, acceleration: 10, powerSpeed: 26, brake: 13, grip: 24, cornering: 30, wheelbase: 1.4, steer: 30, lock: 0.9, yaw: 22, roll: 0, pitch: 0.03 },
-  cruiser: { mass: 380, speed: 48, acceleration: 6.5, powerSpeed: 16, brake: 9, grip: 10, cornering: 11, wheelbase: 1.65, steer: 10, roll: 0, pitch: 0.025 },
-  scooter: { mass: 190, speed: 26, acceleration: 4.5, powerSpeed: 9, brake: 8, grip: 10, cornering: 12, wheelbase: 1.3, steer: 14, roll: 0, pitch: 0.025 },
-  touring: { mass: 470, speed: 52, acceleration: 6, powerSpeed: 18, brake: 9, grip: 10, cornering: 10, wheelbase: 1.62, steer: 9, roll: 0, pitch: 0.022 },
-  adventure: { mass: 320, speed: 52, acceleration: 7.5, powerSpeed: 18, brake: 9.5, grip: 11, cornering: 12, wheelbase: 1.55, steer: 12, roll: 0, pitch: 0.03 },
+  sportbike: { mass: 290, speed: 71.5, acceleration: 10, powerSpeed: 26, brake: 13, grip: 24, cornering: 30, wheelbase: 1.4, steer: 30, lock: 0.9, yaw: 22, roll: 0, pitch: 0.03 }, // 160 mph, a 600 cc supersport
+  cruiser: { mass: 380, speed: 49.2, acceleration: 6.5, powerSpeed: 16, brake: 9, grip: 10, cornering: 11, wheelbase: 1.65, steer: 10, roll: 0, pitch: 0.025 }, // 110 mph, a big V-twin cruiser
+  scooter: { mass: 190, speed: 26.8, acceleration: 4.5, powerSpeed: 9, brake: 8, grip: 10, cornering: 12, wheelbase: 1.3, steer: 14, roll: 0, pitch: 0.025 }, // 60 mph, a 150 cc Vespa
+  touring: { mass: 470, speed: 51.4, acceleration: 6, powerSpeed: 18, brake: 9, grip: 10, cornering: 10, wheelbase: 1.62, steer: 9, roll: 0, pitch: 0.022 }, // 115 mph, a V-twin bagger
+  adventure: { mass: 320, speed: 55.4, acceleration: 7.5, powerSpeed: 18, brake: 9.5, grip: 11, cornering: 12, wheelbase: 1.55, steer: 12, roll: 0, pitch: 0.03 }, // 124 mph, a BMW R 1250 GS
   // and what's borrowed from the bike lane: a bicycle, an e-scooter and a hoverboard, at their own gentle pace
-  bicycle: { mass: 95, speed: 12, acceleration: 2.8, powerSpeed: 5, brake: 6, grip: 9, cornering: 10, wheelbase: 1.04, steer: 14, roll: 0, pitch: 0.02 },
+  bicycle: { mass: 95, speed: 12.1, acceleration: 2.8, powerSpeed: 5, brake: 6, grip: 9, cornering: 10, wheelbase: 1.04, steer: 14, roll: 0, pitch: 0.02 },
   // pedal-assisted to 28 mph, as a Class 3 e-bike is
   ebike: { mass: 115, speed: 12.5, acceleration: 4.2, powerSpeed: 9, brake: 6.5, grip: 9.5, cornering: 10, wheelbase: 1.12, steer: 14, roll: 0, pitch: 0.02 },
-  escooter: { mass: 92, speed: 11, acceleration: 3, powerSpeed: 5, brake: 5.5, grip: 8.5, cornering: 10, wheelbase: 0.84, steer: 16, roll: 0, pitch: 0.02 },
-  hoverboard: { mass: 85, speed: 6.5, acceleration: 2.6, powerSpeed: 3, brake: 5, grip: 9, cornering: 13, wheelbase: 0.5, steer: 22, roll: 0, pitch: 0.015 },
+  escooter: { mass: 92, speed: 6.7, acceleration: 3, powerSpeed: 5, brake: 5.5, grip: 8.5, cornering: 10, wheelbase: 0.84, steer: 16, roll: 0, pitch: 0.02 }, // 15 mph, a rental e-scooter, governed
+  hoverboard: { mass: 85, speed: 4.5, acceleration: 2.6, powerSpeed: 3, brake: 5, grip: 9, cornering: 13, wheelbase: 0.5, steer: 22, roll: 0, pitch: 0.015 }, // 10 mph, a hoverboard
   // the road work's machines (road-work.js): a loaded tandem dump truck, slow to get going and wide in a turn, and a
   // tracked excavator that crawls along and turns nearly on the spot
-  dumptruck: { mass: 16000, speed: 27, acceleration: 2.4, powerSpeed: 8, brake: 6, grip: 6.5, cornering: 6.2, wheelbase: 5.3, steer: 5, roll: 0.022, pitch: 0.03 },
-  excavator: { mass: 21000, speed: 4.5, acceleration: 1.6, brake: 6, grip: 7, cornering: 16, wheelbase: 0.9, steer: 6, roll: 0.004, pitch: 0.012 },
-  sports: { mass: 1450, speed: 76, acceleration: 9.5, powerSpeed: 30, brake: 12, drag: 0.0006, grip: 15, cornering: 17, wheelbase: 2.72, steer: 16, roll: 0.007, pitch: 0.016 }
+  dumptruck: { mass: 16000, speed: 29.1, acceleration: 2.4, powerSpeed: 8, brake: 6, grip: 6.5, cornering: 6.2, wheelbase: 5.3, steer: 5, roll: 0.022, pitch: 0.03 }, // 65 mph, a governed tandem dump truck
+  // the airport's rolling airstairs: a light truck under a tall flight of steps, slow and wide in a turn
+  stairtruck: { mass: 5200, speed: 16, acceleration: 2.8, powerSpeed: 7, brake: 6.5, grip: 7, cornering: 7, wheelbase: 6.6, steer: 6, roll: 0.02, pitch: 0.025 },
+  excavator: { mass: 21000, speed: 1.5, acceleration: 1.6, brake: 6, grip: 7, cornering: 16, wheelbase: 0.9, steer: 6, roll: 0.004, pitch: 0.012 }, // 3.4 mph, a 20-tonne excavator in high travel
+  sports: { mass: 1500, speed: 85.4, acceleration: 10, powerSpeed: 34, brake: 12, drag: 0.0006, grip: 15, cornering: 17, wheelbase: 2.72, steer: 16, roll: 0.007, pitch: 0.016 } // 191 mph, a 911 Carrera S
 };
 // Lamp: a game's cars turn in sharper than the real ones' figures above: more grip in a bend, a quicker wheel
 // what the player's car is now, for its size against walls and other cars: [half width, half length]
-const MACHINE_BOX = { dumptruck: [1.3, 4.6], excavator: [1.45, 2.4] };
+const MACHINE_BOX = { dumptruck: [1.3, 4.6], excavator: [1.45, 2.4], stairtruck: [1.25, 5.3] };
 const playerBox = [0.86, 2.18];
-const MACHINES = { dumptruck: 'Dump Truck', excavator: 'Excavator' };
+const MACHINES = { dumptruck: 'Dump Truck', excavator: 'Excavator', stairtruck: 'Airstairs' };
 const carDrive = (kind) => {
   const d = { mass: 1500, steer: 10, roll: 0.012, pitch: 0.026, ...CAR_DRIVE, ...CAR_HANDLING[kind] };
   d.grip *= 1.3; d.cornering *= 1.45; d.steer *= 1.6;
+  // the air's drag never holds it short of its top speed: at most what leaves a fifth of its pull there
+  const pull = d.acceleration * (d.powerSpeed ? d.powerSpeed / Math.max(d.powerSpeed, d.speed) : 1) - d.rolling;
+  d.drag = Math.min(d.drag, (0.8 * pull) / (d.speed * d.speed));
   return d;
 };
 // Faster than this (m/s, about 14 km/h) and getting out of the car is a tumble out of its door
@@ -151,7 +158,7 @@ function placeEarbuds(buds, rig, on) {
 const WALK_CAMERA = { d: 4.8, h: 2.4, y: -0.35 };
 
 const BICYCLE_DRIVE = {
-  speed: 19, reverseSpeed: 4.5, acceleration: 9,
+  speed: 12.5, reverseSpeed: 4.5, acceleration: 9, // about 28 mph flat out on a road bike
   rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
 };
 
@@ -609,8 +616,9 @@ class ThirdPersonControllerManager {
     const cameraBack = Math.cos(0.09) * entity.chaseDistance;
     const cameraUp = entity.chaseHeight + Math.sin(0.09) * entity.chaseDistance * 0.85;
     const clampPoint = (px, pz) => {
-      pz = Math.max(TOWN_BOUNDS.minZ + (heli ? -6000 : 30), Math.min(TOWN_BOUNDS.maxZ + margin, pz));
+      pz = Math.max(TOWN_BOUNDS.minZ + (heli ? -6000 : 30), Math.min(TOWN_BOUNDS.maxZ + (heli ? margin : 800), pz)); // (the airport's south of the edge)
       px = Math.max(TOWN_BOUNDS.minX - margin, Math.min(TOWN_BOUNDS.maxX + margin, px));
+      if (!heli && onAirfield(px, pz)) return { x: px, z: pz }; // inside Ann Arbor Municipal's fence (airport.js)
       if (!heli && getTownBoundsAtZ) {
         const shore = getTownBoundsAtZ(pz);
         const west = shore.westX + 8, east = shore.eastX - 8;
@@ -874,9 +882,13 @@ class ThirdPersonControllerManager {
     const mat = this.roadWork?.material || new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.7 });
     const chassisPivot = new THREE.Group();
     root.add(chassisPivot);
-    const body = new THREE.Mesh(truck ? (this._truckGeo ??= dumpTruckGeo(false)) : (this._excavatorGeo ??= excavatorGeo()), mat);
-    body.castShadow = body.receiveShadow = true;
-    chassisPivot.add(body);
+    const stairs = look.kind === 'stairtruck';
+    if (stairs) chassisPivot.add(buildStairTruck());
+    else {
+      const body = new THREE.Mesh(truck ? (this._truckGeo ??= dumpTruckGeo(false)) : (this._excavatorGeo ??= excavatorGeo()), mat);
+      body.castShadow = body.receiveShadow = true;
+      chassisPivot.add(body);
+    }
     const wheels = [];
     if (truck) {
       for (const w of TRUCK_WHEELS) {
@@ -895,11 +907,11 @@ class ThirdPersonControllerManager {
     const shadowGeo = new THREE.PlaneGeometry(hw * 2 + 0.3, hl * 2 + 0.4);
     shadowGeo.rotateX(-Math.PI * 0.5);
     const shadow = new THREE.Mesh(shadowGeo, createContactShadowMaterial());
-    shadow.position.set(0, 0.02, truck ? -0.1 : 0);
+    shadow.position.set(0, 0.02, truck ? -0.1 : stairs ? 0.3 : 0);
     shadow.renderOrder = 998;
     root.add(shadow);
     // the truck's headlamps in its fenders; the excavator's work lamps on its house
-    const lamp = truck ? { headlight: [0.98, 1.42], zFront: 4.36 } : { headlight: [0.7, 2.2], zFront: 0.75 };
+    const lamp = truck ? { headlight: [0.98, 1.42], zFront: 4.36 } : stairs ? { headlight: [0.82, 1.12], zFront: 5.56 } : { headlight: [0.7, 2.2], zFront: 0.75 };
     const headLights = [];
     for (const side of [-1, 1]) {
       const old = reuseLights?.[side < 0 ? 0 : 1];
@@ -918,9 +930,9 @@ class ThirdPersonControllerManager {
       position: new THREE.Vector3(-19.2, 0.0, SPAWN_Z + 12), prevX: -19.2, prevZ: SPAWN_Z + 12,
       heading: Math.PI, speed: 0, vx: 0, vz: 0, angularVel: 0, pitchVel: 0, rollVel: 0, heaveY: 0, heaveVel: 0,
       lastCollisionSpark: null, steerAngle: 0, wheelSpin: 0,
-      cameraTargetOffset: new THREE.Vector3(0, truck ? 2.4 : 2.6, 0),
-      chaseDistance: truck ? 14 : 12,
-      chaseHeight: truck ? 4.6 : 5,
+      cameraTargetOffset: new THREE.Vector3(0, truck ? 2.4 : stairs ? 3.2 : 2.6, 0),
+      chaseDistance: truck ? 14 : stairs ? 15 : 12,
+      chaseHeight: truck ? 4.6 : stairs ? 5.4 : 5,
       drive: carDrive(look.kind)
     };
   }
@@ -1267,6 +1279,20 @@ class ThirdPersonControllerManager {
     }
     tiltPivot.add(paddle);
 
+    // A pedal boat from the Gallup Park livery (gallup-livery.js), worn instead of the kayak when one's taken there
+    const pedal = pedalBoatGeometry();
+    const pedalBoat = new THREE.Group();
+    pedalBoat.name = 'PlayerPedalBoat';
+    pedalBoat.add(new THREE.Mesh(pedal.hull, createCarPaintMaterial(0x2f7fd0)),
+      new THREE.Mesh(pedal.seats, new THREE.MeshStandardNodeMaterial({ color: 0xdcdcd6, roughness: 0.5 })),
+      new THREE.Mesh(pedal.trim, new THREE.MeshStandardNodeMaterial({ color: 0x3a3f44, roughness: 0.5 })));
+    const pedalWheel = new THREE.Mesh(pedal.wheel, new THREE.MeshStandardNodeMaterial({ color: 0xf2f2f0, roughness: 0.5 }));
+    pedalWheel.position.set(0, 0.14, -1.0);
+    pedalBoat.add(pedalWheel);
+    pedalBoat.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+    pedalBoat.visible = false;
+    tiltPivot.add(pedalBoat);
+
     // The paddler (see pedestrians.js), sitting in the cockpit with their hands on the shaft
     const paddlerCrowd = new PersonCrowd(1, { farDistance: Infinity });
     paddlerCrowd.meshes.forEach((m) => this.scene.add(m));
@@ -1294,6 +1320,10 @@ class ThirdPersonControllerManager {
       mesh: root,
       tiltPivot,
       paddle,
+      kayakParts: [hull, deck, cockpit, coaming, paddle],
+      pedalBoat,
+      pedalWheel,
+      boat: 'kayak',
       ripples,
       paddlerCrowd,
       paddlerRig,
@@ -1317,6 +1347,17 @@ class ThirdPersonControllerManager {
     };
   }
 
+  // The player's boat as a kayak or as a pedal boat from the Gallup Park livery: its hull, and where the paddler sits
+  dressBoat(kind) {
+    const k = this.entities.kayak;
+    k.boat = kind === 'paddleboat' ? 'paddleboat' : 'kayak';
+    const pedal = k.boat === 'paddleboat';
+    for (const o of k.kayakParts) o.visible = !pedal;
+    k.pedalBoat.visible = pedal;
+    k.seat.set(pedal ? 0.32 : 0, pedal ? 0.26 : 0.02, pedal ? -0.22 : -0.14);
+    k.label = pedal ? 'Pedal boat' : 'Kayak';
+  }
+
   // The way downstream at (x, z) as a heading, or `fallback` where the water doesn't run
   downstreamHeading(x, z, fallback = 0) {
     const flow = this._flow ??= { x: 0, z: 0 };
@@ -1324,12 +1365,12 @@ class ThirdPersonControllerManager {
   }
 
   // On foot beside what the player was in: the car's driver's side (or the other, or behind or in front of it), the
-  // bike's or the helicopter's side, the nearest dry bank to the kayak
+  // bike's or the helicopter's side; out of a boat onto a dock or bank within a step, else into the water beside it
   placePersonBeside(v) {
     const p = this.entities.person;
     const shape = collisionBody('person', 0.48, 0, 0.05);
     const free = (x, z) => {
-      if (riverDepth(x, z) > 0.02) return false;
+      if (riverDepth(x, z) > 0.02 && !(this.livery?.dockTop(x, z) > -Infinity)) return false;
       const y = this.getGroundHeight(x, z, 'person');
       const inBowl = carSurface(x, z) !== null;
       for (const c of this.nearColliders(x, z, 3)) if (!(inBowl && isStadium(c)) && buildingContact(c, x, y, z, shape)) return false;
@@ -1338,11 +1379,20 @@ class ThirdPersonControllerManager {
     const sn = Math.sin(v.heading), cs = Math.cos(v.heading);
     let spot = null;
     if (v.type === 'kayak') {
-      for (let r = 1.5; r <= 60 && !spot; r += 1.5) {
+      // a dock or the bank within a step of the boat is climbed out onto
+      for (let r = 1.2; r <= 3 && !spot; r += 0.6) {
         for (let i = 0; i < 24; i++) {
           const a = v.heading + Math.PI / 2 + i * Math.PI / 12;
           const x = v.position.x + Math.sin(a) * r, z = v.position.z + Math.cos(a) * r;
           if (free(x, z)) { spot = { x, z }; break; }
+        }
+      }
+      // out in open water: over the side and into it, beside the boat, swimming (or standing, where it's shallow)
+      if (!spot) {
+        const wide = v.boat === 'paddleboat' ? 1.6 : 1.1;
+        for (const s of [wide, -wide, wide + 0.8, -(wide + 0.8)]) {
+          const x = v.position.x + cs * s, z = v.position.z - sn * s;
+          if (riverDepth(x, z) > 0.08 && !(this.livery?.dockTop(x, z) > -Infinity)) { spot = { x, z, wet: true }; break; }
         }
       }
     } else {
@@ -1353,7 +1403,7 @@ class ThirdPersonControllerManager {
         if (free(x, z)) { spot = { x, z }; break; }
       }
     }
-    const heading = v.type === 'kayak' && spot ? Math.atan2(spot.x - v.position.x, spot.z - v.position.z) : v.heading;
+    const heading = v.type === 'kayak' && spot && !spot.wet ? Math.atan2(spot.x - v.position.x, spot.z - v.position.z) : v.heading;
     if (!spot) {
       this.teleportActiveTo(v.position.x, v.position.z, heading);
       return;
@@ -1362,6 +1412,16 @@ class ThirdPersonControllerManager {
     p.heading = heading;
     p.speed = 0;
     p.verticalVel = 0;
+    if (spot.wet) {
+      // in over their head they go under a little and bob up swimming (updatePerson's swim)
+      const level = waterLevel(spot.x, spot.z);
+      if (level != null && level - p.position.y > 1.3) {
+        p.position.y = Math.max(p.position.y, level - 1.3);
+        p.swimming = true;
+        p.grounded = false;
+        log('[swim] over the side of the boat');
+      }
+    }
     p._charHidden = false;
     if (p.mesh) p.mesh.visible = true;
     p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
@@ -1419,17 +1479,34 @@ class ThirdPersonControllerManager {
     };
     for (const [m, reach] of [['car', 4.2], ['cyclist', 2.4], ['kayak', 7], ['helicopter', 7.5]]) {
       const e = this.entities[m];
+      // airstairs left standing are taken back as the airport's (nearestStairs below)
+      if (m === 'car' && e.machine === 'stairtruck' && !this.airport?.stairsHeld && this.airport?.nearestStairs?.(e.position.x, e.position.z, 1)) continue;
       if (m === 'helicopter' && e.position.y - this.helicopterFloor(e, e.position.y) > 0.8) continue;
       consider(m, e.position.x, e.position.z, reach);
     }
     // a kayak pulled up on the bank at a put-in (kayak-launches.js)
     const beach = this.kayakLaunches?.nearest(p.position.x, p.position.z, 3);
     if (beach && beach.d / 3 * facing(beach.x, beach.z) < score) { score = beach.d / 3 * facing(beach.x, beach.z); best = { mode: 'kayak', beach }; }
+    // a rental kayak or pedal boat at the Gallup Park livery (gallup-livery.js)
+    const boat = this.livery?.nearest(p.position.x, p.position.z, 3.2);
+    if (boat && boat.d / 3.2 * facing(boat.x, boat.z) < score) { score = boat.d / 3.2 * facing(boat.x, boat.z); best = { mode: 'kayak', boat }; }
+    // a bike on a rack or an e-bike at a dock by the Diag (bike-racks.js)
+    const rack = this.bikeRacks?.nearest(p.position.x, p.position.z, 1.8, facing);
+    if (rack && rack.d / 1.8 * facing(rack.x, rack.z) < score) { score = rack.d / 1.8 * facing(rack.x, rack.z); best = { mode: 'car', rack }; }
+    // a rental e-scooter standing on its kickstand (scooters.js), ridden off the same way
+    const scoot = this.scooters?.nearest(p.position.x, p.position.z, 1.8, facing);
+    if (scoot && scoot.d / 1.8 * facing(scoot.x, scoot.z) < score) { score = scoot.d / 1.8 * facing(scoot.x, scoot.z); best = { mode: 'car', rack: scoot }; }
+    // a helicopter parked at the airport (airport.js)
+    const pad = this.airport?.nearest(p.position.x, p.position.z, 7.5, facing);
+    if (pad && pad.d / 7.5 * facing(pad.x, pad.z) < score) { score = pad.d / 7.5 * facing(pad.x, pad.z); best = { mode: 'helicopter', pad }; }
     const near = parked?.nearest(p.position.x, p.position.z, 4.2, (c) => facing(c.x, c.z));
     if (near) consider('car', near.x, near.z, 4.2, near);
     // a dump truck or excavator at the road work, from beside its cab or tracks
     const mach = this.roadWork?.nearestMachine(p.position.x, p.position.z, 2.5);
     if (mach && mach.d / 2.5 * facing(mach.x, mach.z) < score) { score = mach.d / 2.5 * facing(mach.x, mach.z); best = { mode: 'car', machine: mach }; }
+    // the airport's rolling airstairs, from beside the truck (airport.js)
+    const st = this.airport?.nearestStairs?.(p.position.x, p.position.z, 2.5);
+    if (st && st.d / 2.5 * facing(st.x, st.z) < score) { score = st.d / 2.5 * facing(st.x, st.z); best = { mode: 'car', stairs: st }; }
     // a car going by in traffic (traffic.js), within reach
     const passing = traffic?.nearestCar(p.position.x, p.position.z, 5);
     if (passing != null && passing / 5 < Math.min(1, score)) { score = passing / 5; best = { mode: 'car', moving: true }; }
@@ -1449,7 +1526,11 @@ class ThirdPersonControllerManager {
   // Up on something driven like a ramp at (x, z), or -Infinity: a road work's dirt pile (road-work.js pileTop) or a
   // playground's wave slide and deck (playgrounds.js, on the lawn's lift)
   rampTop(x, z) {
-    const pile = this.roadWork?.pileTop(x, z) ?? -Infinity;
+    // and the airport's rolling airstairs (airport.js stairTop), run up and jumped off the landing
+    // and the river's footbridges (terrain.js footbridgeTop), walked and ridden over
+    // and the Gallup Park livery's docks (gallup-livery.js dockTop)
+    const pile = Math.max(this.roadWork?.pileTop(x, z) ?? -Infinity, this.airport?.stairTop?.(x, z) ?? -Infinity, footbridgeTop(x, z),
+      this.livery?.dockTop(x, z) ?? -Infinity);
     const play = this.playTop ? this.playTop(x, z) : -Infinity;
     return play > -Infinity ? Math.max(pile, groundHeight(x, z) + 0.19 + play) : pile;
   }
@@ -1457,7 +1538,9 @@ class ThirdPersonControllerManager {
   getGroundHeight(x, z, mode = 'person') {
     // Lamp: the ground's own height there (terrain.js), with what's laid on it, and up on a road work's dirt pile
     // (road-work.js pileTop), which is driven and walked over like a ramp
-    const ground = Math.max(groundHeight(x, z), mode === 'kayak' ? -Infinity : this.rampTop(x, z));
+    // and on the airport's pavement, laid over the town's lawn (airport.js PAVE)
+    const base = groundHeight(x, z) + (mode !== 'kayak' && onAirfield(x, z) ? PAVE + 0.04 : 0);
+    const ground = Math.max(base, mode === 'kayak' ? -Infinity : this.rampTop(x, z));
     // Inside a big park drawn on its own (none in Ann Arbor: city-config.js BIG_PARK_BOUNDS is far away)
     const cp = BIG_PARK_BOUNDS;
     if (x > cp.minX && x < cp.maxX && z > cp.minZ && z < cp.maxZ) {
@@ -1528,8 +1611,11 @@ class ThirdPersonControllerManager {
     const heli = this.activeMode === 'helicopter';
     const m = heli ? 6000 : 0;
     pos.x = Math.max(TOWN_BOUNDS.minX - m, Math.min(TOWN_BOUNDS.maxX + m, pos.x));
-    pos.z = Math.max(TOWN_BOUNDS.minZ + (heli ? -6000 : 30), Math.min(TOWN_BOUNDS.maxZ + m, pos.z));
-    if (this.activeMode !== 'helicopter' && getTownBoundsAtZ) {
+    pos.z = Math.max(TOWN_BOUNDS.minZ + (heli ? -6000 : 30), Math.min(TOWN_BOUNDS.maxZ + (heli ? m : 800), pos.z)); // (the airport's south of the edge)
+    // inside Ann Arbor Municipal's fence (airport.js), past the town's edge: that's walked and driven on too
+    const field = this.activeMode !== 'helicopter' && onAirfield(pos.x, pos.z);
+    if (field) { const kept = (this._lastInTown ??= new Map()), key = entity || this.activeMode, last = kept.get(key); if (last) { last.x = pos.x; last.z = pos.z; } else kept.set(key, { x: pos.x, z: pos.z }); }
+    if (this.activeMode !== 'helicopter' && getTownBoundsAtZ && !field) {
       const shore = getTownBoundsAtZ(pos.z);
       const minShoreX = shore.westX + 8.0;
       const maxShoreX = shore.eastX - 8.0;
@@ -1544,7 +1630,8 @@ class ThirdPersonControllerManager {
       const kept = (this._lastInTown ??= new Map());
       const key = entity || this.activeMode, last = kept.get(key);
       if (!inTown(pos.x, pos.z) && last) {
-        if (inTown(pos.x, last.z)) pos.z = last.z;
+        if (onAirfield(last.x, last.z)) { pos.x = last.x; pos.z = last.z; } // at the airport's fence
+        else if (inTown(pos.x, last.z)) pos.z = last.z;
         else if (inTown(last.x, pos.z)) pos.x = last.x;
         else { pos.x = last.x; pos.z = last.z; }
         if (carEntity && carEntity.speed) carEntity.speed *= 0.4;
@@ -2590,6 +2677,67 @@ class ThirdPersonControllerManager {
   // Paddling: forward and back paddle, left and right turn; the river's current carries the kayak downstream, and the
   // banks stop it (it only goes where the water is open, riverDepth). The paddle sweeps one blade then the other through
   // the water, and `strokes` counts each blade going in (the splash, main.js).
+  // Pedalling a pedal boat: the paddle wheel turns with the pedals, pushing it on (or back) at a walking pace, and the
+  // lever steers its rudder, turning it only while it moves. The current carries it as it carries a kayak, on the
+  // livery's still pond hardly at all, and it stays on open water.
+  // Bumping the Gallup Park livery's docks, its tied-up pedal boats and the boats out on its water (gallup-livery.js
+  // collide): eased back clear of them, slowed, and a knock felt when it's hard
+  bumpLiveryBoats(k, dt, afloat) {
+    k._bumped = Math.max(0, (k._bumped || 0) - dt);
+    const hit = this.livery?.collide(k.position.x, k.position.z, k.heading, k.boat, k.speed);
+    if (!hit) return;
+    const l = Math.hypot(hit.x, hit.z), m = Math.min(l, 0.6) / l;
+    if (afloat(k.position.x + hit.x * m, k.position.z + hit.z * m)) { k.position.x += hit.x * m; k.position.z += hit.z * m; }
+    // the part of its way that ran into it is lost
+    const fx = Math.sin(k.heading), fz = Math.cos(k.heading), into = -(fx * hit.x + fz * hit.z) / l * Math.sign(k.speed || 1);
+    if (into > 0.2) {
+      if (Math.abs(k.speed) > 0.8 && !(k._bumped > 0)) {
+        this.reportCollision(k, groundCollider, 'ground', k.position.x + fx * 1.2, k.position.y + 0.2, k.position.z + fz * 1.2, 0, 1, 0, Math.abs(k.speed) * 0.3);
+        k._bumped = 0.6;
+      }
+      k.speed *= 1 - Math.min(1, dt * 6) * into;
+    }
+    k.driftX *= 0.8; k.driftZ *= 0.8;
+  }
+
+  updatePedalBoat(dt, k, throttle, turn) {
+    k.strokeAmp += ((Math.abs(throttle) > 0.05 ? 1 : 0) - k.strokeAmp) * Math.min(1, dt * 3);
+    k.stroke += dt * throttle * 5.5;
+    k.pedalWheel.rotation.x = k.stroke;
+    // the steersman's hands: the left on the gunwale, the right on the lever, which leans with the turn
+    k.hands[0].set(0.62, 0.42, -0.08);
+    k.hands[1].set(0.02 - turn * 0.06, 0.62, 0.24);
+    k.twist = turn * 0.08;
+    k.speed += (throttle * 1.5 - 0.35 * k.speed * Math.abs(k.speed) - 0.25 * k.speed) * dt;
+    const turnTarget = turn * 0.55 * Math.min(1, 0.25 + Math.abs(k.speed) / 1.2) * Math.sign(k.speed || 1);
+    k.turnVel += (turnTarget - k.turnVel) * Math.min(1, dt * 2.2);
+    const flow = this._flow ??= { x: 0, z: 0 };
+    const m = riverFlow(k.position.x, k.position.z, flow) ? KAYAK_CURRENT * this.riverScale * 0.4 * riverDepth(k.position.x, k.position.z) : 0;
+    k.driftX += (flow.x * m - k.driftX) * Math.min(1, dt);
+    k.driftZ += (flow.z * m - k.driftZ) * Math.min(1, dt);
+    const h = k.heading + k.turnVel * dt;
+    const nx = k.position.x + (Math.sin(h) * k.speed + k.driftX) * dt, nz = k.position.z + (Math.cos(h) * k.speed + k.driftZ) * dt;
+    const afloat = (x, z) => riverDepth(x, z) > 0.4 && riverDepth(x + Math.sin(h) * 1.4, z + Math.cos(h) * 1.4) > 0.2 &&
+      riverDepth(x - Math.sin(h) * 1.4, z - Math.cos(h) * 1.4) > 0.2;
+    k.heading = h;
+    if (afloat(nx, nz)) { k.position.x = nx; k.position.z = nz; }
+    else { k.speed *= -0.2; k.driftX = k.driftZ = 0; }
+    this.bumpLiveryBoats(k, dt, afloat);
+    const level = waterLevel(k.position.x, k.position.z) ?? k.position.y;
+    k.position.y = level;
+    k.groundSpeed = Math.hypot(Math.sin(h) * k.speed + k.driftX, Math.cos(h) * k.speed + k.driftZ);
+    k.mesh.position.copy(k.position);
+    k.mesh.rotation.y = k.heading;
+    k.tiltPivot.rotation.set(Math.sin(k.stroke * 0.5) * 0.008, 0, -k.turnVel * Math.abs(k.speed) * 0.02);
+    // the wheel churns rings off the stern as it turns
+    const turns = Math.floor(k.stroke / 1.6);
+    if (turns !== k._churn) {
+      k._churn = turns;
+      if (Math.abs(throttle) > 0.05) this.kayakRipple(k, k.position.x - Math.sin(h) * 1.2, k.position.z - Math.cos(h) * 1.2, 0.5);
+    }
+    this.updateRipples(k, dt);
+  }
+
   updateKayak(dt, elapsed) {
     if (dt <= 0) return;
     const k = this.entities.kayak;
@@ -2600,6 +2748,7 @@ class ThirdPersonControllerManager {
     // the paddler's feet, is pulled back along the hull fully under water, and comes out at the hip (a reverse stroke
     // runs the other way); the shaft swings over to the other side in between.
     const effort = Math.min(1, Math.max(Math.abs(throttle), Math.abs(turn)));
+    if (k.boat === 'paddleboat') { this.updatePedalBoat(dt, k, throttle, turn); return; }
     k.strokeAmp += ((effort > 0.05 ? 1 : 0) - k.strokeAmp) * Math.min(1, dt * 4);
     const entry = (phase) => Math.floor((phase - 0.15 * Math.PI) / Math.PI);
     const before = entry(k.stroke);
@@ -2728,6 +2877,7 @@ class ThirdPersonControllerManager {
         if (open(px, pz) >= open(k.position.x, k.position.z)) { k.position.x = px; k.position.z = pz; }
       }
     }
+    this.bumpLiveryBoats(k, dt, (x, z) => afloat(x, z, k.heading) || onWeirRocks(x, z));
     k.position.y = waterLevel(k.position.x, k.position.z) ?? k.position.y;
     // over the river bed: the paddling and the current together, which the speed on screen shows
     k.groundSpeed = Math.min(9, Math.hypot(k.position.x - x, k.position.z - z) / dt);
@@ -2791,7 +2941,8 @@ class ThirdPersonControllerManager {
 
   updateHelicopter(dt, elapsed) {
     const h = this.entities.helicopter;
-    const maxHorizSpeed = 89.4; // 200 mph
+    if (h.craft === 'plane') return this.updatePlane(dt, elapsed);
+    const maxHorizSpeed = 74.6; // 167 mph, Survival Flight's Airbus H145 at its never-exceed speed
     // it climbs faster once well above the rooftops, so the ceiling is a minute and a half away, not three
     const maxVertSpeed = 16.0 + 14 * Math.min(1, Math.max(0, (h.position.y - 250) / 250));
 
@@ -2846,6 +2997,62 @@ class ThirdPersonControllerManager {
     h.tiltPivot.rotation.x = h.pitchAngle;
     h.tiltPivot.rotation.z = h.rollAngle;
     h.tiltPivot.position.y = Math.sin(elapsed * 2.6) * 0.18;
+  }
+
+  // Lamp: a plane off the airport's apron (airport.js dress), flown on the helicopter's controls: forward is throttle
+  // and back brakes, left and right turn it (banking in the air), up and down pull up and push over. It rolls on its
+  // wheels until about 50 mph, when up lifts it off; it holds its speed in the air, and below that it sinks.
+  updatePlane(dt, elapsed) {
+    const h = this.entities.helicopter;
+    const maxSpeed = 130, liftOff = 22, fullLift = 36; // about 290 mph flat out
+    const fwd = this.keys.forward ? this.keys.forward : this.keys.backward ? -this.keys.backward : 0;
+    const yaw = this.keys.left ? this.keys.left : this.keys.right ? -this.keys.right : 0;
+    const pull = this.keys.up ? this.keys.up : this.keys.down ? -this.keys.down : 0;
+    const lastY = h.position.y;
+    let floor = this.helicopterFloor(h, lastY);
+    if (!Number.isFinite(floor)) floor = groundHeight(h.position.x, h.position.z) + 0.25;
+    const grounded = h.position.y <= floor + 0.05;
+
+    // put in the air from standing (the travel buttons), it's at cruising speed
+    if (!grounded && h.speed === 0) h.speed = 40;
+    if (fwd > 0) h.speed += fwd * (grounded ? 8 : 11) * dt;
+    else if (fwd < 0) h.speed += fwd * (grounded ? 11 : 5) * dt;
+    else h.speed -= Math.sign(h.speed) * Math.min(Math.abs(h.speed), (grounded ? 1.6 : 0.25) * dt);
+    h.speed = Math.max(grounded ? -3 : 12, Math.min(maxSpeed, h.speed));
+
+    const lift = Math.min(1, Math.max(0, (h.speed - liftOff) / (fullLift - liftOff)));
+    let targetVS = pull * 17 * lift;
+    if (!grounded) targetVS -= (1 - lift) * 9; // too slow to fly: it sinks
+    else targetVS = Math.max(0, targetVS);
+    h.verticalSpeed += (targetVS - h.verticalSpeed) * Math.min(1, dt * 2.2);
+    // climbing costs speed and diving gains it
+    if (!grounded) h.speed = Math.min(maxSpeed, h.speed - h.verticalSpeed * 0.12 * dt);
+
+    const turn = grounded ? yaw * 0.85 * Math.min(1, (Math.abs(h.speed) + 1.5) / 8) * Math.sign(h.speed || 1) : yaw * (0.35 + 0.45 * lift);
+    h.heading += turn * dt;
+    h.position.x += Math.sin(h.heading) * h.speed * dt;
+    h.position.z += Math.cos(h.heading) * h.speed * dt;
+    h.position.y += h.verticalSpeed * dt;
+
+    floor = this.helicopterFloor(h, lastY);
+    if (!Number.isFinite(floor)) floor = groundHeight(h.position.x, h.position.z) + 0.25;
+    if (h.position.y < floor) {
+      this.reportCollision(h, groundCollider, 'ground', h.position.x, floor, h.position.z, 0, 1, 0, -h.verticalSpeed);
+      if (h.verticalSpeed < -8) h.speed *= 0.6; // a hard landing
+      h.verticalSpeed = Math.max(0, h.verticalSpeed);
+    }
+    h.position.y = Math.max(floor, Math.min(HELI_CEILING, h.position.y));
+    this.resolveHorizontalCollision(h.position, 4.5, null, h);
+
+    const targetPitch = -Math.atan2(h.verticalSpeed, Math.max(10, Math.abs(h.speed))) * 0.9 - (grounded && pull > 0 && lift > 0.4 ? 0.08 : 0);
+    const targetRoll = grounded ? 0 : -yaw * 0.55;
+    h.pitchAngle += (targetPitch - h.pitchAngle) * Math.min(1, dt * 4);
+    h.rollAngle += (targetRoll - h.rollAngle) * Math.min(1, dt * 3);
+    h.tiltPivot.rotation.x = h.pitchAngle;
+    h.tiltPivot.rotation.z = h.rollAngle;
+    h.tiltPivot.position.y = 0;
+    const prop = h.planeModel?.userData.prop;
+    if (prop) prop.rotation.z += dt * (14 + Math.abs(h.speed) * 0.8 + Math.max(0, fwd) * 20);
   }
 }
 

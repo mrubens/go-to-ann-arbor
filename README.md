@@ -4,7 +4,7 @@ Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.
 
 **Play it:** https://mrubens.github.io/go-to-ann-arbor/
 
-The wish itself, to open in [Lamp](https://lamp.dev) and change, is on the [main branch](https://github.com/mrubens/go-to-ann-arbor).
+The app itself, to open in [Lamp](https://lamp.dev) and change, is on the [main branch](https://github.com/mrubens/go-to-ann-arbor).
 
 ## Credits
 

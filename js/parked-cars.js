@@ -7,7 +7,7 @@ import { curbStalls } from './curb-parking.js';
 import { vehicleContact, resolveVehicleContact } from './vehicle-physics.js';
 import { TIER } from './device-tier.js';
 
-// Parked cars: about two in three stalls of every surface parking lot (in the stalls parking-stripes.js paints: rows
+// Parked cars: about two in five stalls of a small surface parking lot and one in four of a big one (in the stalls parking-stripes.js paints: rows
 // off the lot's longest edge, back to back every 18 m), and the curb lanes of the main streets downtown, around campus
 // and in Kerrytown where the street is wide enough beside its traffic lanes. Each is a solid box to the player, a body
 // of its own weight that a car hitting it shoves along and spins (handbrake on, so it slides to a stop: step()), drawn with the traffic's car models, in full near the camera and as the light stand-in further off,
@@ -54,10 +54,17 @@ function lotFrame(ring) {
 }
 
 function lotCars(out) {
+  // a stall is taken once, where lots mapped over each other share it
+  const used = new Set();
   for (const rings of PARKING_LOTS) {
     const ring = rings[0];
     if (ring.length < 3) continue;
     const f = lotFrame(ring);
+    // about two in five stalls of a small lot are taken, and one in four of a big one (a mall's, a stadium's)
+    let area = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) area += ring[j].x * ring[i].z - ring[i].x * ring[j].z;
+    area = Math.abs(area) / 2;
+    const fill = area > 20000 ? 0.25 : area > 6000 ? 0.32 : 0.42;
     let uMax = 0, vMax = 0, uMin = 0;
     for (const p of ring) {
       const u = (p.x - f.ox) * f.ax + (p.z - f.oz) * f.az, v = (p.x - f.ox) * f.nx + (p.z - f.oz) * f.nz;
@@ -68,13 +75,16 @@ function lotCars(out) {
       for (const [vc, facing] of [[m * MODULE + 2.9, -1], [m * MODULE + 15.25, 1]]) {
         for (let u = Math.floor(uMin / STALL_W) * STALL_W + STALL_W / 2; u < uMax; u += STALL_W) {
           const x = f.ox + f.ax * u + f.nx * vc, z = f.oz + f.az * u + f.nz * vc;
-          if (hash(x, z, 1) > 0.66) continue;
+          if (hash(x, z, 1) > fill) continue;
+          const key = `${Math.round(x / 2.2)},${Math.round(z / 2.2)}`;
+          if (used.has(key)) continue;
           let ok = true;
           for (const [du, dv] of [[-1.05, -2.5], [1.05, -2.5], [1.05, 2.5], [-1.05, 2.5]]) {
             if (!inLot(rings, x + f.ax * du + f.nx * dv, z + f.az * du + f.nz * dv)) { ok = false; break; }
           }
           if (!ok) continue;
           // most pull in nose first, some back in
+          used.add(key);
           const way = hash(x, z, 2) < 0.8 ? facing : -facing;
           out.push({ x, z, yaw: Math.atan2(f.nx * way, f.nz * way), y: LAWN_Y });
         }

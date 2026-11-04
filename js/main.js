@@ -8,6 +8,7 @@ import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
 import { CarRadio } from './radio.js';
 import { getLocationLabel, isTypingInField, ROADS, LANDMARKS, TELEPORT_LOCATIONS } from './city-config.js';
 import { buildKayakLaunches } from './kayak-launches.js';
+import { buildLivery } from './gallup-livery.js';
 import { buildCityGrid, restoreCityGrid } from './city-grid.js';
 import { buildOutskirts } from './outskirts.js';
 import { buildLandmarks } from './landmarks.js';
@@ -45,7 +46,9 @@ import { fetchWeather, createPrecipitation } from './weather.js';
 import { fetchRiverFlow } from './river-gauge.js';
 import { fetchRiverPfas } from './river-pfas.js';
 import { createPlanes } from './planes.js';
+import { createAirport } from './airport.js';
 import { createScooters } from './scooters.js';
+import { buildBikeRacks } from './bike-racks.js';
 import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
 import { waterDisturb } from './tsl-materials.js';
@@ -230,6 +233,10 @@ async function initApp() {
   const planesPart = live.keep('planes', () => cityPart((g) => createPlanes(g)), { from: ['js/planes.js', 'js/live-feeds.js'] });
   // the rental scooters where they really stand (scooters.js)
   const scootersPart = live.keep('scooters', () => cityPart((g) => createScooters(g)), { inputs: [heights], from: ['js/scooters.js', 'js/live-feeds.js', 'data/scooters-sample.json'] });
+  // the bike racks round town with bicycles locked to them, and the e-bike docks by the Diag, to borrow from (bike-racks.js)
+  const racksPart = await live.keep('bikeRacks', () => cityPart((g) => buildBikeRacks(g)), { inputs: [heights], from: ['js/bike-racks.js', 'data/bike-racks.json'] });
+  // Ann Arbor Municipal Airport south of town, with helicopters parked by the FBO to fly (airport.js)
+  const airportPart = live.keep('airport', () => cityPart((g) => createAirport(g)), { inputs: [heights], from: ['js/airport.js', 'js/airport-data.js'] });
   // Lamp: the moon in its real phase (moon.js)
   const moonPart = live.keep('moon', () => cityPart((g) => createMoon(g)), { from: ['js/moon.js'] });
   await showLoadingStage('Laying out the hills of Washtenaw County...');
@@ -326,6 +333,8 @@ async function initApp() {
   const launchesPart = live.keep('kayakLaunches', () => cityPart((g) => buildKayakLaunches(g)), { inputs: [heights], from: ['js/kayak-launches.js'] });
   const kayakLaunches = launchesPart.made;
   log(`[kayaks] ${kayakLaunches.count} on the banks`);
+  // The Gallup Park canoe livery: its docks, racks, rental kayaks and pedal boats, and people out on its pond (gallup-livery.js)
+  const liveryPart = live.keep('gallupLivery', () => cityPart((g) => buildLivery(g)), { inputs: [heights], from: ['js/gallup-livery.js', 'js/river-people.js'] });
   for (const c of parkedCars.colliders) allColliders.push(c);
   // streamed, the parked cars near the camera come and go, and their boxes with them (parked-cars.js)
   parkedCars.onColliders = (added, removed) => {
@@ -347,6 +356,7 @@ async function initApp() {
   const potholes = potholesPart.made;
   log(`[potholes] ${potholes.count} on the streets`);
   allColliders.push(...roadWork.colliders);
+  allColliders.push(...airportPart.made.colliders);
   // Tree trunks, lamp posts, signal poles and sign posts: thin and solid, so the car crashes into them and the bike
   // throws its rider (`thin`: the helicopter flies through them)
   // and each goes over when a car hits it hard enough (knockdowns.js)
@@ -388,7 +398,7 @@ async function initApp() {
     onLand: (it, spin) => audioSystem?.cue(it.kind === 'tree' ? 'thud' : 'crash',
       { x: it.x + it.dx * it.height * 0.6, y: it.g, z: it.z + it.dz * it.height * 0.6 }, Math.min(1, 0.4 + spin * 0.2))
   });
-  const parts = [grid, cascadesPart, riverPeoplePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, roadWorkPart, potholesPart, planesPart, scootersPart, moonPart];
+  const parts = [grid, cascadesPart, riverPeoplePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, airportPart, moonPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -401,7 +411,7 @@ async function initApp() {
   // river and the sky stay as they are
   // (only once there is snow: on a bare day the materials keep their shaders as they are)
   loadSnowCover().then((cover) => {
-    if (cover > 0) for (const part of [grid, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart]) dressForSnow(part.group);
+    if (cover > 0) for (const part of [grid, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, airportPart]) dressForSnow(part.group);
   });
   const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
   scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
@@ -413,6 +423,12 @@ async function initApp() {
   controllerManager.knockdowns = knockdowns;
   controllerManager.parkedCars = parkedCars;
   controllerManager.kayakLaunches = kayakLaunches;
+  controllerManager.livery = liveryPart.made;
+  controllerManager.bikeRacks = racksPart.made;
+  controllerManager.scooters = scootersPart.made;
+  controllerManager.airport = airportPart.made;
+  // the player's flying machine is a helicopter or the plane they took last (airport.js dress)
+  airportPart.made.dress(controllerManager.entities.helicopter);
   controllerManager.roadWork = roadWork;
   // the playgrounds' wave slides and decks, driven up like ramps (playgrounds.js)
   controllerManager.playTop = cityGrid.playTop || null;
@@ -466,12 +482,20 @@ async function initApp() {
       if (saved.carLook && !isOwnLook(saved.carLook)) controllerManager.restyleCar(saved.carLook);
       // the machine they drove off in is no longer at its dig
       const sc = saved.entities?.car;
-      if (controllerManager.entities.car.machine && sc && !roadWork.held) roadWork.claim(saved.carLook.kind, sc.x, sc.z);
+      // airstairs driven and left standing are the airport's, the player's car hidden; while driven, the player's
+      if (controllerManager.entities.car.machine === 'stairtruck') {
+        if (saved.activeMode === 'car') { if (!airportPart.made.stairsHeld) retakeStairs(); }
+        else if (airportPart.made.stairsHeld) airportPart.made.claimStairs?.();
+      }
+      else if (controllerManager.entities.car.machine && sc && !roadWork.held) roadWork.claim(saved.carLook.kind, sc.x, sc.z);
       if (saved.activeMode !== 'person' && Object.hasOwn(controllerManager.entities, saved.activeMode)) {
         controllerManager.entities.person.riding = saved.activeMode;
         controllerManager.entities[saved.activeMode].leftEmpty = false;
       }
       for (const mode of saved.leftEmpty || []) if (controllerManager.entities[mode]) controllerManager.entities[mode].leftEmpty = true;
+      // a boat taken from the Gallup Park livery is still the player's, and its spot there still empty
+      controllerManager.dressBoat(saved.boat);
+      if (saved.liveryTaken >= 0) liveryPart.made.take(saved.liveryTaken, true);
     }
   } catch { /* Missing or unavailable storage does not prevent playing. */ }
 
@@ -481,7 +505,8 @@ async function initApp() {
         x: entity.position.x, y: entity.position.y, z: entity.position.z, heading: entity.heading
       }]));
       const leftEmpty = Object.keys(controllerManager.entities).filter((mode) => controllerManager.entities[mode].leftEmpty);
-      save('player', { version: 2, activeMode: controllerManager.activeMode, entities, carLook: controllerManager.carLook, leftEmpty });
+      save('player', { version: 2, activeMode: controllerManager.activeMode, entities, carLook: controllerManager.carLook, leftEmpty,
+        boat: controllerManager.entities.kayak.boat, liveryTaken: liveryPart.made.taken });
       save('parkedSwaps', parkedCars.history);
     } catch { /* Storage may be disabled or full. */ }
   }
@@ -731,6 +756,9 @@ async function initApp() {
     helicopter: [{ keys: ['KeyW', 'KeyS'], does: 'Pitch' }, { keys: ['KeyA', 'KeyD'], does: 'Yaw' },
       { pad: [STICK.LEFT], does: 'Pitch & Yaw' }, { keys: ['Space', 'KeyE'], pad: [TRIGGER.RT], does: 'Ascend' },
       { keys: ['KeyQ', 'KeyC'], pad: [TRIGGER.LT], does: 'Descend' }],
+    plane: [{ keys: ['KeyW', 'KeyS'], does: 'Throttle / Brake' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
+      { pad: [STICK.LEFT], does: 'Throttle & turn' }, { keys: ['Space', 'KeyE'], pad: [TRIGGER.RT], does: 'Pull up' },
+      { keys: ['KeyQ', 'KeyC'], pad: [TRIGGER.LT], does: 'Nose down' }],
     kayak: [{ keys: ['KeyW', 'KeyS'], does: 'Paddle / Back' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
       { pad: [STICK.LEFT], does: 'Paddle & turn' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }]
   };
@@ -741,11 +769,12 @@ async function initApp() {
   // Getting out of a car on the move or the helicopter in the air is a jump, and its hint says so
   let jumpOut = false;
   // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
-  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116, kayak: 12 };
+  const topSpeedMph = { person: 18, car: 160, cyclist: 28, helicopter: 167, kayak: 12 };
 
   // Keys in the city's own keycaps; a controller's buttons as the runtime draws them for that controller.
   function renderControlHints(mode, on = input()) {
     if (!elControlsHint) return;
+    if (mode === 'helicopter' && controllerManager.entities.helicopter.craft === 'plane') mode = 'plane';
     const pad = on.kind === 'controller';
     const items = (controlHints[mode] || []).filter((hint) => pad ? hint.pad : hint.keys).map((hint) => {
       const item = document.createElement('span');
@@ -813,6 +842,7 @@ async function initApp() {
   // it's already close by (the car the player just stepped out of), when the player simply takes it
   function travelBy(mode) {
     const cm = controllerManager;
+    if (mode === 'car' && cm.entities.car.machine === 'stairtruck' && !airportPart.made.stairsHeld) retakeStairs();
     if (mode === cm.activeMode || !cm.entities[mode]) { selectMode(mode); return; }
     const here = cm.getActiveEntity().position, there = cm.entities[mode].position;
     const close = Math.hypot(there.x - here.x, there.z - here.z) < 40;
@@ -829,8 +859,11 @@ async function initApp() {
     if (p.rig) p.rig.ragdolling = false;
     p.riding = null;
     cm.setMode('person');
+    if (cm.entities.car.machine === 'stairtruck') { const c = cm.entities.car; airportPart.made.leaveStairs(c.position.x, c.position.z, c.heading); }
     if (!isOwnLook(cm.carLook)) cm.restyleCar({ kind: 'sports', hex: 0xffcb05, style: 0 });
     roadWork.home();
+    cm.dressBoat('kayak');
+    liveryPart.made.release();
     cm._colliderCells = null;
     for (const [mode, s] of Object.entries(SCENIC_STARTS)) {
       const e = cm.entities[mode];
@@ -889,6 +922,26 @@ async function initApp() {
     if (noticeTimer > 0 && (noticeTimer -= dt) <= 0) noticeEl?.classList.remove('show');
   }
 
+  // Airstairs the player got out of stand where they left them (airport.js leaveStairs), to climb and jump off; the
+  // car they drove them as is hidden until they drive them again (retakeStairs, from the airstairs nearest it)
+  function parkStairs() {
+    const c = controllerManager.entities.car;
+    airportPart.made.leaveStairs(c.position.x, c.position.z, c.heading);
+    c.mesh.visible = false;
+    log('[airport] left the airstairs');
+  }
+  function retakeStairs() {
+    const c = controllerManager.entities.car, st = airportPart.made.nearestStairs?.(c.position.x, c.position.z, 3);
+    if (!st) return;
+    airportPart.made.takeStairs(st.i);
+    c.position.set(st.x, controllerManager.getGroundHeight(st.x, st.z, 'car'), st.z);
+    c.heading = st.yaw;
+    c.prevX = c.position.x;
+    c.prevZ = c.position.z;
+    c.mesh.position.copy(c.position);
+    c.mesh.rotation.y = c.heading;
+  }
+
   function getInOrOut() {
     if (mapSystem.isFullMapOpen) return;
     const cm = controllerManager;
@@ -919,11 +972,26 @@ async function initApp() {
     if (!choice) return;
     const car = cm.entities.car;
     let drop = null;
-    if (choice.parked || choice.moving || choice.machine) {
+    if (choice.parked || choice.moving || choice.machine || choice.rack || choice.stairs) {
       // the car the player had is left parked where it is (a machine from the road work, back on the ground there)
       drop = { ...cm.carLook, x: car.position.x, z: car.position.z, yaw: car.heading,
         y: Math.max(0, car.position.y - cm.getGroundHeight(car.position.x, car.position.z, 'car')) };
-      if (car.machine) { roadWork.leave(drop.x, drop.z, drop.yaw); cm._colliderCells = null; drop = null; }
+      if (car.machine === 'stairtruck') { airportPart.made.leaveStairs(drop.x, drop.z, drop.yaw); drop = null; }
+      else if (car.machine) { roadWork.leave(drop.x, drop.z, drop.yaw); cm._colliderCells = null; drop = null; }
+      if (choice.stairs) {
+        // the airport's airstairs, driven off their spot; the car the player had is left parked
+        if (drop) { const done = parkedCars.take(null, drop); if (done?.collider) { allColliders.push(done.collider); cm._colliderCells = null; } }
+        const st = choice.stairs;
+        cm.restyleCar(airportPart.made.takeStairs(st.i));
+        cm.stopCar(car);
+        car.position.set(st.x, cm.getGroundHeight(st.x, st.z, 'car'), st.z);
+        car.heading = st.yaw;
+        car.prevX = car.position.x;
+        car.prevZ = car.position.z;
+        car.mesh.position.copy(car.position);
+        car.mesh.rotation.y = car.heading;
+        log('[airport] drove off in the airstairs');
+      }
       if (choice.machine) {
         if (drop) { const done = parkedCars.take(null, drop); if (done?.collider) allColliders.push(done.collider); }
         const m = choice.machine;
@@ -939,6 +1007,20 @@ async function initApp() {
         car.mesh.rotation.y = car.heading;
         log(`[car] climbed into ${look.kind === 'dumptruck' ? 'a dump truck' : 'an excavator'} at the road work`);
       }
+    }
+    if (choice.rack) {
+      // a bike borrowed off a rack or an e-bike dock (bike-racks.js); the car the player had is left parked
+      if (drop) { const done = parkedCars.take(null, drop); if (done?.collider) { allColliders.push(done.collider); cm._colliderCells = null; } }
+      const look = (choice.rack.from || racksPart.made).take(choice.rack.slot);
+      cm.restyleCar(look);
+      cm.stopCar(car);
+      car.position.set(choice.rack.x, cm.getGroundHeight(choice.rack.x, choice.rack.z, 'car'), choice.rack.z);
+      car.heading = choice.rack.yaw;
+      car.prevX = car.position.x;
+      car.prevZ = car.position.z;
+      car.mesh.position.copy(car.position);
+      car.mesh.rotation.y = car.heading;
+      log(`[bike racks] borrowed a ${look.kind}`);
     }
     if (choice.parked || choice.moving) {
       const taken = choice.moving ? trafficSystem.takeCar(cm.entities.person.position.x, cm.entities.person.position.z, 5) : null;
@@ -961,6 +1043,8 @@ async function initApp() {
     if (choice.beach) {
       // a kayak off the bank: the player's own goes in the water beside it, facing downstream
       const k = cm.entities.kayak, put = kayakLaunches.take(choice.beach.i);
+      cm.dressBoat('kayak');
+      liveryPart.made.release();
       k.position.set(put.x, put.y ?? k.position.y, put.z);
       k.heading = cm.downstreamHeading(put.x, put.z, k.heading);
       k.speed = k.driftX = k.driftZ = k.turnVel = 0;
@@ -968,7 +1052,33 @@ async function initApp() {
       k.mesh.rotation.y = k.heading;
       log(`[kayak] put in at ${choice.beach.name}`);
     }
+    if (choice.boat) {
+      // a kayak or pedal boat from the Gallup Park livery: the player's boat becomes it, there (gallup-livery.js)
+      const k = cm.entities.kayak, put = liveryPart.made.take(choice.boat.i);
+      cm.dressBoat(put.kind);
+      k.position.set(put.x, put.y, put.z);
+      k.heading = put.heading ?? cm.downstreamHeading(put.x, put.z, k.heading);
+      k.speed = k.driftX = k.driftZ = k.turnVel = 0;
+      k.mesh.position.copy(k.position);
+      k.mesh.rotation.y = k.heading;
+      log(`[livery] took a ${put.kind === 'paddleboat' ? 'pedal boat' : 'kayak'}`);
+    }
+    if (choice.pad) {
+      // a helicopter or plane off the airport's apron (airport.js): it's the player's now, and its spot stands empty
+      const h = cm.entities.helicopter;
+      const was = airportPart.made.take(choice.pad.i);
+      airportPart.made.dress(h, was.kind);
+      h.position.set(was.x, groundHeight(was.x, was.z) + 0.25, was.z);
+      h.heading = was.heading;
+      h.speed = h.verticalSpeed = h.pitchAngle = h.rollAngle = 0;
+      h.mesh.position.copy(h.position);
+      h.mesh.rotation.y = h.heading;
+      log(`[airport] took a parked ${was.kind}`);
+    }
+    if (choice.mode === 'car' && !choice.stairs && !choice.parked && !choice.moving && !choice.rack && !choice.machine &&
+      car.machine === 'stairtruck' && !airportPart.made.stairsHeld) airportPart.made.claimStairs?.(car.position.x, car.position.z);
     selectMode(choice.mode);
+    if (choice.mode === 'person' && was === 'car' && car.machine === 'stairtruck' && airportPart.made.stairsHeld) parkStairs();
     if (choice.jump) cm.bailOut(choice.jump);
     if (choice.jump === 'chute') {
       const on = input(), key = on.kind === 'keyboard' ? label('Space', on) : label(BUTTON.A, on);
@@ -1486,8 +1596,19 @@ async function initApp() {
     parkedCars.update(cameraSystem.camera);
     roadWork.update(dt, controllerManager.getActiveEntity(), controllerManager.activeMode, trafficSystem.cars, trafficSystem.buses);
     riverPeoplePart.made.update(dt, elapsed, cameraSystem.currentPos);
+    liveryPart.made.update(dt, elapsed, cameraSystem.currentPos,
+      controllerManager.activeMode === 'person' ? controllerManager.entities.person.position : null);
     planesPart.made.update(dt);
     scootersPart.made.update(dt, cameraSystem.currentPos);
+    racksPart.made.update(dt, cameraSystem.currentPos);
+    airportPart.made.update?.(dt, cameraSystem.currentPos);
+    {
+      // the truck the player drove the airstairs as is hidden while the airstairs it left stand in its place
+      const c = controllerManager.entities.car;
+      if (c.machine === 'stairtruck' && controllerManager.activeMode !== 'car' && !airportPart.made.stairsHeld) {
+        c.mesh.visible = !airportPart.made.nearestStairs?.(c.position.x, c.position.z, 1);
+      }
+    }
     moonPart.made.update(cameraSystem.camera);
     mark('trains & parked');
     const kayak = controllerManager.entities.kayak;
