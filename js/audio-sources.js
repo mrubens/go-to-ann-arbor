@@ -21,7 +21,7 @@ function driveLoad(keys, speed, cyclist) {
 function helicopterVerticalSpeed(entity) {
   const speed = Number.isFinite(entity.verticalSpeed) ? entity.verticalSpeed : 0;
   // The controller clamps altitude without clearing its stored vertical velocity.
-  return (aboveGround(entity.position) <= 0.25 && speed < 0) || (entity.position.y >= 380 && speed > 0) ? 0 : speed;
+  return (aboveGround(entity.position) <= 0.25 && speed < 0) || (entity.position.y >= 1500 && speed > 0) ? 0 : speed;
 }
 
 function helicopterLoad(entity, keys, verticalSpeed) {

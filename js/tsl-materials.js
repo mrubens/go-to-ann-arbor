@@ -3479,14 +3479,18 @@ function createGodRayMaterial() {
 /**
  * Soft Rounded-Rectangle Under-Vehicle Contact Shadow (Ambient Occlusion) TSL Material
  */
-function createContactShadowMaterial() {
+// `round`: a soft round darkening under someone's feet, faint at its edge, instead of a vehicle's rounded box
+function createContactShadowMaterial({ round = false } = {}) {
   const mat = new THREE.MeshBasicNodeMaterial({
     transparent: true,
     depthWrite: false,
     fog: false
   });
 
-  const shadowOpacity = Fn(() => {
+  const shadowOpacity = round ? Fn(() => {
+    const r = length(uv().sub(vec2(0.5, 0.5)).mul(2.0));
+    return smoothstep(1.0, 0.0, r).pow(1.6).mul(0.55);
+  })() : Fn(() => {
     const uvCentered = uv().sub(vec2(0.5, 0.5)).mul(2.0);
     const p = abs(uvCentered);
     // Rounded-box SDF in normalized [-1, 1]^2 quad coords with smooth falloff to 0 before quad edges

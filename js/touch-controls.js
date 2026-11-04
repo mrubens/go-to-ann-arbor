@@ -98,16 +98,20 @@ class TouchControls {
     if (this.root) this.root.hidden = !this.enabled || !this.available;
   }
 
+  setGetOutWords(words) {
+    if (!this.getInOut || !this.root) return;
+    this.getInOut.setAttribute('aria-label', words);
+    const label = this.root.querySelector('[data-touch-label="getinout"]');
+    if (label) label.textContent = words;
+  }
+
   setMode(mode) {
     if (!['person', 'car', 'cyclist', 'helicopter', 'kayak'].includes(mode)) return;
     this.reset();
     if (!this.root) return;
     if (this.getInOut) {
-      const words = mode === 'person' ? 'Get in' : 'Get out';
       this.getInOut.hidden = false;
-      this.getInOut.setAttribute('aria-label', words);
-      const label = this.root.querySelector('[data-touch-label="getinout"]');
-      if (label) label.textContent = words;
+      this.setGetOutWords(mode === 'person' ? 'Get in' : 'Get out');
     }
     const labels = { up: mode === 'helicopter' ? 'Ascend' : mode === 'car' ? 'Handbrake' : 'Jump', down: 'Descend' };
     for (const button of this.buttons) {

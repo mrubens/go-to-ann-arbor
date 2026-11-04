@@ -4,8 +4,9 @@ import { positionWorld, floor, fract, sin, dot, vec2, mix, color } from 'three/t
 import { drawOver } from './terrain.js';
 
 // Ann Arbor's park playgrounds, where OpenStreetMap has them (GEO.playgrounds from build-annarbor.py): wood-chip
-// ground on the real outline, a play tower with a slide in the middle, and a swing set beside it where there's room.
-// Each kind of equipment is one instanced mesh in vertex colours.
+// ground on the real outline, a play tower with a wide wave slide in the middle, and a swing set beside it where
+// there's room. Each kind of equipment is one instanced mesh in vertex colours. The slide is broad and gentle enough
+// to drive up like a ramp onto the deck (and off its far side): `top(x, z)` is its height, read by controllers.js.
 
 const GREEN = 0x2e6e45, RED = 0xc23b2c, BLUE = 0x2c5fae, YELLOW = 0xf2b705, DECK = 0x6b4a32, SEAT = 0x232323, CHAIN = 0x8a8a8a;
 
@@ -31,8 +32,11 @@ function post(r, x0, y0, z0, x1, y1, z1, hex) {
 
 const boxAt = (w, h, d, x, y, z, hex) => tinted(new THREE.BoxGeometry(w, h, d).translate(x, y, z), hex);
 
-// The play tower: a 1.25 m deck on four posts under a red roof, panels on two sides, a ladder up and a slide down
-// (along +x, about 6 m from ladder to the slide's foot; centred)
+// The play tower: a 1.25 m deck on four posts under a red roof, panels on two sides, a ladder up and a wide wave
+// slide down (along +x, about 7 m from ladder to the slide's foot; centred)
+const DECK_TOP = 1.3, SLIDE_LEN = 3.8, SLIDE_HALF = 1.15;
+// the slide's surface along it, from the deck's edge (0) to its foot (SLIDE_LEN): a gentle S, flat at both ends
+const slideY = (u) => { const t = Math.min(1, Math.max(0, u / SLIDE_LEN)); return DECK_TOP * (1 - t * t * (3 - 2 * t)) * 0.92 + DECK_TOP * 0.08 * (1 - t); };
 function towerGeometry() {
   const parts = [];
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) parts.push(post(0.065, sx, 0, sz, sx, 3.1, sz, GREEN));
@@ -42,12 +46,31 @@ function towerGeometry() {
     parts.push(boxAt(2.0, 0.75, 0.05, 0, 1.75, sz * 1.0, BLUE));
     parts.push(boxAt(2.0, 0.06, 0.08, 0, 2.15, sz * 1.0, YELLOW));
   }
-  // the slide, from the deck's edge to the ground 2.9 m out
-  const len = Math.hypot(2.9, 1.1), tilt = -Math.atan2(1.1, 2.9);
-  parts.push(tinted(new THREE.BoxGeometry(len, 0.05, 0.7).rotateZ(tilt).translate(1.15 + 1.45, 0.75, 0), YELLOW));
-  for (const sz of [-1, 1]) {
-    parts.push(tinted(new THREE.BoxGeometry(len, 0.24, 0.05).rotateZ(tilt).translate(1.15 + 1.45, 0.87, sz * 0.36), YELLOW));
+  // the wave slide: a broad yellow bed from the deck's edge to the ground 3.8 m out, low lips along its sides
+  const N = 16, bed = [], lip = [];
+  for (let i = 0; i <= N; i++) {
+    const u = (i / N) * SLIDE_LEN, y = slideY(u), x = 1.15 + u;
+    bed.push(x, y, -SLIDE_HALF, x, y, SLIDE_HALF, x, y - 0.06, -SLIDE_HALF, x, y - 0.06, SLIDE_HALF);
   }
+  const bedGeo = new THREE.BufferGeometry(), idx = [];
+  for (let i = 0; i < N; i++) {
+    const a = i * 4, b = a + 4;
+    idx.push(a, a + 1, b, a + 1, b + 1, b); // top
+    idx.push(a + 2, b + 2, a + 3, a + 3, b + 2, b + 3); // underside
+  }
+  bedGeo.setAttribute('position', new THREE.Float32BufferAttribute(bed, 3));
+  bedGeo.setIndex(idx);
+  bedGeo.computeVertexNormals();
+  parts.push(tinted(bedGeo, YELLOW));
+  for (const sz of [-1, 1]) {
+    for (let i = 0; i < N; i++) {
+      const u0 = (i / N) * SLIDE_LEN, u1 = ((i + 1) / N) * SLIDE_LEN, y0 = slideY(u0), y1 = slideY(u1);
+      const len = Math.hypot(u1 - u0, y1 - y0), tilt = Math.atan2(y1 - y0, u1 - u0);
+      lip.push(tinted(new THREE.BoxGeometry(len + 0.02, 0.14, 0.07).rotateZ(tilt)
+        .translate(1.15 + (u0 + u1) / 2, (y0 + y1) / 2 + 0.05, sz * (SLIDE_HALF + 0.03)), BLUE));
+    }
+  }
+  parts.push(...lip);
   // the ladder
   for (const sz of [-1, 1]) parts.push(post(0.04, -1.55, 0, sz * 0.32, -1.15, 1.9, sz * 0.32, GREEN));
   for (let k = 1; k <= 4; k++) {
@@ -82,8 +105,8 @@ function instanced(geo, mat, matrices) {
 
 // `flatGeo(rings, y)` makes the chips' ground; adds everything to `group`
 function buildPlaygrounds(group, list, flatGeo, toRing, y) {
-  if (!list || !list.length) return 0;
-  const chips = [], towers = [], swings = [];
+  if (!list || !list.length) return { count: 0, top: () => -Infinity };
+  const chips = [], towers = [], swings = [], sites = [];
   const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
   const place = (cx, cz, angle, along, across) => {
     const ax = Math.cos(angle), az = Math.sin(angle);
@@ -93,12 +116,10 @@ function buildPlaygrounds(group, list, flatGeo, toRing, y) {
   for (const [ring, cx, cz, angle, L, W] of list) {
     chips.push(flatGeo([toRing(ring)], y));
     if (L < 6.5 || W < 4.5) continue;
-    if (L >= 14 && W >= 6.5) {
-      towers.push(place(cx, cz, angle, -L * 0.22, 0));
-      swings.push(place(cx, cz, angle, L * 0.27, 0));
-    } else {
-      towers.push(place(cx, cz, angle, 0, 0));
-    }
+    const along = L >= 14 && W >= 6.5 ? -L * 0.22 : 0;
+    towers.push(place(cx, cz, angle, along, 0));
+    if (along) swings.push(place(cx, cz, angle, L * 0.27, 0));
+    sites.push({ x: cx + Math.cos(angle) * along, z: cz + Math.sin(angle) * along, c: Math.cos(angle), s: Math.sin(angle) });
   }
   const chipGeo = mergeGeometries(chips, false);
   // drawn in front of the lawn it sits on (drawOver, terrain.js): only a centimetre above it, the grass cut to the
@@ -113,7 +134,19 @@ function buildPlaygrounds(group, list, flatGeo, toRing, y) {
   const mat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.05 });
   if (towers.length) group.add(instanced(towerGeometry(), mat, towers));
   if (swings.length) group.add(instanced(swingGeometry(), mat, swings));
-  return towers.length;
+  // The deck's and the slide's height above the ground at (x, z), or -Infinity off them (in the tower's frame: the
+  // geometry's +x is `angle` in the world, the deck from x -2.25 to 0.05, the slide on from there)
+  const top = (x, z) => {
+    for (const p of sites) {
+      const dx = x - p.x, dz = z - p.z;
+      if (dx * dx + dz * dz > 25) continue;
+      const lx = dx * p.c + dz * p.s, lz = -dx * p.s + dz * p.c;
+      if (lx > -2.25 && lx < 0.05 && Math.abs(lz) < 1.15) return DECK_TOP;
+      if (lx >= 0.05 && lx < 0.05 + SLIDE_LEN && Math.abs(lz) < SLIDE_HALF) return slideY(lx - 0.05);
+    }
+    return -Infinity;
+  };
+  return { count: towers.length, top };
 }
 
 export { buildPlaygrounds };

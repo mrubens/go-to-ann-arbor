@@ -843,7 +843,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   function setBusy(value) { busy = clamp(value, 0.05, 1); crowdCheck = -Infinity; }
   const stats = () => ({ out: placedCount, perf: +perf.toFixed(2), share: +crowdShare.toFixed(2), busy });
 
-  return { peds, meshes: pedCrowd.meshes, update, setBusy, stats, setHitListener(fn) { onHit = fn; } };
+  return { peds, meshes: pedCrowd.meshes, update, setBusy, stats, setHitListener(fn) { onHit = fn; }, onRiderHit: (x, z, speed) => onHit?.(x, z, speed) };
 }
 
 export { createPedestrianSystem };

@@ -9,7 +9,12 @@ import { log } from '../lamp-game.js';
 // OpenStreetMap): at a signalised intersection, a mast arm on the far right corner of every approach with a head over
 // each of its lanes, lit by the same clock traffic obeys (the lens material picks red / amber / green by height above
 // the ground: 5.78 / 5.42 / 5.06 m); at a sign, a post at the right curb by the stop line, facing the drivers coming
-// up to it, with an ALL WAY plaque under the stop signs of an all-way stop.
+// up to it, with an ALL WAY plaque under the stop signs of an all-way stop; SPEED LIMIT signs where real ones stand.
+
+// The limit a street is posted at: OpenStreetMap's maxspeed or the city's (build-annarbor.py), else Ann Arbor's usual
+// for its class, as traffic.js drives it
+const CLASS_MPH = [55, 35, 30, 30, 25, 30, 25];
+const postedMph = (e) => e.mph || CLASS_MPH[e.cls ?? 4] || 25;
 
 const HEAD_Y = 5.42;
 const ARM_Y = 6.05;
@@ -103,6 +108,26 @@ function oneWayFace(back) {
     ctx.fillText('ONE WAY', back ? 151 : 105, 44);
   };
 }
+// SPEED LIMIT (MUTCD R2-1): black on white, 24 x 30 in, on a 256 x 320 canvas
+function limitFace(mph) {
+  return (ctx) => {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 256, 320);
+    ctx.strokeStyle = '#111214';
+    ctx.lineWidth = 9;
+    ctx.beginPath();
+    ctx.roundRect(12, 12, 232, 296, 18);
+    ctx.stroke();
+    ctx.fillStyle = '#111214';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 50px Inter, Arial, sans-serif';
+    ctx.fillText('SPEED', 128, 66);
+    ctx.fillText('LIMIT', 128, 120);
+    ctx.font = '800 136px Inter, Arial, sans-serif';
+    ctx.fillText(String(mph), 128, 228);
+  };
+}
 const silhouette = (shape) => (ctx) => {
   shape(ctx);
   ctx.fillStyle = '#ffffff';
@@ -188,6 +213,66 @@ function buildTrafficControls(group, network) {
       const [x, z] = at(e, 3, o);
       if (!onRoad(x, z)) { oneWayPost(e, 3, o); break; }
     }
+  }
+
+  // SPEED LIMIT signs, about where Ann Arbor puts them: on the right just past an intersection where the limit
+  // changes or a street begins (every main road; about half the side streets turned into off a bigger road), and
+  // again along the way, about every half mile on main roads and every third of a mile on collectors. Each edge runs
+  // one way, so each direction gets its own; a sign is left out where one for that limit and direction stands near.
+  const limits = new Map(); // mph -> how many
+  const placed = new Map(); // 300 m cell -> [{ x, z, dx, dz, mph }]
+  const cellKey = (x, z) => `${Math.floor(x / 300)},${Math.floor(z / 300)}`;
+  const near = (x, z, dx, dz, mph, gap) => {
+    const cx = Math.floor(x / 300), cz = Math.floor(z / 300), reach = Math.ceil(gap / 300);
+    for (let i = -reach; i <= reach; i++) for (let j = -reach; j <= reach; j++) {
+      for (const p of placed.get(`${cx + i},${cz + j}`) || []) {
+        if (p.mph === mph && p.dx * dx + p.dz * dz > 0.6 && (p.x - x) ** 2 + (p.z - z) ** 2 < gap * gap) return true;
+      }
+    }
+    return false;
+  };
+  const chance = (x, z) => { const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return v - Math.floor(v); };
+  const limitPost = (e, s, mph, gap) => {
+    const spot = curbside(e, s, e.half + 0.7);
+    if (!spot) return false;
+    const [px, pz] = spot;
+    if (near(px, pz, e.dx, e.dz, mph, gap)) return false;
+    const key = cellKey(px, pz);
+    if (!placed.has(key)) placed.set(key, []);
+    placed.get(key).push({ x: px, z: pz, dx: e.dx, dz: e.dz, mph });
+    const g = groundHeight(px, pz);
+    dummy.rotation.set(0, faceYaw(e), 0);
+    dummy.position.set(px, g + 1.2, pz);
+    dummy.scale.set(0.05, 2.4, 0.05);
+    obstacles.push(standing = { x: px, z: pz, r: 0.1, kind: 'sign', height: 2.4, parts: [] });
+    put('post');
+    dummy.position.set(px, g + 2.0, pz);
+    dummy.scale.set(0.61, 0.76, 1);
+    put('limit' + mph);
+    put('limitBack');
+    limits.set(mph, (limits.get(mph) || 0) + 1);
+    return true;
+  };
+  // where the limit changes or the street begins
+  for (const e of network.edges) {
+    if (!e.general || !e.lanes.length || (e.cls ?? 4) > 4 || e.len < 24) continue;
+    const mph = postedMph(e);
+    const ahead = (e.from.in || []).filter((p) => p.general && p.dx * e.dx + p.dz * e.dz > 0.7);
+    if (ahead.some((p) => postedMph(p) === mph)) continue;
+    const begins = !ahead.length;
+    const cls = e.cls ?? 4;
+    if (cls >= 4 && begins) {
+      const offBigger = (e.from.in || []).some((p) => (p.cls ?? 4) < cls);
+      if (!offBigger || chance(e.sx, e.sz) > 0.5) continue;
+    }
+    limitPost(e, Math.min(30, e.len * 0.5), mph, 150);
+  }
+  // and repeated along the way
+  for (const e of network.edges) {
+    const cls = e.cls ?? 4;
+    if (!e.general || !e.lanes.length || cls >= 4 || e.len < 40) continue;
+    const gap = cls <= 2 ? 800 : 550;
+    for (let s = 20; s < e.len - 15; s += 60) limitPost(e, s, postedMph(e), gap);
   }
   standing = null;
 
@@ -286,7 +371,10 @@ function buildTrafficControls(group, network) {
     plaque: [plane, face(plaqueFace), false],
     plaqueBack: [back, backOf(plaqueShape), false],
     oneWay: [plane, new THREE.MeshStandardNodeMaterial({ map: signTexture(oneWayFace(false), 86), roughness: 0.5 }), true],
-    oneWayBack: [back, new THREE.MeshStandardNodeMaterial({ map: signTexture(oneWayFace(true), 86), roughness: 0.5 }), false]
+    oneWayBack: [back, new THREE.MeshStandardNodeMaterial({ map: signTexture(oneWayFace(true), 86), roughness: 0.5 }), false],
+    limitBack: [back, new THREE.MeshStandardNodeMaterial({ color: 0x9a9ea2, roughness: 0.6, metalness: 0.5 }), false],
+    ...Object.fromEntries([...limits.keys()].map((mph) => ['limit' + mph,
+      [plane, new THREE.MeshStandardNodeMaterial({ map: signTexture(limitFace(mph), 320), roughness: 0.5 }), true]]))
   };
   const meshOf = new Map();
   for (const [name, matrices] of lists) {
@@ -307,7 +395,8 @@ function buildTrafficControls(group, network) {
     o.parts = parts;
   }
   group.userData.terrain = 'set'; // each was stood on the ground as it was placed
-  log(`[traffic controls] ${lights} signal heads, ${signs} stop & yield signs, ${oneWaySigns} one-way signs`);
+  log(`[traffic controls] ${lights} signal heads, ${signs} stop & yield signs, ${oneWaySigns} one-way signs, `
+    + `${[...limits.values()].reduce((a, b) => a + b, 0)} speed limit signs (${[...limits].sort((a, b) => a[0] - b[0]).map(([m, n]) => `${n} at ${m}`).join(', ')})`);
   const lamps = LAMPS.flatMap((lamp) => [[lamp, true, kinds[lamp + 'A'][1]], [lamp, false, kinds[lamp + 'B'][1]]]);
   const update = (time) => {
     for (const [lamp, mainRoad, mat] of lamps) mat.userData.on.value = signalPhase(time, mainRoad) === lamp ? 1 : 0;

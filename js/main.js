@@ -208,7 +208,7 @@ async function initApp() {
     // back from what that start saved: terrain.js)
     await setOnTerrain(g.getObjectByName('CityGrid'));
     return made;
-  }, { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/cascades.js', 'js/river.js', 'js/tsl-materials.js'] });
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/cascades.js', 'js/river.js', 'js/tsl-materials.js', 'js/playgrounds.js'] });
   const cityGrid = grid.made;
   restoreCityGrid(cityGrid.shared);
   markInit('cityGrid');
@@ -296,7 +296,7 @@ async function initApp() {
   }, { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic], from: [CITY_MAP, 'js/road-network.js'] });
   markInit('roadPaint');
   // Traffic lights and stop & yield signs where the road network put them (traffic-controls.js)
-  const controlsPart = live.keep('trafficControls', () => cityPart((g) => buildTrafficControls(g, traffic.made.network), { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic, details] });
+  const controlsPart = live.keep('trafficControls', () => cityPart((g) => buildTrafficControls(g, traffic.made.network), { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic, details], from: ['js/traffic-controls.js'] });
   // Signs over the real shops, restaurants and cafes (shop-signs.js, from OpenStreetMap)
   const signsPart = live.keep('shopSigns', () => cityPart((g) => buildShopSigns(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/shop-signs.js'] });
   await showLoadingStage('Laying the railroads...');
@@ -402,6 +402,8 @@ async function initApp() {
   controllerManager.parkedCars = parkedCars;
   controllerManager.kayakLaunches = kayakLaunches;
   controllerManager.roadWork = roadWork;
+  // the playgrounds' wave slides and decks, driven up like ramps (playgrounds.js)
+  controllerManager.playTop = cityGrid.playTop || null;
   controllerManager.potholes = potholes;
   controllerManager.railways = railways;
   // the maize sports car, or the black Forester it was before (an older save's own car)
@@ -720,8 +722,10 @@ async function initApp() {
   };
   // Getting in and out, in every mode
   for (const [mode, hints] of Object.entries(controlHints)) {
-    hints.push({ keys: ['KeyF'], pad: [BUTTON.X], does: mode === 'person' ? 'Get in' : 'Get out' });
+    hints.push({ keys: ['KeyF'], pad: [BUTTON.X], does: mode === 'person' ? 'Get in' : 'Get out', getOut: mode !== 'person' });
   }
+  // Getting out of a car on the move or the helicopter in the air is a jump, and its hint says so
+  let jumpOut = false;
   // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
   const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116, kayak: 12 };
 
@@ -744,7 +748,7 @@ async function initApp() {
       }
       const words = document.createElement('span');
       words.className = 'hint-label';
-      words.textContent = hint.does;
+      words.textContent = hint.getOut && jumpOut ? 'Jump out' : hint.does;
       item.appendChild(words);
       return item;
     });
@@ -781,6 +785,7 @@ async function initApp() {
     placeModeIndicator();
     const ent = controllerManager.getActiveEntity();
     if (elMode) elMode.textContent = ent.label;
+    jumpOut = false;
     renderControlHints(mode);
 
     // If currently on a static scenic camera, switch to 3rd-Person Chase so user sees their selected character/vehicle
@@ -806,6 +811,7 @@ async function initApp() {
     const cm = controllerManager;
     const p = cm.entities.person;
     p.fallen = null;
+    cm.dropChute();
     if (p.rig) p.rig.ragdolling = false;
     p.riding = null;
     cm.setMode('person');
@@ -859,11 +865,11 @@ async function initApp() {
   underwaterEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .25s;' +
     'background:radial-gradient(ellipse at 50% 35%, rgba(40,90,70,0), rgba(8,28,22,.18) 95%)';
   document.body.appendChild(underwaterEl);
-  function showNotice(text) {
+  function showNotice(text, secs = 1.6) {
     if (!noticeEl) { noticeEl = document.createElement('div'); noticeEl.className = 'notice'; document.body.appendChild(noticeEl); }
     noticeEl.textContent = text;
     noticeEl.classList.add('show');
-    noticeTimer = 1.6;
+    noticeTimer = secs;
   }
   function tickNotice(dt) {
     if (noticeTimer > 0 && (noticeTimer -= dt) <= 0) noticeEl?.classList.remove('show');
@@ -897,7 +903,6 @@ async function initApp() {
     }
     const choice = cm.enterOrExit(parkedCars, trafficSystem);
     if (!choice) return;
-    if (choice.tooFast) { showNotice('Slow down to get out'); return; }
     const car = cm.entities.car;
     let drop = null;
     if (choice.parked || choice.moving || choice.machine) {
@@ -950,6 +955,11 @@ async function initApp() {
       log(`[kayak] put in at ${choice.beach.name}`);
     }
     selectMode(choice.mode);
+    if (choice.jump) cm.bailOut(choice.jump);
+    if (choice.jump === 'chute') {
+      const on = input(), key = on.kind === 'keyboard' ? label('Space', on) : label(BUTTON.A, on);
+      showNotice(key ? `${key} to open your parachute` : 'Jump to open your parachute', 3);
+    }
     const at = cm.getActiveEntity().position;
     if (choice.mode === 'car' || was === 'car') audioSystem.cue('door', at, 0.9);
     savePlayerState();
@@ -1556,6 +1566,12 @@ async function initApp() {
       if (elFps) {
         elFps.textContent = String(currentFps);
         elFps.className = currentFps >= 50 ? 'fps-ok' : currentFps >= 30 ? 'fps-warn' : 'fps-bad';
+      }
+      const jumping = !!controllerManager.exitJump();
+      if (jumping !== jumpOut) {
+        jumpOut = jumping;
+        renderControlHints(mode);
+        touchControls.setGetOutWords(mode === 'person' ? 'Get in' : jumping ? 'Jump out' : 'Get out');
       }
       if (elSpeed) elSpeed.textContent = String(mph);
       if (elSpeedMeter) elSpeedMeter.style.transform = `scaleX(${Math.min(1, mph / (topSpeedMph[mode] || 80))})`;

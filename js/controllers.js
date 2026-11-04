@@ -100,8 +100,14 @@ const carDrive = (kind) => {
   d.grip *= 1.3; d.cornering *= 1.45; d.steer *= 1.6;
   return d;
 };
-// Faster than this (m/s, about 14 km/h) and the doors stay shut
+// Faster than this (m/s, about 14 km/h) and getting out of the car is a tumble out of its door
 const EXIT_SPEED = 4;
+// Higher than this (m) over the ground and out of the helicopter is a parachute jump
+const CHUTE_HEIGHT = 7;
+// The helicopter's ceiling: high enough for a long skydive (about half a minute of free fall); audio-sources.js has it too
+const HELI_CEILING = 1500;
+// The walking camera, which the fall and the bus change for a while and give back
+const WALK_CAMERA = { d: 4.8, h: 2.4, y: -0.35 };
 
 const BICYCLE_DRIVE = {
   speed: 19, reverseSpeed: 4.5, acceleration: 9,
@@ -443,6 +449,7 @@ class ThirdPersonControllerManager {
     // On foot from inside something: out beside it
     const ridden = mode === 'person' && person.riding ? this.entities[person.riding] : null;
     person.riding = mode === 'person' ? null : person.riding;
+    if (mode !== 'person' && person.chute) this.dropChute();
     this.activeMode = mode;
     if (ridden) {
       ridden.leftEmpty = true;
@@ -495,7 +502,7 @@ class ThirdPersonControllerManager {
       return { x: ent.position.x, z: ent.position.z };
     }
     const heli = this.activeMode === 'helicopter';
-    const altitude = heli ? Math.max(groundHeight(x, z) + 0.25, Math.min(380, savedAltitude ?? Math.max(92, ent.position.y))) : 0;
+    const altitude = heli ? Math.max(groundHeight(x, z) + 0.25, Math.min(HELI_CEILING, savedAltitude ?? Math.max(92, ent.position.y))) : 0;
     const destination = this.findTeleportPosition(x, z, heading, altitude);
     if (destination) {
       ent.position.x = destination.x;
@@ -510,6 +517,7 @@ class ThirdPersonControllerManager {
       ent._charHidden = false;
       if (ent.mesh) ent.mesh.visible = true;
       ent.fallen = null;
+      if (ent.chute) this.dropChute();
       ent.rig.ragdolling = false;
       ent.rig.reset(ent.position.x, ent.position.z, ent.heading, personGround, this);
       ent.crowd.begin();
@@ -615,9 +623,9 @@ class ThirdPersonControllerManager {
     const rig = new PersonRig({ seed: 4.2, scale: 1.0, girth: 1.02, hair: 0.18, armSwing: 1.0 });
 
     // Soft Under-Foot Contact Shadow (AO)
-    const shadowGeo = new THREE.PlaneGeometry(0.95, 0.95);
+    const shadowGeo = new THREE.PlaneGeometry(0.85, 0.85);
     shadowGeo.rotateX(-Math.PI * 0.5);
-    const pedShadow = new THREE.Mesh(shadowGeo, createContactShadowMaterial());
+    const pedShadow = new THREE.Mesh(shadowGeo, createContactShadowMaterial({ round: true }));
     pedShadow.position.y = 0.02;
     pedShadow.renderOrder = 998;
     root.add(pedShadow);
@@ -634,9 +642,9 @@ class ThirdPersonControllerManager {
       heading: Math.PI,
       speed: 0,
       verticalVel: 0,
-      cameraTargetOffset: new THREE.Vector3(0, 1.55, 0),
-      chaseDistance: 4.3,
-      chaseHeight: 1.95
+      cameraTargetOffset: new THREE.Vector3(0, WALK_CAMERA.y, 0),
+      chaseDistance: WALK_CAMERA.d,
+      chaseHeight: WALK_CAMERA.h
     };
   }
 
@@ -1278,7 +1286,8 @@ class ThirdPersonControllerManager {
     const free = (x, z) => {
       if (riverDepth(x, z) > 0.02) return false;
       const y = this.getGroundHeight(x, z, 'person');
-      for (const c of this.nearColliders(x, z, 3)) if (buildingContact(c, x, y, z, shape)) return false;
+      const inBowl = carSurface(x, z) !== null;
+      for (const c of this.nearColliders(x, z, 3)) if (!(inBowl && isStadium(c)) && buildingContact(c, x, y, z, shape)) return false;
       return true;
     };
     const sn = Math.sin(v.heading), cs = Math.cos(v.heading);
@@ -1321,14 +1330,28 @@ class ThirdPersonControllerManager {
   // F: out of whatever the player is in, or into the nearest thing to get into (their car, the bike, the kayak, the
   // helicopter, a parked car (`parked` finds one) or one going by in `traffic`). Says which mode to switch to, and the parked car to take; null
   // when there's nothing near to get into (or the helicopter is still in the air).
+  // How getting out would go now: 'chute' or 'drop' out of the helicopter in the air, 'thrown' out of a car on the
+  // move, null for stepping out
+  exitJump() {
+    const mode = this.activeMode, v = this.getActiveEntity();
+    if (mode === 'helicopter') {
+      const up = v.position.y - this.helicopterFloor(v, v.position.y);
+      if (up > 0.8) return up > CHUTE_HEIGHT ? 'chute' : 'drop';
+    }
+    if (mode === 'car' && Math.hypot(v.speed, v.vx || 0, v.vz || 0) > EXIT_SPEED) return 'thrown';
+    return null;
+  }
+
   enterOrExit(parked = null, traffic = null) {
     const mode = this.activeMode;
     const p = this.entities.person;
-    if (p.fallen && mode === 'person') return null;
+    if ((p.fallen || p.chute) && mode === 'person') return null;
     if (mode !== 'person') {
       const v = this.getActiveEntity();
-      if (mode === 'helicopter' && v.position.y - this.helicopterFloor(v, v.position.y) > 0.8) return null;
-      if (mode === 'car' && Math.hypot(v.speed, v.vx || 0, v.vz || 0) > EXIT_SPEED) return { tooFast: true };
+      // out of the helicopter in the air: a jump, under a parachute from high up; out of a car on the move: thrown
+      // out the door at its speed, and it rolls on without anyone (bailOut)
+      const jump = this.exitJump();
+      if (jump) { p.riding = mode; return { mode: 'person', jump }; }
       v.speed = 0;
       if (mode === 'car') this.stopCar(v);
       if (mode === 'helicopter') v.verticalSpeed = 0;
@@ -1378,10 +1401,18 @@ class ThirdPersonControllerManager {
     return !!b && !(b.park > 0.6 && !b.median);
   }
 
+  // Up on something driven like a ramp at (x, z), or -Infinity: a road work's dirt pile (road-work.js pileTop) or a
+  // playground's wave slide and deck (playgrounds.js, on the lawn's lift)
+  rampTop(x, z) {
+    const pile = this.roadWork?.pileTop(x, z) ?? -Infinity;
+    const play = this.playTop ? this.playTop(x, z) : -Infinity;
+    return play > -Infinity ? Math.max(pile, groundHeight(x, z) + 0.19 + play) : pile;
+  }
+
   getGroundHeight(x, z, mode = 'person') {
     // Lamp: the ground's own height there (terrain.js), with what's laid on it, and up on a road work's dirt pile
     // (road-work.js pileTop), which is driven and walked over like a ramp
-    const ground = Math.max(groundHeight(x, z), mode === 'kayak' ? -Infinity : (this.roadWork?.pileTop(x, z) ?? -Infinity));
+    const ground = Math.max(groundHeight(x, z), mode === 'kayak' ? -Infinity : this.rampTop(x, z));
     // Inside a big park drawn on its own (none in Ann Arbor: city-config.js BIG_PARK_BOUNDS is far away)
     const cp = BIG_PARK_BOUNDS;
     if (x > cp.minX && x < cp.maxX && z > cp.minZ && z < cp.maxZ) {
@@ -1392,7 +1423,10 @@ class ThirdPersonControllerManager {
     if (lawn && x > lawn.minX && x < lawn.maxX && z > lawn.minZ && z < lawn.maxZ) {
       return lawn.top;
     }
+    // on foot inside Michigan Stadium's wall: on its field, its rows (as one slope) and its parapet, as a car is
     if (mode === 'person') {
+      const st = carSurface(x, z);
+      if (st !== null) return stadiumGround() + st;
       return Math.max(ground + (this.isPointOnSidewalk(x, z) ? TOWN_BOUNDS.sidewalkHeight : 0.0), this.railways?.trackTop(x, z) ?? -Infinity);
     }
     if (mode === 'kayak') return waterLevel(x, z) ?? ground;
@@ -1478,6 +1512,8 @@ class ThirdPersonControllerManager {
       if (heli && (isStadium(c) || c.thin || standing?.has(c))) continue;
       // a car drives in over the stadium's wall and down its stands: its steps and walls are the ground (updateCar)
       if (carEntity && isStadium(c)) continue;
+      // and on foot inside it (got out there), its wall keeps the player in until they drive or fly out
+      if (!heli && isStadium(c) && carSurface(pos.x, pos.z) !== null) continue;
       // a roof the car came down on is its ground (carRoof), not a wall
       if (carEntity && this._carStanding?.has(c)) continue;
       // a parked car is a body of its own: the two trade momentum, and it's shoved along and spun (parked-cars.js)
@@ -1679,7 +1715,8 @@ class ThirdPersonControllerManager {
         p._charHidden = false;
         if (p.mesh) p.mesh.visible = true;
         const air = p.position.y - this.getGroundHeight(p.position.x, p.position.z, 'person');
-        if (p.fallen?.getUp >= 0) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, 0, true, DIVE_GET_UP + p.fallen.getUp);
+        if (p.chute) p.rig.skydive(dt, p.position.x, p.position.y + 0.5 + 0.45 * p.chute.open, p.position.z, p.heading, p.chute.flat || 0, p.chute.bank || 0, p.chute.track || 0, p.chute.open);
+        else if (p.fallen?.getUp >= 0) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, 0, true, DIVE_GET_UP + p.fallen.getUp);
         else if (!p.fallen) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, air > 0.02 ? air : 0);
         p.crowd.begin();
         p.crowd.add(p.rig, 0);
@@ -1793,6 +1830,7 @@ class ThirdPersonControllerManager {
     } else if (this.activeMode === 'kayak') {
       this.updateKayak(dt, elapsed);
     }
+    this.coastEmpty(dt);
 
     for (const key of Object.keys(this.entities)) {
       const e = this.entities[key];
@@ -1806,9 +1844,9 @@ class ThirdPersonControllerManager {
           if (e.airborne) {
             e.airRoll *= Math.exp(-dt * 1.5);
             pitch = e.airPitch; roll = e.airRoll;
-          } else if (carSurface(e.position.x, e.position.z) !== null || this.roadWork?.pileTop(e.position.x, e.position.z) > -Infinity
-            || this.roadWork?.pileTop(e.position.x + Math.sin(e.heading) * 2.1, e.position.z + Math.cos(e.heading) * 2.1) > -Infinity
-            || this.roadWork?.pileTop(e.position.x - Math.sin(e.heading) * 2.1, e.position.z - Math.cos(e.heading) * 2.1) > -Infinity) {
+          } else if (carSurface(e.position.x, e.position.z) !== null || this.rampTop(e.position.x, e.position.z) > -Infinity
+            || this.rampTop(e.position.x + Math.sin(e.heading) * 2.1, e.position.z + Math.cos(e.heading) * 2.1) > -Infinity
+            || this.rampTop(e.position.x - Math.sin(e.heading) * 2.1, e.position.z - Math.cos(e.heading) * 2.1) > -Infinity) {
             const s = Math.sin(e.heading), co = Math.cos(e.heading), g = (dx, dz) => this.getGroundHeight(e.position.x + dx, e.position.z + dz, 'car');
             pitch = Math.atan2(g(s * 2.1, co * 2.1) - g(-s * 2.1, -co * 2.1), 4.2);
             roll = Math.atan2(g(-co * 0.9, s * 0.9) - g(co * 0.9, -s * 0.9), 1.8);
@@ -1895,12 +1933,231 @@ class ThirdPersonControllerManager {
     log(`[moto] thrown off at ${Math.round(speed * 2.237)} mph`);
   }
 
+  // Out of something still moving (enterOrExit's `jump`), once on foot: out of the helicopter's door falling, under a
+  // parachute that opens a moment later from high up ('chute') or straight down from low ('drop'); out of a moving car
+  // thrown as it carried them ('thrown'), tumbling limp to a stop. What they left goes on without them (coastEmpty).
+  bailOut(kind) {
+    const p = this.entities.person;
+    if (kind === 'thrown') {
+      const c = this.entities.car;
+      if (c.bike) { this.throwMotoRider(Math.abs(c.speed)); return; }
+      const sn = Math.sin(c.heading), cs = Math.cos(c.heading);
+      const vx = sn * c.speed + (c.vx || 0), vz = cs * c.speed + (c.vz || 0), v = Math.hypot(vx, vz);
+      // out of the driver's door, on the car's left, pushed a little away from it
+      p.position.set(c.position.x + cs * 1.1, c.position.y + 0.5, c.position.z - sn * 1.1);
+      p.heading = c.heading;
+      p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
+      c.leftEmpty = true;
+      c.coasting = true;
+      this.knockDown(vx * 0.92 + cs * 2.2, 1.4 + v * 0.06, vz * 0.92 - sn * 2.2, (hash01(v) - 0.5) * 5, 0.6 + v * 0.05);
+      log(`[car] jumped out at ${Math.round(v * 2.237)} mph`);
+      return;
+    }
+    const h = this.entities.helicopter;
+    const sn = Math.sin(h.heading), cs = Math.cos(h.heading);
+    p.position.set(h.position.x + cs * 1.6, h.position.y + 0.4, h.position.z - sn * 1.6);
+    p.heading = h.heading;
+    p.speed = h.speed * 0.9;
+    p.verticalVel = Math.min(0, h.verticalSpeed);
+    p.grounded = false;
+    // the canopy opens when the player pulls it (the jump button, pressed afresh: one held to climb doesn't count)
+    p.chute = kind === 'chute' ? { t: 0, open: 0, pulled: false, held: !!this.keys.up, vx: sn * h.speed, vz: cs * h.speed, sway: 0 } : null;
+    if (p.chute) {
+      // the camera falls back and looks up past the player to take in the canopy (eased in updateChute, back on landing)
+      p.walkCamera = true;
+    }
+    p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
+    h.coasting = true;
+    log(kind === 'chute' ? `[helicopter] jumped out ${Math.round(h.position.y - this.helicopterFloor(h, h.position.y))} m up with a parachute` : '[helicopter] jumped down');
+  }
+
+  // A round canopy in maize and blue panels on its shroud lines, made the first time it's needed
+  parachute() {
+    if (this._chuteMesh) return this._chuteMesh;
+    const root = new THREE.Group();
+    const geo = new THREE.SphereGeometry(3.4, 16, 6, 0, Math.PI * 2, 0, Math.PI * 0.42).toNonIndexed();
+    geo.scale(1, 0.62, 1);
+    const n = geo.attributes.position.count, col = new Float32Array(n * 3);
+    const a = new THREE.Color(0xffcb05).convertSRGBToLinear(), b = new THREE.Color(0x00274c).convertSRGBToLinear();
+    for (let i = 0; i < n; i += 3) {
+      const x = (geo.attributes.position.getX(i) + geo.attributes.position.getX(i + 1) + geo.attributes.position.getX(i + 2)) / 3;
+      const z = (geo.attributes.position.getZ(i) + geo.attributes.position.getZ(i + 1) + geo.attributes.position.getZ(i + 2)) / 3;
+      const k = Math.floor(((Math.atan2(z, x) / (Math.PI * 2)) + 1) * 16) % 2 ? b : a;
+      for (let j = 0; j < 3; j++) col.set([k.r, k.g, k.b], (i + j) * 3);
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const canopy = new THREE.Mesh(geo, new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.8, side: THREE.DoubleSide }));
+    canopy.castShadow = true;
+    canopy.position.y = 4.6;
+    root.add(canopy);
+    // the shroud lines, from the canopy's edge down to the harness at the shoulders
+    const pts = [], rim = 3.4 * Math.sin(Math.PI * 0.42), rimY = 4.6 + 3.4 * 0.62 * Math.cos(Math.PI * 0.42);
+    for (let i = 0; i < 12; i++) {
+      const t = (i / 12) * Math.PI * 2;
+      pts.push(Math.cos(t) * rim, rimY, Math.sin(t) * rim, (i % 2 ? 0.18 : -0.18), 1.45, 0);
+    }
+    const lines = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)),
+      new THREE.LineBasicNodeMaterial({ color: 0xdddddd }));
+    root.add(lines);
+    root.visible = false;
+    this.scene.add(root);
+    this._chuteMesh = root;
+    return root;
+  }
+
+  // Under the parachute: falling free for a moment, then the canopy opens and slows the fall to a glide. Forward
+  // speeds it up, back slows it, and left and right turn it; on the ground the player is on foot again.
+  updateChute(dt) {
+    const p = this.entities.person, ch = p.chute, mesh = this.parachute();
+    ch.t += dt;
+    if (!this.keys.up) ch.held = false;
+    if (!ch.pulled && this.keys.up && !ch.held && ch.t > 0.3) { ch.pulled = true; log('[parachute] opened'); }
+    if (ch.pulled) ch.open = Math.min(1, ch.open + dt * 1.6);
+    // the camera: above and behind in free fall, looking down at the body; under the canopy, back and level with
+    // the harness, looking up between the body and the canopy so both stay in frame
+    const w = p.walkCamera, e = Math.min(1, dt * 3);
+    if (w) {
+      p.chaseDistance += (6 + 7 * ch.open - p.chaseDistance) * e;
+      p.chaseHeight += (3.2 - 2.4 * ch.open - p.chaseHeight) * e;
+      p.cameraTargetOffset.y += (-1.4 + 3.6 * ch.open - p.cameraTargetOffset.y) * e;
+    }
+    // steering: in free fall the body turns quickly and tracks forward (lean in, glide up to about 30 m/s, or back
+    // off to drift backwards); under the canopy it turns slowly and glides on its own
+    const turn = (this.keys.left || 0) - (this.keys.right || 0);
+    const fwd = (this.keys.forward || 0) - (this.keys.backward || 0);
+    const free = 1 - ch.open;
+    p.heading += turn * (2.6 * free + 0.9 * ch.open) * dt;
+    ch.sway += (turn * 0.35 - ch.sway) * Math.min(1, dt * 2);
+    ch.bank = (ch.bank || 0) + (turn * 0.45 - (ch.bank || 0)) * Math.min(1, dt * 4);
+    ch.flat = Math.max(0, Math.min(1, (ch.flat || 0) + dt * (ch.pulled ? -2.5 : 2.4)));
+    // tracking (forward in free fall): arms swept back, the body dives head-down and trades fall for speed ahead
+    ch.track = (ch.track || 0) + (Math.max(0, fwd) * (ch.pulled ? 0 : 1) - (ch.track || 0)) * Math.min(1, dt * 3);
+    const glide = free * (fwd < 0 ? 3 + 6 * fwd : 3 + 27 * fwd) + ch.open * (6 + 4 * fwd);
+    const k = Math.min(1, dt * (2.6 * free + ch.open * 1.5));
+    ch.vx += (Math.sin(p.heading) * glide - ch.vx) * k;
+    ch.vz += (Math.cos(p.heading) * glide - ch.vz) * k;
+    p.position.x += ch.vx * dt;
+    p.position.z += ch.vz * dt;
+    this.resolveHorizontalCollision(p.position, 0.48);
+    // free fall, then the canopy's drag down to about 5 m/s
+    p.verticalVel = Math.max(-50 + 16 * ch.track, p.verticalVel - 14.5 * dt);
+    if (p.verticalVel < -50 + 16 * ch.track) p.verticalVel += (-50 + 16 * ch.track - p.verticalVel) * Math.min(1, dt * 2);
+    if (ch.open > 0) p.verticalVel += (-4.8 - p.verticalVel) * Math.min(1, dt * 4 * ch.open);
+    p.position.y += p.verticalVel * dt;
+    // the speed ahead, which also swings the camera back behind the way the body faces, so forward is away from it
+    p.speed = Math.hypot(ch.vx, ch.vz);
+    mesh.visible = ch.open > 0;
+    mesh.position.copy(p.position);
+    mesh.rotation.set(0, p.heading, 0);
+    mesh.rotateZ(-ch.sway);
+    mesh.scale.set(0.2 + 0.8 * ch.open, 0.35 + 0.65 * ch.open, 0.2 + 0.8 * ch.open);
+    // the scene's matrices update only for the moving things main.js lists, so this one places itself
+    mesh.updateMatrixWorld(true);
+    this.groundShadow(p, this.getGroundHeight(p.position.x, p.position.z, 'person'));
+    const groundY = this.getGroundHeight(p.position.x, p.position.z, 'person');
+    if (p.position.y <= groundY) {
+      this.groundShadow(p, groundY);
+      const fall = -p.verticalVel;
+      p.position.y = groundY;
+      p.speed = 0;
+      this.dropChute();
+      p.grounded = true;
+      if (fall > 9) {
+        // never pulled (or too late): a splat, flat out for a few seconds before getting up
+        log(`[parachute] ${ch.pulled ? 'came down hard' : 'splat'} at ${Math.round(fall)} m/s`);
+        this.knockDown(ch.vx * 0.3, 0.6, ch.vz * 0.3, 0, 1.4);
+        p.fallen.wait = Math.min(4, 1 + fall * 0.08);
+      } else {
+        log('[parachute] landed');
+        p.verticalVel = 0;
+      }
+    }
+  }
+
+  // The soft shadow under the player's feet stays on the ground under them, fading as they rise above it (a jump, a
+  // fall from the helicopter) instead of riding along at their feet in the air
+  groundShadow(p, groundY) {
+    const sh = p._footShadow ??= p.mesh.children.find((c) => c.renderOrder === 998);
+    if (!sh) return;
+    const up = Math.max(0, p.position.y - groundY);
+    sh.position.y = 0.02 - up;
+    sh.visible = up < 6;
+    sh.scale.setScalar(1 + up * 0.15);
+    sh.material.opacity = 1;
+    sh.updateMatrixWorld(true);
+  }
+
+  // Back to the walking camera's own framing (not a copy taken as the fall began, which a fall cut short by a change
+  // of the game's code could leave set to the canopy's: the player low in the frame, looking up past them)
+  walkCamera(p) {
+    p.chaseDistance = WALK_CAMERA.d;
+    p.chaseHeight = WALK_CAMERA.h;
+    p.cameraTargetOffset.y = WALK_CAMERA.y;
+    p.walkCamera = null;
+  }
+
+  dropChute() {
+    const p = this.entities.person;
+    p.chute = null;
+    if (this._chuteMesh) this._chuteMesh.visible = false;
+    p.walkCamera = null; // updatePerson eases the camera back to walking
+  }
+
+  // What the player got out of while it was moving: the car rolls on, slowing, until it stops or hits something; the
+  // helicopter, its rotor still turning, sinks to the ground
+  coastEmpty(dt) {
+    const c = this.entities.car;
+    if (c?.coasting && this.activeMode !== 'car') {
+      const sp = Math.sign(c.speed) * Math.max(0, Math.abs(c.speed) - 2.2 * dt);
+      c.speed = sp;
+      c.vx = (c.vx || 0) * Math.max(0, 1 - dt * 3);
+      c.vz = (c.vz || 0) * Math.max(0, 1 - dt * 3);
+      c.heading += (c.angularVel || 0) * dt;
+      c.angularVel = (c.angularVel || 0) * Math.max(0, 1 - dt * 2);
+      const sn = Math.sin(c.heading), cs = Math.cos(c.heading);
+      c.position.x += (sn * sp + c.vx) * dt;
+      c.position.z += (cs * sp + c.vz) * dt;
+      c.position.y = this.getGroundHeight(c.position.x, c.position.z, 'car');
+      const body = collisionBody('car', 1.2, c.heading), hit = this._coastContact ??= { nx: 0, nz: 0, depth: 0 };
+      for (const k of this.nearColliders(c.position.x, c.position.z, 8)) {
+        if (isStadium(k) || k.parked || k.thin) continue;
+        if (buildingContact(k, c.position.x, c.position.y, c.position.z, body, hit)) {
+          c.position.x += hit.nx * hit.depth;
+          c.position.z += hit.nz * hit.depth;
+          c.speed *= -0.15;
+          c.vx = c.vz = 0;
+        }
+      }
+      if (Math.abs(c.speed) < 0.05 && Math.hypot(c.vx, c.vz) < 0.05) { c.coasting = false; this.stopCar(c); }
+    }
+    const h = this.entities.helicopter;
+    if (h?.coasting && this.activeMode !== 'helicopter') {
+      h.speed *= Math.max(0, 1 - dt * 0.6);
+      h.verticalSpeed += (-7 - h.verticalSpeed) * Math.min(1, dt * 1.5);
+      h.position.x += Math.sin(h.heading) * h.speed * dt;
+      h.position.z += Math.cos(h.heading) * h.speed * dt;
+      const lastY = h.position.y;
+      h.position.y += h.verticalSpeed * dt;
+      const floor = this.helicopterFloor(h, lastY);
+      h.pitchAngle *= Math.max(0, 1 - dt * 2);
+      h.rollAngle *= Math.max(0, 1 - dt * 2);
+      h.tiltPivot.rotation.x = h.pitchAngle;
+      h.tiltPivot.rotation.z = h.rollAngle;
+      if (h.position.y <= floor) {
+        h.position.y = floor;
+        h.speed = h.verticalSpeed = 0;
+        h.coasting = false;
+        log('[helicopter] came down on its own');
+      }
+    }
+  }
+
   // On a bus (main.js getInOrOut): carried in it, out of sight, the camera pulled back to see the bus; off at its
   // door, on the curb
   getOnBus(ride) {
     const p = this.entities.person;
     p.onBus = true;
-    p.walkCamera = { d: p.chaseDistance, h: p.chaseHeight };
+    p.walkCamera = true;
     p.chaseDistance = 17;
     p.chaseHeight = 4.2;
     p.speed = p.verticalVel = 0;
@@ -1915,7 +2172,7 @@ class ThirdPersonControllerManager {
     const p = this.entities.person;
     if (!p.onBus) return;
     p.onBus = false;
-    if (p.walkCamera) { p.chaseDistance = p.walkCamera.d; p.chaseHeight = p.walkCamera.h; }
+    this.walkCamera(p);
     if (ride) {
       p.position.set(ride.doorX, this.getGroundHeight(ride.doorX, ride.doorZ, 'person'), ride.doorZ);
       p.heading = ride.yaw + Math.PI / 2;
@@ -1933,9 +2190,19 @@ class ThirdPersonControllerManager {
       if (ride && !ride.gone) { this.rideAlong(ride); p.speed = 0; return; }
       this.getOffBus(ride);
     }
+    if (p.chute) { this.updateChute(dt); return; }
+    // the walking camera, eased back from the fall's framing; with the player down on the ground (a splat, knocked
+    // flat) it rises and looks down at them instead of ahead over their head
+    if (!p.onBus) {
+      const down = !!p.fallen, e = Math.min(1, dt * 4);
+      p.chaseDistance += ((down ? 5.2 : WALK_CAMERA.d) - p.chaseDistance) * e;
+      p.chaseHeight += ((down ? 3 : WALK_CAMERA.h) - p.chaseHeight) * e;
+      p.cameraTargetOffset.y += ((down ? -1.3 : WALK_CAMERA.y) - p.cameraTargetOffset.y) * e;
+    }
     if (p.fallen) {
       if (p.fallen.getUp < 0) {
-        if (p.rig.stepRagdoll(dt, personGround, this, true)) {
+        // a splat lies still a few seconds (`wait`) before getting up
+        if (p.rig.stepRagdoll(dt, personGround, this, true) && !((p.fallen.wait -= dt) > 0)) {
           p.heading = p.rig.yaw = p.rig.ragdollHeading();
           p.rig.ragdolling = false;
           p.fallen.getUp = 0;
@@ -1973,6 +2240,7 @@ class ThirdPersonControllerManager {
     p.verticalVel -= 14.5 * dt;
     p.position.y += p.verticalVel * dt;
     // Lamp: walking downhill, or off a curb, keeps the feet on the ground rather than stepping into the air
+    this.groundShadow(p, groundY);
     if (p.position.y < groundY || (grounded && p.verticalVel <= 0 && p.position.y - groundY < 0.4)) {
       p.position.y = groundY;
       p.verticalVel = 0;
@@ -2181,8 +2449,8 @@ class ThirdPersonControllerManager {
     if (ul > 1e-4) {
       const bx = x - (ux / ul) * back, bz = z - (uz / ul) * back;
       const behind = Math.max(this.getGroundHeight(bx, bz, 'car'), this.carRoof(c, bx, bz, prevY, false));
-      // up a dirt pile's ramp (road-work.js) it climbs its full slope, so it flies off the top
-      const steep = this.roadWork?.pileTop(x, z) > -Infinity ? 1.0 : 0.45;
+      // up a dirt pile's or a slide's ramp it climbs its full slope, so it flies off the top
+      const steep = this.rampTop(x, z) > -Infinity ? 1.0 : 0.45;
       slopeVy = Math.max(-0.45, Math.min(steep, (ground - behind) / back)) * (ul / dt);
     }
     const ballistic = prevY + c.vy * dt - 4.9 * dt * dt;
@@ -2445,7 +2713,8 @@ class ThirdPersonControllerManager {
   updateHelicopter(dt, elapsed) {
     const h = this.entities.helicopter;
     const maxHorizSpeed = 52.0;
-    const maxVertSpeed = 16.0;
+    // it climbs faster once well above the rooftops, so the ceiling is a minute and a half away, not three
+    const maxVertSpeed = 16.0 + 14 * Math.min(1, Math.max(0, (h.position.y - 250) / 250));
 
     let fwdInput = 0;
     if (this.keys.forward) fwdInput = this.keys.forward;
@@ -2487,7 +2756,7 @@ class ThirdPersonControllerManager {
     if (h.position.y < floor) {
       this.reportCollision(h, groundCollider, 'ground', h.position.x, floor, h.position.z, 0, 1, 0, -h.verticalSpeed);
     }
-    h.position.y = Math.max(floor, Math.min(380, h.position.y));
+    h.position.y = Math.max(floor, Math.min(HELI_CEILING, h.position.y));
     this.resolveHorizontalCollision(h.position, 4.5, null, h);
 
     const targetPitch = (h.speed / maxHorizSpeed) * 0.24;

@@ -1872,7 +1872,7 @@ function buildCityGrid(scene) {
   }
 
   // Park playgrounds (playgrounds.js, GEO.playgrounds)
-  buildPlaygrounds(group, GEO.playgrounds, flatGeo, toRing, LAWN_Y + 0.01);
+  const playgrounds = buildPlaygrounds(group, GEO.playgrounds, flatGeo, toRing, LAWN_Y + 0.01);
   // Golf courses' fairways, greens, tees, bunkers, cart paths and pins (golf.js, GEO.golf)
   buildGolf(group, GEO.golf, flatGeo, toRing, LAWN_Y + 0.006);
   buildTrails(group, GEO.trails, LAWN_Y + 0.03);
@@ -1961,7 +1961,7 @@ function buildCityGrid(scene) {
   // the module runs again in place (restoreCityGrid) instead of leaving them empty (the parks' and woods' trees)
   const shared = { bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes, pavedPlazaRects, sidewalkBlocks, fdrViaduct,
     streetGroundSurfaces };
-  return { group, sidewalks, footprints, highwayLanes, colliders, shared };
+  return { group, sidewalks, footprints, highwayLanes, colliders, shared, playTop: playgrounds.top };
 }
 
 // Puts back what a kept grid shared (buildCityGrid's `shared`) after this module ran again in place

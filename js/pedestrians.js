@@ -1339,7 +1339,15 @@ class PersonRig {
    * pedestrians: their gait and planted feet still advance, while bone transforms wait until they are drawn.
    * `diveTime` is elapsed seconds in an evasive dive, or -1 for ordinary locomotion.
    */
+  // Posed on a ride (ride, perch and the like), sitting where its root is
+  seat() {
+    this.perched = true;
+    this.x = _rootPos.x;
+    this.z = _rootPos.z;
+  }
+
   update(dt, x, z, heading, ground, owner = null, air = 0, updatePose = true, diveTime = -1) {
+    this.perched = false;
     const dx = x - this.x;
     const dz = z - this.z;
     if (!this.placed || dx * dx + dz * dz > 9) {
@@ -1730,7 +1738,10 @@ class PersonRig {
   // side's shoulder, elbow, hand, hip, knee and ankle.
   startRagdoll(vx, vy, vz, spin = 0, tip = 0) {
     const s = this.s, a = this.pose;
-    if (!this.diving && !this.ragdolling) this.solve(); // the pose a hidden person was last drawn in may be old
+    // the pose a hidden person was last drawn in may be old; a rider's is the one on their ride, which the walking
+    // body's solve would throw away for wherever they last walked
+    if (!this.diving && !this.ragdolling && !this.perched) this.solve();
+    this.perched = false;
     const P = this.rag || (this.rag = { p: new Float32Array(RAG_N * 3), o: new Float32Array(RAG_N * 3), len: new Float32Array(RAG_LINKS.length), time: 0, still: 0 });
     const joint = (b, out) => {
       const o = b * 8;
@@ -1892,6 +1903,48 @@ class PersonRig {
     }
   }
 
+  // Free fall, belly to the ground: the body tips flat over its first moments out (`flat` 0 to 1), back arched, head
+  // up, arms spread and bent up by the head, knees bent and spread with the feet raised behind; `bank` rolls it into
+  // a turn, and `track` sweeps the arms back to the hips and straightens the legs for a head-down dive ahead. The
+  // pelvis is at (x, y, z); the limbs flutter a little in the wind. Under the open canopy (`hang` 1, `flat` 0) it
+  // hangs upright in the harness, hands up on the steering toggles.
+  skydive(dt, x, y, z, heading, flat, bank, track = 0, hang = 0) {
+    const s = this.s;
+    if (!this.placed) this.placed = true;
+    this.time += Math.min(Math.max(dt, 1e-4), 0.1);
+    this.x = x;
+    this.z = z;
+    this.yaw = heading;
+    this.vx = this.vz = this.tvx = this.tvz = this.speed = this.gait = this.run = 0;
+    this.diving = false;
+    const base = 0.35 * (1 - hang), t = this.time, f = flat, tr = track * flat, hg = hang * (1 - flat);
+    const pitch = base + (1.5 - base) * smooth(0, 1, flat) + 0.3 * tr;
+    const flutter = (k) => 0.025 * Math.sin(t * 17 + k * 2.3) + 0.015 * Math.sin(t * 29 + k);
+    qY(_qRoot, heading).multiply(qZ(_q, -bank * f));
+    _qPelvis.copy(_qRoot).multiply(qX(_q, pitch));
+    _pelvis.set(x, y, z);
+    this.pelvisY = y;
+    this.writeBone(BONE.PELVIS, _qPelvis, _pelvis);
+    _qChest.copy(_qRoot).multiply(qX(_q, pitch - 0.22 * f));
+    this.writeBone(BONE.CHEST, _qChest, this.jointFrom(BONE.PELVIS, BONE.CHEST, _qPelvis, _pelvis, _chest));
+    _qa.copy(_qRoot).multiply(qX(_q, pitch - 0.75 * f));
+    this.writeBone(BONE.HEAD, _qa, this.jointFrom(BONE.CHEST, BONE.HEAD, _qChest, _chest, _v));
+    _front.set(0, 0, 1).applyQuaternion(_qChest);
+    for (let i = 0; i < 2; i++) {
+      const side = SIDES[i];
+      // a point in the chest's or the pelvis's frame (+y along the spine to the head, +z the belly, +x left)
+      this.jointFrom(BONE.CHEST, LIMB.upperArm[i], _qChest, _chest, _shoulder);
+      _target.set(side * lerp(lerp(lerp(0.3, 0.6, f), 0.3, tr), 0.24, hg), lerp(lerp(lerp(0.05, 0.5, f), -0.32, tr), 0.72, hg) + flutter(i) * (1 - hg), lerp(lerp(lerp(0.15, -0.12, f), -0.18, tr), 0.04, hg)).multiplyScalar(s).applyQuaternion(_qChest).add(_chest);
+      _pole.set(side * 0.8, -0.4, -0.5).applyQuaternion(_qChest);
+      this.limb(LIMB.upperArm[i], LIMB.forearm[i], _shoulder, _target, UPPER_ARM * s, (FOREARM + 0.07) * s, _pole, _front, side * ARM_BIND_ABDUCTION);
+      this.jointFrom(BONE.PELVIS, LIMB.thigh[i], _qPelvis, _pelvis, _hip);
+      _target.set(side * lerp(lerp(0.12, 0.36, f), 0.16, tr), lerp(lerp(-0.85, -0.68, f), -0.82, tr), lerp(lerp(0, -0.32, f), -0.1, tr) + flutter(i + 2)).multiplyScalar(s).applyQuaternion(_qPelvis).add(_pelvis);
+      _pole.set(side * 0.35, 0, 1).applyQuaternion(_qPelvis);
+      const ankle = this.limb(LIMB.thigh[i], LIMB.shin[i], _hip, _target, THIGH * s, SHIN * s, _pole, _front);
+      this.writeFoot(i, ankle, _qa.copy(_qPelvis).multiply(qX(_q, 0.9 * f)), 0);
+    }
+  }
+
   // Grounded escape animation, independent of the walking gait and evaluated only for visible people.
   solveDive(time, groundY) {
     const s = this.s;
@@ -1997,6 +2050,7 @@ class PersonRig {
     this.run = 0;
     root.updateWorldMatrix(true, false);
     root.matrixWorld.decompose(_rootPos, _qRoot, _v);
+    this.seat(); // the pose written here is the one a throw starts from (startRagdoll), not the walking body's
     const toWorld = (local) => local.applyQuaternion(_qRoot).add(_rootPos);
 
     // Pelvis on the saddle, leaning forward; chest further forward, head up looking ahead
@@ -2046,6 +2100,7 @@ class PersonRig {
     this.run = 0;
     root.updateWorldMatrix(true, false);
     root.matrixWorld.decompose(_rootPos, _qRoot, _v);
+    this.seat(); // the pose written here is the one a throw starts from (startRagdoll), not the walking body's
     const toWorld = (local) => local.applyQuaternion(_qRoot).add(_rootPos);
 
     // Sitting up on the seat, the chest turning with each stroke, head looking ahead
@@ -2089,6 +2144,7 @@ class PersonRig {
     this.placed = false;
     root.updateWorldMatrix(true, false);
     root.matrixWorld.decompose(_rootPos, _qRoot, _v);
+    this.seat(); // the pose written here is the one a throw starts from (startRagdoll), not the walking body's
     const toWorld = (local) => local.applyQuaternion(_qRoot).add(_rootPos);
 
     const lean = Math.atan2(p.shoulder[2] - p.hip[2], p.shoulder[1] - p.hip[1]);

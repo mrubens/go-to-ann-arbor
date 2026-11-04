@@ -30,7 +30,7 @@ import {
 } from './bus.js';
 import { groundHeight, groundTilt } from './terrain.js';
 import { MOTO_SPECS, HELMET_OF, HELMET_PAINTS, buildMotoGeometry, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
-import { PersonCrowd, PersonRig } from './pedestrians.js';
+import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
 import { loadTheRide, createSchedule, buildStopSigns, fetchTheRideLive } from './theride.js';
 
 // Cars and buses follow the road graph, obey signals, yield at crossings and react to collisions.
@@ -1279,6 +1279,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       changeLanes(v);
     }
     accelerate(v);
+    // a bike whose rider was thrown off coasts to a stop and lies there till they're back on
+    if (v.riderOff) { v.acc = -6; v.impactTime = Math.max(v.impactTime, 0.3); }
     // Give the driver a moment to recover after an impact before accelerating again.
     v.impactTime = Math.max(0, v.impactTime - dt);
     if (v.impactTime > 0) v.acc = Math.min(0, v.acc);
@@ -1514,6 +1516,82 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     // a motorbike into a car (or a car into it) hard: its rider goes flying
     else if (pe.bike && speed > 7) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, 'motorbike');
     if (speed > 2.2) spawnCollisionSparks(hit.x, 0.58, hit.z, hit.nx, hit.nz, speed);
+    // a bike, scooter or board hit hard by the player's car or motorbike: its rider goes flying
+    if (v.riderRig && !v.riderOff && pe.type === 'car' && speed > 4.5) throwRider(v, a.vx, a.vz, hit, speed);
+  }
+
+  // Thrown riders (bikes, e-bikes, scooters, hoverboards and motorcycles in traffic): limp through the air the way the
+  // car pushed them, as the player is (PersonRig's ragdoll), lying still a few seconds, getting up, then walking back
+  // to their ride (which coasts to a stop and falls on its side) and getting on again, if it's still within 40 m;
+  // otherwise they stand there till both are out of sight, and the rider is back on it.
+  const riderGround = (v, x, z) => groundHeight(x, z) + 0.012;
+  function throwRider(v, vx, vz, hit, speed) {
+    const rig = v.riderRig;
+    const side = Math.sign((hit.x - v.x) * Math.cos(v.yaw) - (hit.z - v.z) * Math.sin(v.yaw)) || 1;
+    const push = Math.min(4, speed * 0.25);
+    const fvx = vx * 0.85 - hit.nx * push, fvz = vz * 0.85 - hit.nz * push;
+    rig.startRagdoll(fvx, Math.min(7, 1.8 + speed * 0.3), fvz, side * Math.min(6, speed * 0.35), Math.min(4, speed * 0.2));
+    v.riderOff = { phase: 'fly', start: clock, x: rig.x, z: rig.z, heading: 0, side: -side, fall: v.bodyType === 'hoverboard' ? 0 : -side * 1.35 };
+    v.speed = Math.min(v.speed, 2);
+    pedestrianSystem.onRiderHit?.(v.x, v.z, speed);
+    log(`[traffic] a ${v.bodyType} rider thrown at ${Math.round(speed * 2.237)} mph`);
+  }
+  function remount(v) {
+    const rig = v.riderRig;
+    if (rig.rag) rig.rag.done = false;
+    rig.ragdolling = false;
+    rig.diving = false;
+    rig.placed = false;
+    v.riderOff = null;
+    v.roll = 0;
+    v.rollVel = 0;
+    v.impactTime = Math.max(v.impactTime, 1.2);
+  }
+  // the ride on its side while nobody's on it (a hoverboard stays flat)
+  function lieDown(v, dt) {
+    const r = v.riderOff;
+    const to = r.phase === 'walk' && r.near ? r.fall * 0.3 : r.fall;
+    v.roll += (to - v.roll) * Math.min(1, dt * 5);
+    v.rollVel = 0;
+  }
+  function stepRider(v, dt) {
+    const r = v.riderOff, rig = v.riderRig;
+    const draw = !hasView || visible(rig.x, rig.z, 7);
+    const seen = draw || visible(v.x, v.z, 7);
+    const far = Math.hypot(v.x - focusX, v.z - focusZ);
+    if (!seen && (r.phase === 'lost' || far > 120 || clock - r.start > 60)) { remount(v); return; }
+    if (r.phase === 'fly') {
+      if (!rig.rag.done) rig.rag.done = rig.stepRagdoll(dt, riderGround, v, draw);
+      if (rig.rag.done && rig.rag.time > 3) {
+        rig.ragdolling = false;
+        rig.rag.done = false;
+        r.phase = 'up';
+        r.upAt = clock - 1.15; // the dive's push-up from lying down
+        r.heading = rig.yaw = rig.ragdollHeading();
+        r.x = rig.x;
+        r.z = rig.z;
+      }
+    } else if (r.phase === 'up') {
+      const t = clock - r.upAt;
+      rig.update(dt, r.x, r.z, r.heading, riderGround, v, 0, draw, t);
+      if (t >= PEDESTRIAN_DIVE_DURATION) r.phase = 'walk';
+    } else {
+      // to the ride's side, then on
+      const yaw = v.yaw + v.yawOffset, px = Math.cos(yaw) * r.side, pz = -Math.sin(yaw) * r.side;
+      const tx = v.x + px * 0.7, tz = v.z + pz * 0.7;
+      const dx = tx - r.x, dz = tz - r.z, d = Math.hypot(dx, dz);
+      r.near = d < 2.5;
+      if (r.phase === 'walk' && d > 40) r.phase = 'lost';
+      if (r.phase === 'walk' && d < 0.3) { remount(v); return; }
+      if (r.phase === 'walk') {
+        const step = Math.min(d, 1.45 * dt);
+        r.x += (dx / d) * step;
+        r.z += (dz / d) * step;
+        r.heading = d > 0.6 ? Math.atan2(dx, dz) : Math.atan2(Math.sin(yaw), Math.cos(yaw));
+      }
+      rig.update(dt, r.x, r.z, r.heading, riderGround, v, 0, draw, -1);
+    }
+    if (draw) riderCrowd.add(rig, Math.hypot(rig.x - camX, rig.z - camZ));
   }
 
   // Only disturbed traffic needs pair contacts. Newly struck cars join the same
@@ -1594,6 +1672,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   // Put v in a free lane around the focus. Normal replenishment protects the near view; teleports can fill it.
   function spawnVehicle(v, rMin, rMax, protectView) {
+    if (v.riderOff) remount(v);
     for (let attempt = 0; attempt < 12; attempt++) {
       const e = nearEdges[Math.floor(Math.random() * nearEdges.length)];
       if (!e || e.closed || (v.bus && e.axis !== 'ave') || e.len < 2 * v.half + 10) continue;
@@ -1836,7 +1915,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     bodyInst.setMatrixAt(slot, dummy.matrix);
-    if (c.riderRig) poseRider(c, Math.hypot(c.x - camX, c.z - camZ));
+    if (c.riderRig && !c.riderOff) poseRider(c, Math.hypot(c.x - camX, c.z - camZ));
     if (c.isPolice) {
       const lb = policeLightbars[c.bodyType];
       if (lb) lb.setMatrixAt(policeDrawn[c.bodyType]++, dummy.matrix);
@@ -2157,6 +2236,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       locate(v);
       knock(v, dt);
       pose(v, dt);
+      if (v.riderOff) lieDown(v, dt);
     }
     if (player.active) {
       for (const v of vehicles) if (v.edge) collideWithPlayer(v);
@@ -2165,6 +2245,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     riderCrowd.begin();
     for (const v of vehicles) {
       if (!v.edge) continue;
+      if (v.riderOff) stepRider(v, dt);
       if (v.bus) renderBus(v);
       else renderCar(v);
     }
