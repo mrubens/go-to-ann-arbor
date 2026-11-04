@@ -2,6 +2,9 @@ import * as THREE from 'three/webgpu';
 import { stadiumGround } from './terrain.js';
 import { GEO } from './city-geodata.js';
 import { buildCampusLandmarks } from './campus-landmarks.js';
+import { buildMichiganTheater } from './michigan-theater.js';
+import { buildMoreLandmarks } from './more-landmarks.js';
+import { buildDiagM } from './diag-m.js';
 import { STADIUM, N, radiiAt, FIELD_Y, WALL_TOP, SEAT_TOP, RIM_Y, WALL_Y, AISLE_IN, CONCOURSE } from './stadium-shape.js';
 
 // Ann Arbor's landmarks are the city's own surveyed buildings (Burton Tower, Hill Auditorium, the Union...), drawn by
@@ -304,6 +307,12 @@ function buildLandmarks(scene) {
   buildBigHouse(group, colliders);
   // Burton Tower, Hill Auditorium and the Union, modelled by hand in place of the survey's blocks
   const campus = buildCampusLandmarks(group, colliders, GEO.landmarks || {});
+  // the Michigan Theater on Liberty, its marquee and blade sign
+  if (buildMichiganTheater(group, colliders, (GEO.landmarks || {})['Michigan Theater'])) campus.push('Michigan Theater');
+  // the rest, on the survey's own outlines
+  campus.push(...buildMoreLandmarks(group, colliders));
+  // the bronze block M where the Diag's walks meet
+  if (buildDiagM(group)) campus.push('the Diag M');
   console.info(`[landmarks] the Big House, ${campus.join(', ')}`);
   scene.add(group);
   return { group, colliders };

@@ -358,9 +358,11 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     return { height: Infinity, x: t.x, z: t.z, x0: t.x - t.w / 2 - 3, x1: t.x + t.w / 2 + 3, z0: t.z - t.d / 2 - 3, z1: t.z + t.d / 2 + 3, ...(o || {}) };
   }).filter(Boolean);
   // Keep the authored landmark models; the survey supplies the surrounding buildings.
-  const surveyedBuildings = REAL_BUILDINGS.filter((b) => !LANDMARK_RESERVE.some((h) =>
+  // (a landmark on the survey's own outline names the block it replaces, and its colliders keep off the rest)
+  const replaced = new Set(landmarkColliders.map((c) => c.replaces).filter(Boolean));
+  const surveyedBuildings = REAL_BUILDINGS.filter((b) => !replaced.has(b) && !LANDMARK_RESERVE.some((h) =>
     b.polygons.some((p) => polygonContains({ outer: p.outer, holes: [] }, h.x, h.z)))
-    && !landmarkColliders.some((c) => b.minX < c.maxX && b.maxX > c.minX && b.minZ < c.maxZ && b.maxZ > c.minZ
+    && !landmarkColliders.some((c) => !c.keepsSurvey && b.minX < c.maxX && b.maxX > c.minX && b.minZ < c.maxZ && b.maxZ > c.minZ
       && b.polygons.some((p) => polygonBoxOverlaps(p, (c.minX + c.maxX) / 2, (c.minZ + c.maxZ) / 2,
         (c.maxX - c.minX) / 2, (c.maxZ - c.minZ) / 2))));
   const landmarkReserves = [...LANDMARK_RESERVE, ...landmarkColliders.map((c) =>

@@ -361,4 +361,4 @@ function buildCampusLandmarks(group, colliders, sites) {
   return built;
 }
 
-export { buildCampusLandmarks };
+export { buildCampusLandmarks, builder, groundOf };

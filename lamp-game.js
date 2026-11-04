@@ -5,9 +5,7 @@
 // the game is played (on the Mac and on an iPhone or iPad in Lamp's app around the page, on the Xbox in its web host),
 // draws at 1920x1080 scaled to the screen (smaller when frames run slow there), and hands each frame the controllers
 // as pads: a controller connected to the device, the keyboard as the first pad, and on a touch screen the touch
-// controls it draws. Lamp's preview runs the same
-// page out of sight from a script of the controller's moves, at exactly 1/60 s a frame with the same random numbers
-// every play, so use frame.dt, random() and save()/load() from here, never requestAnimationFrame, Math.random, the
+// controls it draws. Use frame.dt, random() and save()/load() from here, never requestAnimationFrame, Math.random, the
 // clock or localStorage yourself. What the player is holding (a controller, and whose, the keyboard or the touch screen)
 // is input(), and label() and glyph() name and draw a button for it, so a prompt never names one the player hasn't got.
 //
@@ -28,8 +26,6 @@ export const BUTTON = { A: 1, B: 2, X: 4, Y: 8, LB: 16, RB: 32, MENU: 64, VIEW: 
 export const STICK = { LEFT: 'stick-left', RIGHT: 'stick-right' };
 export const TRIGGER = { LT: 'lt', RT: 'rt' };
 
-const preview = window.lampPreview || null;   // set by Lamp's preview before the page runs
-const logs = [];
 // The browser's own functions, kept before the runtime starts watching what the game's code leaves running (see
 // "Running the game's code again"): the runtime's own listeners, timers and sound go through these, so they stay when
 // the game's are taken away.
@@ -48,9 +44,9 @@ const nextFrame = fn => browser.frame.call(window, fn);
 // A runtime run outside a page (Lamp's tests) may have no performance clock.
 const clockNow = () => globalThis.performance ? performance.now() : Date.now();
 
-// MARK: Random numbers, the same each preview play (xorshift64*, as the C++ kit has it)
+// MARK: Random numbers (xorshift64*, as the C++ kit has it)
 
-let seed = preview ? 1n : BigInt(Date.now()) | 1n;
+let seed = BigInt(Date.now()) | 1n;
 const mask = (1n << 64n) - 1n;
 // How many have been drawn, so a part that's kept rather than built again can skip the draws its build made.
 let draws = 0;
@@ -59,35 +55,25 @@ export function random() {
     seed ^= seed >> 12n; seed ^= (seed << 25n) & mask; seed ^= seed >> 27n;
     return Number(((seed * 0x2545F4914F6CDD1Dn) & mask) >> 40n) / 16777216;
 }
-let clock = 0;
-if (preview) {
-    // three.js and the game's own code may reach for these: in the preview they're the game's clock and seed too.
-    Math.random = random;
-    performance.now = () => clock;
-    Date.now = () => 1700000000000 + clock;
-    window.__lampAdvance = ms => { clock += ms; };
-}
 
 // MARK: The log, saves and files
 
 export function log(...parts) {
     const line = parts.map(p => typeof p === 'string' ? p : JSON.stringify(p)).join(' ');
     const said = `[${time.toFixed(2)} s] ${line}`;
-    if (preview) { if (logs.length < 400) logs.push(said); return; }
     // The app around the page puts its console into the app's log.
     console.log(said);
 }
 window.addEventListener('error', e => log(`Error: ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`));
 window.addEventListener('unhandledrejection', e => log(`Error: ${e.reason && e.reason.message || e.reason}`));
 
-const saved = preview ? new Map() : null;
 export function save(name, value) {
     const text = JSON.stringify(value);
-    if (saved) saved.set(name, text); else try { localStorage.setItem('lamp.save.' + name, text); } catch (e) { return false; }
+    try { localStorage.setItem('lamp.save.' + name, text); } catch (e) { return false; }
     return true;
 }
 export function load(name) {
-    const text = saved ? saved.get(name) : (() => { try { return localStorage.getItem('lamp.save.' + name); } catch (e) { return null; } })();
+    const text = (() => { try { return localStorage.getItem('lamp.save.' + name); } catch (e) { return null; } })();
     try { return text == null ? null : JSON.parse(text); } catch (e) { return null; }
 }
 
@@ -179,15 +165,13 @@ export async function model(path) {
     return group;
 }
 
-// MARK: Sound, mixed by the browser's Web Audio; the preview plays nothing and says what was played
+// MARK: Sound, mixed by the browser's Web Audio
 
 const sounds = [];
 let audio = null, effectsVolume = 1, musicVolume = 1, musicVoice = null, music = { gain: 0 };
-const played = new Map();
 // The effects playing now, so a change of the effects volume reaches them too.
 const voices = new Set();
 function context() {
-    if (preview) return null;
     if (!audio) { try { audio = new browser.AudioContext({ sampleRate: 48000 }); } catch (e) { return null; } }
     if (audio.state === 'suspended') audio.resume();
     return audio;
@@ -256,7 +240,6 @@ export const sound = {
     // made (2 an octave up). loop plays it over and over until stopped.
     play(s, { volume = 1, pan = 0, pitch = 1, loop = false } = {}) {
         if (!s) return null;
-        played.set(s.name, (played.get(s.name) || 0) + 1);
         const ctx = context(), buffer = bufferOf(s) || s.buffer;
         if (!ctx || !buffer) return null;
         const source = ctx.createBufferSource(), gain = ctx.createGain(), panner = ctx.createStereoPanner();
@@ -279,7 +262,6 @@ export const sound = {
     // Music: a sound played over and over under the effects (keep it quiet, 0.3 to 0.5); null fades it out.
     music(s, volume = 0.4) {
         const ctx = context();
-        if (s) played.set('music: ' + s.name, 1);
         if (musicVoice && ctx) { const old = musicVoice; old.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.3); after(1500, () => sound.stop(old)); }
         musicVoice = null;
         music.gain = volume;
@@ -364,7 +346,6 @@ function merge(pad, more) {
 // The controller's rumble, 0 to 1 for its two motors, for `seconds` (a short shake by default).
 export function rumble(pad, low, high, seconds = 0.2) {
     const g = (pads[pad] || {}).gamepad;
-    if (preview) { if (low || high) log(`rumble: controller ${pad + 1} ${low.toFixed(2)} ${high.toFixed(2)}`); return; }
     g && g.vibrationActuator && g.vibrationActuator.playEffect('dual-rumble', { duration: seconds * 1000, strongMagnitude: low, weakMagnitude: high }).catch(() => {});
 }
 
@@ -377,7 +358,7 @@ const touch = { lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, down: 0 };
 // A tap shorter than a frame still reaches the game: held for the next frame it reads.
 let tapped = 0;
 let touchShown = false, touchLayer = null;
-const touchScreen = !preview && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+const touchScreen = ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 
 function buildTouch() {
     touchLayer = document.createElement('div');
@@ -459,10 +440,10 @@ const LAYOUTS = Object.fromEntries(controllers.layouts.map(layout => [layout.id,
 const BASE = LAYOUTS[controllers.base];
 
 // The input the player used last: a controller (and whose), the keyboard (with the mouse) or the touch screen. A
-// device that comes with a controller starts on it, a touch screen on touch, anything else and Lamp's preview on the
+// device that comes with a controller starts on it, a touch screen on touch, anything else on the
 // keyboard (the controller named by the device's one layout where it has one, as every controller there is); it
 // changes as soon as the player presses a key, touches the screen or moves a controller.
-let current = preview ? { kind: 'keyboard' } : device.controller ? { kind: 'controller', family: device.layout || device.controller }
+let current = device.controller ? { kind: 'controller', family: device.layout || device.controller }
     : touchScreen ? { kind: 'touch' } : { kind: 'keyboard' };
 // The controller's own name, for a model that marks a button differently from the rest of its layout (a DualShock's
 // Share where a DualSense has Create).
@@ -482,7 +463,6 @@ export function onInput(changed) {
 const drawPrompts = () => { for (const changed of listeners) try { changed(input()); } catch (e) { log(`Error: ${e.message}`); } };
 
 function use(kind, family, name = '') {
-    if (preview) return;
     // A new controller of the same family can still change a label (a DualShock's Share where a DualSense has Create).
     const relabels = variantOf(family, name) !== variantOf(family, padName);
     padName = name;
@@ -507,12 +487,10 @@ function vendorFamily(vendor) {
     return found ? found.id : 'other';
 }
 
-if (!preview) {
-    window.addEventListener('keydown', e => { if (e.isTrusted) use('keyboard'); }, { capture: true });
-    window.addEventListener('pointerdown', e => {
-        if (e.pointerType === 'touch' || e.pointerType === 'pen') use('touch'); else if (e.pointerType === 'mouse') use('keyboard');
-    }, { capture: true, passive: true });
-}
+window.addEventListener('keydown', e => { if (e.isTrusted) use('keyboard'); }, { capture: true });
+window.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') use('touch'); else if (e.pointerType === 'mouse') use('keyboard');
+}, { capture: true, passive: true });
 
 // What a prompt names each part of the pad by is the layout's (a part it leaves out is the base layout's): BUTTON.A
 // is a place, the bottom face button, so a prompt names what's printed on the button in that place on the player's
@@ -617,12 +595,10 @@ export function glyph(what, on = current) {
 // MARK: A fixed step, for physics
 
 // Physics (Rapier's world.step(), or the game's own) wants the same step every time, whatever the device's frame rate:
-// a step that follows the frame bounces and tunnels differently at 30, 60 and 120 frames a second, and the preview's
-// replay only matches the play when the steps do. fixedStep(step) gives a function to call once a frame with f.dt: it
+// a step that follows the frame bounces and tunnels differently at 30, 60 and 120 frames a second. fixedStep(step) gives a function to call once a frame with f.dt: it
 // runs step() as many times as the time since the last frame holds, at 1/60 s each (`rate` a second), and at most `most`
 // times, so a device that can't keep up slows the game down rather than falling further behind. It returns how far the
 // frame is into the next step, 0 to 1, for a game that places what it draws between the last two steps (most needn't).
-// In the preview every frame is exactly one step.
 //
 //   const physics = fixedStep(() => world.step(events));
 //   frame(f) { steer(f.pads[0]); physics(f.dt); place(); renderer.render(scene, camera); }
@@ -643,35 +619,37 @@ export function fixedStep(step, { rate = 60, most = 4 } = {}) {
 
 let time = 0, number = 0;
 const pads = [0, 1, 2, 3].map(() => ({ connected: false, lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, down: 0, pressed: 0, released: 0 }));
-let renderer = null, frameFunction = null, scripted = null, before = [0, 0, 0, 0], seenControllers = -1;
+let renderer = null, frameFunction = null, before = [0, 0, 0, 0], seenControllers = -1;
 
 // Whether a controller is being played with now: a button down or a stick off its center.
 const inUse = g => g.buttons.some(b => b && b.pressed) || g.axes.some(a => Math.abs(a) > 0.3);
 
 function readPads() {
-    const found = scripted ? [] : Array.from(navigator.getGamepads ? navigator.getGamepads() : []).filter(g => g && g.connected);
+    if (driven && clockNow() > drivenUntil) driven = null;
+    if (lampHas && clockNow() > lampHasUntil) letGoOfLamp(null);
+    const found = Array.from(navigator.getGamepads ? navigator.getGamepads() : []).filter(g => g && g.connected);
     // The touch controls are there from the start, step aside once a controller is played with (a connected one alone
     // may only be the simulator passing the Mac's through), and come back when the screen is touched.
     const played = found.find(inUse);
     const nativeInUse = nativePad && (nativePad.down || [nativePad.lx, nativePad.ly, nativePad.rx, nativePad.ry, nativePad.lt, nativePad.rt].some(a => Math.abs(a) > 0.3));
-    if (touchScreen && !scripted) {
+    if (touchScreen) {
         if (seenControllers === -1) showTouch();
         if (touchShown && (played || nativeInUse)) hideTouch();
     }
-    // The controller played with is the input now (and in the preview it stays the keyboard).
+    // The controller played with is the input now.
     if (played) use('controller', familyOf(played.id), played.id);
     else if (nativeInUse) use('controller', vendorFamily(nativePad.vendor));
-    if (!scripted && found.length !== seenControllers) { seenControllers = found.length; log(`Lamp: ${found.length} controller${found.length === 1 ? '' : 's'} connected.`); }
+    if (found.length !== seenControllers) { seenControllers = found.length; log(`Lamp: ${found.length} controller${found.length === 1 ? '' : 's'} connected.`); }
     for (let i = 0; i < 4; i++) {
         let pad = found[i] ? gamepadPad(found[i]) : { connected: false, lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, down: 0 };
         if (i === 0) {
-            if (scripted) pad = Object.assign({}, scripted);
-            else {
-                if (nativePad) merge(pad, nativePad);
-                if (readsKeyboard) merge(pad, keyboardPad());
-                merge(pad, Object.assign({}, touch, { down: touch.down | tapped }));
-                tapped = 0;
-            }
+            if (nativePad) merge(pad, nativePad);
+            if (readsKeyboard) merge(pad, keyboardPad());
+            merge(pad, Object.assign({}, touch, { down: touch.down | tapped }));
+            tapped = 0;
+            // The person's own input while Lamp has the controller, holding something or not, takes the game back.
+            if (lampHas && (played || nativeInUse || pressing(pad))) letGoOfLamp('the person played');
+            if (driven) pad = Object.assign({}, driven);
             pad.connected = true;
         }
         pad.pressed = pad.down & ~before[i];
@@ -688,6 +666,7 @@ function readPads() {
 // code that was playing: what arrives while the code runs again changes what's held and is never replayed as a press.
 const phoneButtons = new Map();
 function phoneButton(player, name, down) {
+    if (down && lampHas) letGoOfLamp('a phone played');
     let buttons = phoneButtons.get(player);
     if (!buttons) phoneButtons.set(player, buttons = newPhoneButtons());
     if (!!buttons.down[name] === down) return;
@@ -709,8 +688,6 @@ function readPhones() {
     return list;
 }
 
-// What the frame function returns is handed back: in the preview a promise from it (lamp-phaser.js's, while a scene
-// loads) is waited for before the next frame.
 function step(dt) {
     readPads();
     const phonesNow = readPhones();
@@ -722,8 +699,8 @@ function step(dt) {
 
 // MARK: The frame rate, measured on the device
 
-// Every ten seconds of play the log says how fast frames really came, so the agent sees the device's own frame rate,
-// not the preview's fixed 1/60 s. And when frames run slow the game is drawn smaller and scaled up to the screen, a
+// Every ten seconds of play the log says how fast frames really came, so the agent sees the device's own frame rate.
+// And when frames run slow the game is drawn smaller and scaled up to the screen, a
 // step at a time: on whatever device it is, a scene that fills the screen with pixels is the usual cost, and fewer
 // pixels the usual cure. A step that doesn't make frames faster is undone and no more are tried, since then the
 // drawing isn't what's slow (a busy frame function, or a screen that refreshes only 30 times a second).
@@ -789,7 +766,7 @@ function fit() {
 // page gives them: `p.pressed.a` is true for the one frame after a press, even one let go again since). `touch` names
 // the buttons the touch controls show (BUTTON.A | BUTTON.B | BUTTON.MENU unless given; BUTTON.RSTICK adds a right stick),
 // or `false` for a page that draws touch controls of its own. `keyboard: false` is for a page that reads the keys itself:
-// the keyboard then isn't the first pad as well, so a key isn't heard twice. The preview's script is the first pad either way.
+// the keyboard then isn't the first pad as well, so a key isn't heard twice. Lamp's own controller is the first pad either way.
 // `keyboardHints: { leftStick: 'arrows' }` is for a game whose person asked for the arrow keys: label() and glyph() name
 // them for the left stick instead of W A S D ('wasd', the default). It only chooses the name: both keep moving the stick.
 // The renderer may be a WebGLRenderer or, from 'three/webgpu', a WebGPURenderer (initialized before game() is called). A 2D
@@ -844,24 +821,21 @@ export async function game({ renderer: given, init, frame, touch: buttons, keybo
     }
     // Where the player was, if the page is opened again for a change: known before init, so the game starts there.
     if (again) { pending = { state: again.state && again.state.state, held: again.state && again.state.held, gen: again.change.gen }; reopened = true; taken = false; }
-    else if (!preview) { await claim(); keepPage(); }
+    else { await claim(); keepPage(); }
     // What the game registered takes its place before init reads it.
     if (pending && pending.held) {
         restoring = pending.held;
         if (!again) guarding = true;
         for (const entry of states.values()) settle(entry);
     }
-    // In the preview a start-up that fails ends the play with what it said, rather than leaving Lamp waiting for frames.
     if (init) {
         try { await init({ width: WIDTH, height: HEIGHT }); } catch (e) {
             if (again) return ranAgainFailed(again, e);
             if (taken || guarding) return startFresh(e);
             log(`Error: ${e && e.message || e}`);
-            if (preview) { window.webkit.messageHandlers.lampPreview.postMessage({ done: true, failed: String(e && e.message || e), logs }); return; }
             throw e;
         }
     }
-    if (preview) { if (again) { ranAgain(again); firstDrawn(0); } return runPreview(); }
     // Whatever the start set on a camera, it's where the player left it at the first frame.
     if (restoring) for (const entry of cameras.values()) putPose(entry, restoring.cameras[entry.id]);
     await putBack();
@@ -877,7 +851,7 @@ export async function game({ renderer: given, init, frame, touch: buttons, keybo
         // Its shaders compiling: the frame before stays on screen, and the game waits for them.
         if (warming && warming !== 'ask') { nextFrame(loop); return; }
         const dt = last ? Math.min(0.05, (now - last) / 1000) : 1 / 60;
-        // How long the page took to build the game, which Lamp reads to know how long its preview's build may take.
+        // How long the page took to build the game, for the log.
         const first = !last && mine === 1;
         if (first) log(`Lamp: the game was built and drawn ${(now / 1000).toFixed(1)} s after the page opened.`);
         last = now;
@@ -963,7 +937,7 @@ export async function game({ renderer: given, init, frame, touch: buttons, keybo
 // swap doesn't (build again what a changed method built once), and returns false to have the code run again
 // instead. For what a module makes at its top level (a listener, an element, a timer), `hot(import.meta).dispose(data
 // => …)` takes it away as the old version goes, keeping in `data` what the next needs, which reads it as
-// `hot(import.meta).data`. Nothing here runs in Lamp's preview or where changes come by an install.
+// `hot(import.meta).data`. Nothing here runs where changes come by an install.
 
 let hooks = {}, started = false, waiting = null, pill = null;
 // The place this copy starts in (claim()), whether the game read it (pendingRestore()), and whether an error now means
@@ -973,7 +947,7 @@ const host = () => window.webkit && window.webkit.messageHandlers && window.webk
 // Whether the game is past its loading screen, for the picture of the app Lamp's desk shows (`LampPagePlaying` in a Mac
 // app): 'loading' from when this runtime loads, 'playing' at the first frame of play.
 const tellPlaying = state => { try { const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lampPlaying; h && h.postMessage(state); } catch (e) {} };
-if (!preview) tellPlaying('loading');
+tellPlaying('loading');
 // Putting in what was built in the background says only its report: the change it's part of has said the rest.
 const tellHost = (gen, state, why, more) => { if (runningAgain && runningAgain.change.quiet && state !== 'report') return; try { const h = host(); h && h.postMessage({ gen, state, ...(why ? { why } : {}), ...more }); } catch (e) {} };
 // What a change of these is, is code: swapped in, or the page is opened again for it.
@@ -981,7 +955,7 @@ const CODE = /\.(m?js|html?|css)$/i;
 // Each copy of the page names its build (lamp-build.js, written with lamp-device.js), so a snapshot is restored only by a
 // newer build. A copy without one restores only what the page itself kept for its reopening.
 let buildID = null;
-const build = preview ? Promise.resolve(null) : import('./lamp-build.js').then(m => (buildID = m.default), () => null);
+const build = import('./lamp-build.js').then(m => (buildID = m.default), () => null);
 const LIVE = 'lamp.live', LAST = 'lamp.live.last';
 const store = kind => { try { return kind === 'session' ? sessionStorage : localStorage; } catch (e) { return null; } };
 
@@ -1005,7 +979,6 @@ function isBusy() {
 // put in at a time, so one arriving during a swap waits for it.
 let queue = Promise.resolve();
 window.__lampLive = change => {
-    if (preview) return false;
     changes = Math.max(changes + 1, change.gen || 0);
     queue = queue.then(() => {
         // What the code run again couldn't take in goes in as the page opens again, at Reload.
@@ -1024,7 +997,6 @@ window.__lampLive = change => {
 // After any change being put in (one at a time, `queue`), with the place a rerun under way kept for itself, never one
 // taken from a game it has half started again.
 window.__lampReloadNow = () => {
-    if (preview) return false;
     const held = runningAgain && runningAgain.state;
     queue = queue.then(() => reopen({ gen: changes, why: 'Reload' }, held || takeSnapshot()))
         .catch(e => log(`Lamp: ${e && e.message || e}`));
@@ -1104,11 +1076,10 @@ function startAgain(change, state = takeSnapshot(), roster = phonesHere()) {
 
 // A change that needs the page opened again is held for the person's Reload, never opened under them: the app and the
 // chat show Reload (`held`), and it goes in when they press it (`now`). The code run again in place goes in by itself.
-// Lamp's preview, which nobody watches, opens a new page instead.
 // A swap that already changed the running game (its old version's disposers run, its exports put in) leaves nothing safe
 // to wait in: that opens the page again at once, from where the player was before it.
 function reopenOrHold(change, state) {
-    if (change.now || change.touched || preview) return reopen(change, state);
+    if (change.now || change.touched) return reopen(change, state);
     waiting = { ...change, hard: true };
     log(`Lamp: a change that needs the game opened again (${change.why}) waits for Reload.`);
     tellHost(change.gen, 'held', change.why);
@@ -1118,8 +1089,6 @@ function reopenOrHold(change, state) {
 // Opens the page again with the new code, with the player's place kept for the new code to restore: where it is now, or
 // `state` taken before a swap that didn't take.
 function reopen(change, snap = takeSnapshot()) {
-    // A warm preview can't open its page again with a new play: Lamp starts it cold instead.
-    if (preview) { window.webkit.messageHandlers.lampPreview.postMessage({ done: true, again: false, logs }); return; }
     hidePill();
     try { store('session').setItem(LIVE, JSON.stringify({ ...snap, input: current, padName, gen: change.gen })); } catch (e) {}
     const why = change.why ? ` (${change.why})` : '';
@@ -1176,7 +1145,7 @@ export function hot(meta) {
     // A page that takes no changes still restores what's registered when a newer install opens it.
     const quiet = { data: {}, accept() {}, dispose() {}, renderer: build => build(), camera, state,
                     keep(key, build, options) { const v = build(); return options && options.background && isSteps(v) ? stepThrough(v) : v; } };
-    if ((preview && !preview.warm) || path == null || (!preview && !host())) return quiet;
+    if (path == null || !host()) return quiet;
     let entry = modules.get(path);
     if (!entry) modules.set(path, entry = { path, accepts: false, onAccept: null, disposers: [], data: {}, versions: [], text: null });
     // Each version says for itself whether it takes the next, and what to take away when it goes.
@@ -1633,9 +1602,7 @@ function keep(path, key, build, options = {}) {
         }
         stopBuilding(had);
     }
-    // In the preview a part whose async build drew random numbers while it waited is built again: how many were its
-    // own can't be told, and a play must give the numbers a cold one does.
-    if (had && !had.stale && had.text === text && same && sameSources && !(preview && had.draws == null)) {
+    if (had && !had.stale && had.text === text && same && sameSources) {
         had.used = true;
         // Built in the background since the code last ran: in the game from this run on.
         if (again && had.fresh) { had.fresh = false; tally.swapped.push(had); }
@@ -1650,14 +1617,14 @@ function keep(path, key, build, options = {}) {
     // Built from a part that's being built in the background: built from the new one once that swaps in, and until
     // then the game goes on with the one it has.
     // (an async part's value is its promise; what the game passes on is what it gave, `made`)
-    if (again && had && !lasting && !preview && inputs.some(v => [...kept.values()].some(k => k.pending && (Object.is(k.value, v) || Object.is(k.made, v))))) {
+    if (again && had && !lasting && inputs.some(v => [...kept.values()].some(k => k.pending && (Object.is(k.value, v) || Object.is(k.made, v))))) {
         had.used = true;
         tally.waiting.push(key);
         return had.value;
     }
     // A part built in the background is built again while the game goes on with the one it has (see "Building in the
     // background").
-    if (background && again && had && !lasting && !preview) {
+    if (background && again && had && !lasting) {
         had.used = true;
         had.stale = false;
         had.pending = { text, inputs, from: sources, dispose: typeof dispose === 'function' ? dispose : null, build, cause,
@@ -2106,7 +2073,7 @@ function swapIn() {
 // the page puts its own buttons.
 let hint = null;
 function showHint() {
-    if (preview || !document.body) return;
+    if (!document.body) return;
     if (!hint) {
         hint = document.createElement('div');
         hint.textContent = 'Building…';
@@ -2147,7 +2114,7 @@ function hideHint() { if (hint) hint.style.opacity = '0'; }
 // it where it's used, build the start from it (`play.mode` says what to show, with no title drawn first) and keep
 // nothing derived from it in a kept part. Raise `version` when a field's meaning changes: `migrate(old, oldVersion)`
 // gives the new state, and a version raised with no migrate, or one that throws, starts that state from `start()`. At a
-// fresh start, and in a new play of the preview, it's `start()`. It must be registered once per run, before game()
+// fresh start it's `start()`. It must be registered once per run, before game()
 // starts or in init; read in a module's top level it still has its start values. A swap leaves what's registered as it
 // is, so a change to a declaration in a module that takes its changes runs the code again.
 //
@@ -2179,8 +2146,7 @@ function camera(id, build, { target } = {}) {
         if (entry.text !== text) redeclare(`camera ${id}`);
         return entry.value;
     }
-    // A new play of the preview starts from what build() sets, as a cold one does.
-    if (!entry || entry.text !== text || (preview && again)) {
+    if (!entry || entry.text !== text) {
         if (entry && again) tally.built.push({ key: `camera ${id}`, ms: null, cause: 'its build changed' });
         cameras.set(id, entry = { id, text, value: build() });
     } else if (again) tally.kept.push(`camera ${id}`);
@@ -2416,7 +2382,9 @@ async function runAgain(change, state, roster) {
         log(`Lamp: running the game's code again in place for a change (${why}), keeping where the player was.`);
     }
     // The frame on screen now, held there until the new code draws its first.
-    const still = preview ? null : await new Promise(done => { shooting = done; after(250, () => { if (shooting === done) { shooting = null; done(null); } }); });
+    const still = await new Promise(done => { shooting = done; after(250, () => { if (shooting === done) { shooting = null; done(null); } }); });
+    // What Lamp holds is let go: the code it was pressing for is going. Its batch still has the controller.
+    driven = null;
     const again = runningAgain = { change, state, began, called: false, done: null, named };
     readSince = new Set();
     const done = new Promise(resolve => { again.done = resolve; });
@@ -2425,7 +2393,7 @@ async function runAgain(change, state, roster) {
     again.stopped = performance.now();
     started = false;
     // What's registered, as the last frame left it, or as it was before a swap that went wrong, which may have changed
-    // it. A preview's new play has none: it starts from the top.
+    // it.
     restoring = !state ? null : change.touched ? state.held : heldNow();
     tally = { kept: [], built: [], reset: [], building: [], waiting: [], swapped: [] };
     if (state) again.state = { ...state, held: restoring };
@@ -2523,7 +2491,6 @@ async function putPage(page, paths, still) {
     // The old page stays in view, still, over the new one until the new code has drawn (`lift`): its elements go last,
     // so the new code finds its own by id, and the frame it showed stands where the canvas was.
     const canvas = renderer && renderer.domElement;
-    if (preview) { body.replaceChildren(...[...page.body.childNodes].map(n => document.adoptNode(n))); return; }
     const old = [...body.childNodes].filter(n => n !== touchLayer && n !== pill && n !== hint && n !== canvas && n !== curtain);
     if (curtain) curtain.remove();
     curtain = document.createElement('div');
@@ -2627,11 +2594,9 @@ function ranAgainFailed(again, e) {
     reopen({ ...again.change, why: `the game's code run again failed (${e && e.message || e})` }, again.state);
     return new Promise(() => {});
 }
-if (!preview) {
-    // Until the new code is running (`ranAgain`), anything it throws opens the page again: half a start is no place to play.
-    listen(window, 'error', e => { if (runningAgain) ranAgainFailed(runningAgain, e.error || e.message); });
-    listen(window, 'unhandledrejection', e => { if (runningAgain) ranAgainFailed(runningAgain, e.reason); });
-}
+// Until the new code is running (`ranAgain`), anything it throws opens the page again: half a start is no place to play.
+listen(window, 'error', e => { if (runningAgain) ranAgainFailed(runningAgain, e.error || e.message); });
+listen(window, 'unhandledrejection', e => { if (runningAgain) ranAgainFailed(runningAgain, e.reason); });
 
 // What the game's code leaves running: each listener by its target (held weakly, so an element thrown away goes with
 // its listeners), timers, sound contexts and workers.
@@ -2792,7 +2757,7 @@ function swapFailed(e) {
     swapGuard = null;
     reopen({ ...guard.change, why: `the code swapped in failed as it ran (${e && e.message || e})` }, guard.state);
 }
-if (!preview) window.addEventListener('error', e => { if (swapGuard) swapFailed(e.error || e.message); });
+window.addEventListener('error', e => { if (swapGuard) swapFailed(e.error || e.message); });
 
 function keepLast() {
     if (!buildID) return;
@@ -2800,15 +2765,20 @@ function keepLast() {
     if (snap == null) return;
     try { store('local').setItem(LAST, JSON.stringify({ build: buildID, at: Date.now(), ...snap, input: current })); } catch (e) {}
 }
-if (!preview) {
-    window.addEventListener('pagehide', () => { if (started) keepLast(); });
-    document.addEventListener('visibilitychange', () => { if (started && document.hidden) keepLast(); });
-}
+window.addEventListener('pagehide', () => { if (started) keepLast(); });
+document.addEventListener('visibilitychange', () => { if (started && document.hidden) keepLast(); });
 
 // Where this copy of the page starts: the place it kept for its reopening, or else the latest snapshot of an older
-// build (Lamp installed a new one since). Taken from storage as it's read, so it's restored at most once.
+// build (Lamp installed a new one since). Taken from storage as it's read, so it's restored at most once. A fresh start
+// Lamp asked for (`lampFreshStart`, set by the app around the page for the one launch it was asked for) restores
+// neither, and leaves the game's saves (save()) as they are: they're the person's.
 async function claim() {
     const session = store('session'), local = store('local');
+    if (window.lampFreshStart) {
+        try { session.removeItem(LIVE); local.removeItem(LAST); } catch (e) {}
+        log('Lamp: a fresh start, as asked: the game starts from its beginning, with its saves kept.');
+        return;
+    }
     let said = null;
     try { said = JSON.parse(session.getItem(LIVE) || 'null'); session.removeItem(LIVE); reopened = !!said; } catch (e) {}
     if (said && said.fresh) { tellHost(said.gen, 'fresh'); return; }
@@ -2891,119 +2861,85 @@ function showPill() {
 }
 function hidePill() { if (pill) pill.style.display = 'none'; }
 
-// MARK: Lamp's preview: the script played out of sight, a picture where it says
+// MARK: Lamp's hands on the controller
 //
-// A preview Lamp keeps open between looks (`warm`) is handed each new play with the files changed since the last:
-// the game's code runs again in place from a fresh start (see "Running the game's code again"), with the clock, the
-// seed, the saves and the log as a new page has them, keeping what the game keeps, and the script plays. So only the
-// first play of a while builds the whole game. A kept part skips the random numbers its build drew, so the same script
-// gives the same pictures as a cold play; one whose async build drew any while it waited is built again. Returns false
-// when it can't (the game hasn't started, or is starting), and Lamp opens a new preview.
-// Where a play that has run long has got to, for Lamp to say: whether game() has been called, and the last lines logged.
-if (preview) window.__lampPreviewState = () => ({ started: !!frameFunction, logs: logs.slice(-20) });
-if (preview && preview.warm) {
-    window.__lampPreviewAgain = next => {
-        if (!frameFunction || runningAgain) return false;
-        preview.script = next.script || [];
-        // Files loaded afresh, under a new query, as a change in the open game has them.
-        changes++;
-        seed = 1n; clock = 0; time = 0; number = 0;
-        saved.clear(); played.clear(); logs.length = 0;
-        scripted = null; before = [0, 0, 0, 0];
-        queue = queue.then(() => startAgain({ gen: 0, changed: next.changed || [], why: 'a new play in the preview' }, null))
-            .catch(e => window.webkit.messageHandlers.lampPreview.postMessage({ done: true, again: false, logs: [String(e && e.message || e)] }));
+// Lamp's agent plays the game in its window, the one the person sees, with a controller of its own: `use_app`'s stick and
+// button moves, which the app around the page hands here (LampPageReader in LampPage.swift) as part of the same batch
+// as any of its clicks and keys (`LampDriver.Handover`). The app says when a batch with them begins (`__lampOwn`, with
+// how long it may run) and when it ends; for all that time, its waits and the gaps between presses too, Lamp has the
+// first player. While it holds something it is that player, in place of the player's own controller, keyboard and
+// touch, never mixed with them. Any input of the person's while Lamp has the controller (a controller, a key, the touch
+// screen, a phone's button, stick or tilt moved, or anything a phone sends) lets go of all of it and tells the app, which
+// ends the batch, so the game is theirs again at once. What Lamp holds also goes when its batch moves on, stops or is
+// replaced (the app hands null), when the game's code runs again or its page opens again, and by itself a second after
+// the hold was due to end; the batch's own hold on the controller ends with the time it was given and two seconds more,
+// should the app never say.
+let driven = null, drivenUntil = 0, lampHas = false, lampHasUntil = 0, lampBatch = null;
+// Each batch and each hold has a name of its own (the batch's id, and a number after it for each hold), and what gives
+// one back names it: a release that reaches the page late, after a newer batch or hold took the controller, is for one
+// that's gone already and lets go of nothing that's held now. A hold reaching the page after its batch ended, or after a
+// newer one took its place, is turned down ('ended'): nothing of a batch that's over is pressed.
+window.__lampOwn = (seconds, batch) => {
+    if (!seconds) {
+        if (batch != null && batch !== lampBatch) return true;
+        lampHas = false; driven = null; lampBatch = null;
         return true;
-    };
-}
-
-// The game's phone page in the preview (`PhonePreview`): a `phone` line of the script is a step on the page, and the
-// messages both ways wait for such a step, so they arrive between the same two frames in every play. The page's clock
-// goes by the game's frames, handed over at each step, since a play runs far faster than the time it stands for. To the
-// game the phone is a player that came another way than the relay (`Lamp.controllers._attach`).
-let phone = null;
-async function phoneStep(step) {
-    if (!phone) {
-        phone = { hooks: null, here: false, joined: false, out: [], frames: 0,
-                  start(hooks) { this.hooks = hooks; },
-                  stop() { this.hooks = null; this.joined = false; } };
-        phone.route = { key: 'phone', place: 0, text: m => (phone.out.push(m), true),
-                        say: data => (phone.out.push({ t: 'message', data }), true), binary: () => false, buffered: () => 0 };
-        const controllers = window.Lamp && window.Lamp.controllers;
-        if (controllers && controllers._attach) controllers._attach(phone);
     }
-    // A page not joined yet gets its player number and what the game says on a join first: a person's press comes after
-    // those, and a page may hold its controls until it has them.
-    if (!phone.joined) await phoneExchange({ do: 'sync' });
-    await phoneExchange(step);
-}
-
-async function phoneExchange(step) {
-    const post = message => window.webkit.messageHandlers.lampPreview.postMessage(message);
-    // Round again while either side has more to say: a game answers a join, and the page its player number, at once.
-    for (let round = 0, next = step; round < 4; round++, next = { do: 'sync' }) {
-        const elapsed = phone.frames * 1000 / 60;
-        phone.frames = 0;
-        const answer = await post({ phone: next, inbox: JSON.stringify(phone.out.splice(0)), hosted: !!phone.hooks, elapsed });
-        if (answer == null) { log('Lamp: the phone page did not open in the preview.'); return; }
-        const messages = JSON.parse(answer).messages || [];
-        for (const m of messages) {
-            if (m.t === 'hello') phone.here = true;
-            if (m.t === 'bye') { phone.here = false; if (phone.joined) phone.hooks.leave('phone'); phone.joined = false; }
-            // A game that starts its controllers after the page opened has it join then.
-            if (phone.here && phone.hooks && !phone.joined) { phone.hooks.join('phone', phone.route); phone.joined = true; }
-            if (phone.joined && m.t !== 'hello') phone.hooks.input('phone', m);
-        }
-        if (phone.here && phone.hooks && !phone.joined) { phone.hooks.join('phone', phone.route); phone.joined = true; }
-        if (!messages.length && !phone.out.length) return;
+    if (!lampHas) takeController();
+    lampHas = true;
+    lampBatch = batch == null ? null : String(batch);
+    lampHasUntil = clockNow() + Math.min(Math.max(Number(seconds) || 0, 0), 600) * 1000 + 2000;
+    return true;
+};
+window.__lampDrive = (hold, name, batch) => {
+    if (hold && batch != null && String(batch) !== lampBatch) return 'ended';
+    if (!hold) {
+        if (name != null && (!driven || driven.name !== String(name))) return true;
+        driven = null;
+        return true;
     }
+    const axis = v => Math.max(-1, Math.min(1, Number(v) || 0)), trigger = v => Math.max(0, Math.min(1, Number(v) || 0));
+    driven = { lx: axis(hold.lx), ly: axis(hold.ly), rx: axis(hold.rx), ry: axis(hold.ry), lt: trigger(hold.lt), rt: trigger(hold.rt), down: hold.down | 0 };
+    // Kept off the pad itself, which the game reads.
+    Object.defineProperty(driven, 'name', { value: name == null ? null : String(name) });
+    drivenUntil = clockNow() + Math.min(Math.max(Number(hold.seconds) || 0, 0), 60) * 1000 + 1000;
+    // A hold is Lamp's, whether or not the app said its batch began.
+    if (!lampHas) takeController();
+    if (!lampHas || lampHasUntil < drivenUntil) { lampHas = true; lampHasUntil = drivenUntil; }
+    return true;
+};
+const pressing = pad => !!pad.down || ['lx', 'ly', 'rx', 'ry', 'lt', 'rt'].some(axis => Math.abs(pad[axis]) > 0.3);
+function letGoOfLamp(why) {
+    if (!lampHas && !driven) return;
+    lampHas = false;
+    driven = null;
+    lampBatch = null;
+    if (!why) return;
+    log(`Lamp: let go of the controller (${why}).`);
+    try { const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lampDriveTakenOver; h && h.postMessage(why); } catch (e) {}
 }
-
-async function runPreview() {
-    // Lamp answers each picture once it has taken it, of the whole page as drawn (the canvas and anything over it).
-    const post = message => window.webkit.messageHandlers.lampPreview.postMessage(message);
-    let mostCalls = 0, mostTriangles = 0, triangles = 0, frames = 0;
-    const limit = 60 * 600;
-    // The game is built: what's left is the play itself. Lamp times the build by this, to know how long the next may take.
-    post({ playing: true });
-    for (const line of preview.script) {
-        const words = line.trim().split(/\s+/);
-        if (words[0] === 'phone') {
-            await phoneStep(JSON.parse(line.trim().slice(6)));
-            continue;
-        }
-        if (words[0] === 'shot') {
-            if (phone) await phoneStep({ do: 'sync' });
-            await post({ shot: words[1] });
-            continue;
-        }
-        if (words[0] !== 'hold') continue;
-        const [n, lx, ly, rx, ry, lt, rt, down] = words.slice(1).map(Number);
-        scripted = { lx, ly, rx, ry, lt, rt, down: down | 0 };
-        for (let i = 0; i < n && frames < limit; i++) {
-            window.__lampAdvance(1000 / 60);
-            renderer.info.reset();
-            renderer.info.autoReset = false;
-            try { const waiting = step(1 / 60); if (waiting && waiting.then) await waiting; } catch (e) { log(`Error: ${e.message}`); post({ done: true, failed: e.message, logs }); return; }
-            const info = renderer.info.render;
-            mostCalls = Math.max(mostCalls, info.calls);
-            mostTriangles = Math.max(mostTriangles, info.triangles);
-            triangles += info.triangles;
-            frames++;
-            if (phone) phone.frames++;
-        }
-    }
-    const said = [...played.entries()].map(([name, count]) => count > 1 ? `${name} ${count} times` : name);
-    post({ done: true, logs,
-           stats: `${frames} frames (${(frames / 60).toFixed(1)} s of play); at most ${mostCalls} draws and ${mostTriangles} triangles in a frame, ${Math.round(frames ? triangles / frames : 0)} triangles a frame on average.`,
-           sound: said.length ? 'played ' + said.join(', ') : 'nothing played' });
+// A phone's stick or tilt is a person's when it moves away from where it was as Lamp took the controller: one held still
+// at an angle (a phone lying tilted) says the same value over and over, and isn't someone playing, while a thumb pushing
+// the stick over slowly gets there however small each step is. A stick or tilt first heard while Lamp has the
+// controller is measured from the middle.
+const phoneAxes = new Map();
+let phoneAxesAtTake = new Map();
+function takeController() { phoneAxesAtTake = new Map(phoneAxes); }
+function phoneAxis(player, name, x, y) {
+    const key = `${player} ${name}`, now = [Number(x) || 0, Number(y) || 0];
+    phoneAxes.set(key, now);
+    if (!lampHas) return;
+    const from = phoneAxesAtTake.get(key) || [0, 0];
+    if (Math.abs(now[0] - from[0]) > 0.3 || Math.abs(now[1] - from[1]) > 0.3) letGoOfLamp('a phone played');
 }
 
 // Heard for as long as the page lasts, under what `watchPhones` wraps, so it belongs to no run of the game's code.
 if (window.Lamp && window.Lamp.controllers) {
     window.Lamp.controllers.onButton(phoneButton);
-    window.Lamp.controllers.onLeave(player => phoneButtons.delete(player));
+    window.Lamp.controllers.onLeave(player => { phoneButtons.delete(player); for (const axes of [phoneAxes, phoneAxesAtTake]) for (const key of axes.keys()) if (key.startsWith(`${player} `)) axes.delete(key); });
+    if (window.Lamp.controllers.onAxis) window.Lamp.controllers.onAxis(phoneAxis);
+    if (window.Lamp.controllers.onMessage) window.Lamp.controllers.onMessage(() => { if (lampHas) letGoOfLamp('a phone sent something'); });
 }
 
-// Watched from here, after the runtime's own listeners: only where Lamp puts changes into the open game, or plays
-// again in a preview it keeps warm.
-if (preview ? preview.warm : host()) watch();
+// Watched from here, after the runtime's own listeners: only where Lamp puts changes into the open game.
+if (host()) watch();

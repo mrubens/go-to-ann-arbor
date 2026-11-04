@@ -529,6 +529,11 @@ class CityMapSystem {
 
     if (this.elSearchInput) {
       this.elSearchInput.addEventListener('input', () => this.search(this.elSearchInput.value));
+      // the game's keyboard stops Space and the arrows from doing anything on the page; keep them in the field, so
+      // "main st" types its space and the arrows move the caret instead of the player
+      this.elSearchInput.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' || e.code.startsWith('Arrow')) e.stopPropagation();
+      });
     }
 
     window.addEventListener('keydown', (e) => {

@@ -2,8 +2,7 @@
 //
 // A 2D game is Phaser scenes run by Lamp's runtime (lamp-game.js), which stays the one frame loop: Phaser's own loop is
 // put to sleep once it has started, and each of the runtime's frames steps Phaser once, with the runtime's time. So the
-// game is played at 1920x1080 scaled to the screen wherever it goes, and Lamp's preview plays it frame by frame at exactly
-// 1/60 s with the same random numbers, as it plays a three.js game. Everything the player plays with comes from the
+// game is played at 1920x1080 scaled to the screen wherever it goes, as a three.js game is. Everything the player plays with comes from the
 // runtime, not from Phaser: the controllers, the keyboard and the touch controls are one pad, `pad()` here, read in a
 // scene's update; sound is lamp-game.js's `sound` (Phaser's own is off); saves are `save()` and `load()`. Phaser's
 // keyboard and gamepad input are off, so a key is never heard twice; its pointer input (clicks on the Mac) is on.
@@ -22,7 +21,6 @@
 import * as Phaser from 'phaser';
 import { game, WIDTH, HEIGHT, random, log } from './lamp-game.js';
 
-const preview = window.lampPreview || null;
 const still = { connected: false, lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, down: 0, pressed: 0, released: 0 };
 
 // The frame the runtime is stepping now: dt and time in seconds, number, and the pads.
@@ -60,8 +58,7 @@ async function settled(g) {
             g.scene.processQueue();
             for (const s of g.scene.scenes) if (s.sys.settings.status === Phaser.Scenes.LOADING) s.sys.load.update();
         }
-        // The preview's clock is the game's, so waiting is counted in turns, about 30 s of them.
-        if (++waited > 6000 || (!preview && performance.now() - began > 30000)) { log('Lamp: a scene was still loading after 30 s; playing on.'); return; }
+        if (++waited > 6000 || performance.now() - began > 30000) { log('Lamp: a scene was still loading after 30 s; playing on.'); return; }
     }
 }
 
@@ -81,14 +78,11 @@ export async function phaser({ scenes, pixelArt = false, physics, background = '
     // What lamp-game.js fits to the screen at 1920x1080's shape: Phaser fits its canvas inside it (Phaser's FIT, so a
     // click is read where it lands however big the window is).
     const stage = document.createElement('div');
-    let calls = 0, triangles = 0;
     const renderer = {
         domElement: stage,
         // Phaser draws its canvas at the game's own size; lamp-game.js's smaller drawing when frames are slow is a
         // three.js renderer's, so a Phaser game is always `sharp` (the log still says how fast frames come).
         setPixelRatio() {}, setSize() {},
-        // What the preview counts: WebGL draws, and the triangles in them (Phaser draws two to a sprite).
-        info: { autoReset: true, render: { get calls() { return calls; }, get triangles() { return triangles; } }, reset() { calls = triangles = 0; } },
     };
     let g = null;
     return game({
@@ -105,23 +99,12 @@ export async function phaser({ scenes, pixelArt = false, physics, background = '
                 backgroundColor: background, pixelArt, physics, scene: scenes,
                 input: { keyboard: false, gamepad: false, mouse: true, touch: true },
                 audio: { noAudio: true }, banner: false, disableContextMenu: true, canvasStyle: 'display:block',
-                // Phaser's own random numbers (Phaser.Math.RND) start from the runtime's, the same every preview play.
+                // Phaser's own random numbers (Phaser.Math.RND) start from the runtime's.
                 seed: [String(random())],
             }));
             await new Promise(done => g.isRunning ? done() : g.events.once(Phaser.Core.Events.READY, () => setTimeout(done, 0)));
-            // One loop: the runtime's. Phaser's would run on the browser's frames, which the preview doesn't have.
+            // One loop: the runtime's, so the game is stepped with the runtime's time.
             g.loop.sleep();
-            const gl = g.renderer && g.renderer.gl;
-            if (preview && gl) {
-                const count = (draw, at) => function (mode, ...rest) {
-                    calls++;
-                    if (mode === gl.TRIANGLES) triangles += Math.floor(rest[at] / 3);
-                    else if (mode === gl.TRIANGLE_STRIP || mode === gl.TRIANGLE_FAN) triangles += Math.max(0, rest[at] - 2);
-                    return draw.call(this, mode, ...rest);
-                };
-                gl.drawArrays = count(gl.drawArrays, 1);
-                gl.drawElements = count(gl.drawElements, 0);
-            }
             log(`Lamp: Phaser ${Phaser.VERSION}, drawn with ${g.renderer && g.renderer.type === Phaser.WEBGL ? 'WebGL' : 'a 2D canvas'}.`);
             await settled(g);
         },
@@ -138,10 +121,8 @@ export async function phaser({ scenes, pixelArt = false, physics, background = '
                 if (scene.sys.settings.status === Phaser.Scenes.RUNNING && typeof scene.update === 'function'
                     && scene.sys.sceneUpdate !== scene.update) scene.sys.sceneUpdate = scene.update;
             }
+            // A scene that starts loading mid-play loads while the game goes on.
             g.step(ms, delta);
-            // In the preview a scene that starts loading mid-play is waited for, so a play is the same frames every time;
-            // played for real, it loads while the game goes on.
-            if (preview && starting(g)) return settled(g);
         },
     });
 }
