@@ -230,10 +230,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     if (bodyType === 'suv' && i % 30 === 4) bodyType = 'r1s';
     if (bodyType === 'pickup' && i % 20 === 9) bodyType = 'r1t';
     if (isPolice) bodyType = (i % 100) === 56 ? 'suv' : 'sedan';
-    // about one in ten is a motorcycle, of each kind in turn
-    const curb = !isPolice && i % 10 === 7;
+    // about one in ten is a motorcycle, of each kind in turn; one in ten rides at the curb, and one in twenty more is
+    // an e-bike, the commonest of those in Ann Arbor
+    const extraEbike = !isPolice && i % 20 === 11;
+    const curb = !isPolice && (i % 10 === 7 || extraEbike);
     const moto = curb || (!isPolice && i % 10 === 3);
-    if (curb) bodyType = CURB_KINDS[Math.floor(i / 10) % CURB_KINDS.length];
+    if (extraEbike) bodyType = 'ebike';
+    else if (curb) bodyType = CURB_KINDS[Math.floor(i / 10) % CURB_KINDS.length];
     else if (moto) bodyType = MOTO_KINDS[Math.floor(i / 10) % MOTO_KINDS.length];
 
     let col;
