@@ -132,7 +132,7 @@ const merge = (parts) => { const g = mergeGeometries(parts); g.computeBoundingSp
 const earthy = (geo) => { geo.getAttribute('soil').array.fill(1); return geo; };
 
 // a heap of dug earth: a lumpy, uneven dome with a ragged foot that sinks into the ground, w × h × d metres
-function moundGeo(seed, w, h, d, rings = 5, sectors = 14) {
+function moundGeo(seed, w, h, d, rings = 5, sectors = 14, cone = false) {
   rings = Math.min(5, rings);
   sectors = Math.min(14, sectors);
   const pos = [], idx = [];
@@ -145,7 +145,9 @@ function moundGeo(seed, w, h, d, rings = 5, sectors = 14) {
       const a = (j / sectors) * Math.PI * 2, r = t * wob(a + t * 0.6);
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       // a slumped cone, steeper near the foot, with a second shoulder on one side
-      const y = t >= 1 ? -0.06 : h * (Math.pow(1 - t * t, 1.15) * (1 + 0.18 * Math.sin(2 * a + seed) * t) + lump(x, z) * (1 - t * 0.6));
+      // (a jump pile is a near-straight cone, the ramp pileTop drives up)
+      const prof = cone ? (1 - t) * 0.88 + 0.12 * (1 - t * t) : Math.pow(1 - t * t, 1.15);
+      const y = t >= 1 ? -0.06 : h * (prof * (1 + (cone ? 0.05 : 0.18) * Math.sin(2 * a + seed) * t) + lump(x, z) * (1 - t * 0.6));
       pos.push(x * w / 2, y, z * d / 2);
     }
   }
@@ -161,12 +163,12 @@ function moundGeo(seed, w, h, d, rings = 5, sectors = 14) {
   return g;
 }
 // clods and stones strewn over a mound (the same w, h, d), so it isn't one smooth shape
-function clods(parts, seed, w, h, d, n, hex, stone = 0x77736c) {
+function clods(parts, seed, w, h, d, n, hex, stone = 0x77736c, cone = false) {
   n = Math.min(6, n);
   for (let i = 0; i < n; i++) {
     const a = hash(seed, i, 1) * Math.PI * 2, t = 0.25 + hash(seed, i, 2) * 0.8;
     const x = Math.cos(a) * t * w / 2, z = Math.sin(a) * t * d / 2;
-    const y = Math.max(0, h * Math.pow(Math.max(0, 1 - t * t), 1.15)) - 0.02;
+    const y = Math.max(0, h * (cone ? Math.max(0, 1 - t) : Math.pow(Math.max(0, 1 - t * t), 1.15))) - 0.02;
     const r = (0.05 + hash(seed, i, 3) * 0.12) * Math.min(1, w / 2);
     const rock = hash(seed, i, 4) < 0.3;
     const g = new THREE.DodecahedronGeometry(r, 0);
@@ -440,11 +442,14 @@ function excavatorGeo() {
   return merge(parts);
 }
 
+// the dirt pile's size (m): its length (the way a car drives up it), its height and its width
+const PILE = { w: 6.2, h: 2.7, d: 4.6 };
 function pileGeo() {
-  const parts = [earthy(piece(moundGeo(1.7, 4.4, 1.15, 3.5), 0x5e4632))];
+  // a tall, steep heap: a ramp that throws a car high enough to clear the truck beyond
+  const parts = [earthy(piece(moundGeo(1.7, PILE.w, PILE.h, PILE.d, 5, 14, true), 0x5e4632))];
   // a second, smaller heap slumped against it, and the clods and stones on both
-  parts.push(earthy(piece(moundGeo(4.2, 2.2, 0.55, 1.9, 4, 12), 0x56402d, 1.5, 0, 0.9)));
-  clods(parts, 3.3, 4.2, 1.1, 3.3, 6, 0x4f3b29);
+  parts.push(earthy(piece(moundGeo(4.2, 2.8, 1.1, 2.4, 4, 12, true), 0x56402d, 1.9, 0, 1.2)));
+  clods(parts, 3.3, PILE.w * 0.95, PILE.h * 0.95, PILE.d * 0.95, 6, 0x4f3b29, 0x77736c, true);
   return merge(parts);
 }
 // the dug-up patch (a unit square, scaled to the dig): loose backfill heaped a little above the cut asphalt, its edge
@@ -900,9 +905,9 @@ function buildRoadWork(group, closures) {
     let top = -Infinity;
     for (const p of fixed.pile) {
       const dx = x - p.x, dz = z - p.z;
-      if (dx * dx + dz * dz > 9) continue;
+      if (dx * dx + dz * dz > 16) continue;
       const cs = Math.cos(p.yaw), sn = Math.sin(p.yaw), lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
-      const y = Math.max(heap(lx, lz, 4.4, 1.15, 3.5), heap(lx - 1.5, lz - 0.9, 2.2, 0.55, 1.9));
+      const y = Math.max(heap(lx, lz, PILE.w, PILE.h, PILE.d), heap(lx - 1.9, lz - 1.2, 2.8, 1.1, 2.4));
       if (y > -Infinity) top = Math.max(top, p.g + y);
     }
     return top;

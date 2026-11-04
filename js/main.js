@@ -48,6 +48,7 @@ import { createMoon } from './moon.js';
 import { waterDisturb } from './tsl-materials.js';
 import { buildRoadWork } from './road-work.js';
 import { buildPotholes } from './potholes.js';
+import { VideoRecorder } from './recorder.js';
 
 // In its own window on the Mac the top strip is the title bar, which takes the clicks: the top panels sit below it
 if (window.webkit?.messageHandlers?.lampNative && /Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) document.documentElement.classList.add('mac-window');
@@ -498,6 +499,43 @@ async function initApp() {
   }
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
   updateSoundButton();
+
+  // recording mode: the top bar's record button saves a video of the drive into Movies
+  // (made here when the page was opened before the button was in it, so it shows without a reload)
+  let recordButton = document.getElementById('btn-record');
+  if (!recordButton && soundButton) {
+    recordButton = document.createElement('button');
+    recordButton.id = 'btn-record';
+    recordButton.className = 'tool-btn';
+    recordButton.type = 'button';
+    recordButton.setAttribute('aria-pressed', 'false');
+    recordButton.innerHTML = '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2"/>'
+      + '<circle cx="12" cy="12" r="4.4" fill="currentColor" stroke="none"/></svg><span class="tool-label rec-time">Record</span>';
+    soundButton.before(recordButton);
+  }
+  if (recordButton) { recordButton.title = 'Record a video'; recordButton.setAttribute('aria-label', 'Record a video'); }
+  const recordLabel = recordButton?.querySelector('.rec-time');
+  let recordShown = -1;
+  const videoRecorder = new VideoRecorder(renderer.domElement, audioSystem, (on, saved, secs) => {
+    recordButton?.setAttribute('aria-pressed', String(on));
+    recordButton?.setAttribute('aria-label', on ? 'Stop recording' : 'Record a video');
+    if (recordButton) recordButton.title = on ? 'Stop recording' : 'Record a video';
+    if (recordLabel) recordLabel.textContent = on ? '0:00' : 'Record';
+    recordShown = -1;
+    if (on) showNotice('Recording');
+    else if (saved) showNotice(window.LampNative?.available ? `Saved a ${secs} s video to Movies` : 'Video saved');
+    else if (saved === null) showNotice('The video could not be saved');
+  });
+  if (recordButton && !videoRecorder.supported) { recordButton.hidden = true; log('[recording] this browser can not record video'); }
+  recordButton?.addEventListener('click', () => videoRecorder.toggle());
+  function tickRecording(dt) {
+    videoRecorder.update(dt);
+    const s = Math.floor(videoRecorder.seconds);
+    if (videoRecorder.recording && s !== recordShown && recordLabel) {
+      recordShown = s;
+      recordLabel.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    }
+  }
   // a wheel through a pothole: a thump under the car
   const _holeAt = { x: 0, y: 0, z: 0 };
   controllerManager.onPothole = (x, z, strength) => {
@@ -811,6 +849,12 @@ async function initApp() {
   // the bike, the kayak, the helicopter on the ground, a parked car or one going by (which the player's car becomes)
   // A short line in the middle of the screen that fades by itself (CSS .notice)
   let noticeEl = null, noticeTimer = 0;
+  // a green-brown wash over the view while the camera is under the river, darker toward the edges
+  let lastUnder = 0;
+  const underwaterEl = document.createElement('div');
+  underwaterEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity .25s;' +
+    'background:radial-gradient(ellipse at 50% 35%, rgba(40,90,70,0), rgba(8,28,22,.18) 95%)';
+  document.body.appendChild(underwaterEl);
   function showNotice(text) {
     if (!noticeEl) { noticeEl = document.createElement('div'); noticeEl.className = 'notice'; document.body.appendChild(noticeEl); }
     noticeEl.textContent = text;
@@ -1112,6 +1156,8 @@ async function initApp() {
     },
     onTeleport: teleportTo
   });
+  // the road work on the maps: the middle of each closed block
+  mapSystem.workSites = (roadWork?.closures || []).map((e) => ({ x: e.sx + e.dx * e.len / 2, z: e.sz + e.dz * e.len / 2 }));
 
   teleportButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1358,6 +1404,18 @@ async function initApp() {
     // parked cars a crash shoved, sliding to a stop (parked-cars.js), and found where they are now
     for (const col of parkedCars.step(dt, (p) => controllerManager.settleParked(p))) controllerManager.refreshCollider(col);
     cameraSystem.update(dt, elapsed);
+    tickRecording(dt);
+    // the camera under the river's surface: murky green fog and a tint over the view
+    {
+      const cp = cameraSystem.camera.position, level = waterLevel(cp.x, cp.z);
+      const under = level != null && cp.y < level - 0.05 && groundHeight(cp.x, cp.z) < level ? 1 : 0;
+      if (lightingSystem.uUnder) lightingSystem.uUnder.value = under;
+      if (under !== lastUnder) {
+        lastUnder = under;
+        underwaterEl.style.opacity = under ? '1' : '0';
+        log(under ? '[underwater] the camera went under the river' : '[underwater] the camera came up');
+      }
+    }
     streetDetails.signalClock.value = elapsed;
     controlsPart.made.update(elapsed);
     trafficSystem.update(

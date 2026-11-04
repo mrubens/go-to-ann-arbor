@@ -15,9 +15,12 @@ import {
   max,
   exp,
   abs,
-  select
+  select,
+  min
 } from 'three/tsl';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
+
+const UNDER_TINT = new THREE.Color(0.32, 0.55, 0.46);
 import { SunLight } from 'three/addons/lights/SunLight.js';
 import { SunLightNode } from 'three/addons/lights/SunLightNode.js';
 import { cityUniforms } from './tsl-materials.js';
@@ -292,6 +295,9 @@ class LightingSystem {
     // so helicopter / observatory views stay clearer than the horizon.
     this.uFogDensity = uniform(TIME_PRESETS.golden.fogDensity);
     this.uFogHeight = uniform(900.0);
+    // under the river (set each frame by main.js): 0 above the water, 1 with the camera under it
+    this.uUnder = uniform(0.0);
+    this.uUnderColor = uniform(new THREE.Color(0x1d3a33));
     if (this.envRenderTarget) this.scene.fogNode = this.createAerialFogNode();
   }
 
@@ -310,7 +316,10 @@ class LightingSystem {
     const eb = exp(yb.div(H).negate());
     const meanDensity = select(abs(dy).greaterThan(1.0), ea.sub(eb).mul(H).div(dy), ea);
     const tau = this.uFogDensity.mul(dist).mul(meanDensity);
-    return fog(skyColor, float(1.0).sub(exp(tau.mul(tau).negate())));
+    // under the water the Huron's murk closes in within a few metres, greener near, darker deep
+    const murk = min(float(1.0), float(0.85).mul(float(1.0).sub(exp(dist.mul(-0.018)))));
+    const air = float(1.0).sub(exp(tau.mul(tau).negate()));
+    return fog(mix(skyColor, this.uUnderColor, this.uUnder), mix(air, murk, this.uUnder));
   }
 
   bakeEnvironmentMap() {
@@ -350,6 +359,8 @@ class LightingSystem {
     this.scene.fog.color.setHex(p.fogColor);
     this.scene.fog.density = p.fogDensity;
     if (this.uFogDensity) this.uFogDensity.value = p.fogDensity;
+    // the river's murk lit as the sky is: the haze's colour through green-brown water
+    if (this.uUnderColor) this.uUnderColor.value.setHex(p.fogColor).multiply(UNDER_TINT);
 
     // Update physical Preetham SkyMesh uniforms
     this.sky.turbidity.value = p.turbidity;

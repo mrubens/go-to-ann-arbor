@@ -340,6 +340,25 @@ class MapView {
 }
 
 // Player heading arrow at the (already rotated) origin: white, on a dark halo
+// a road work sign: a small orange diamond with a dark rim and a dark bar across it, like the "ROAD WORK" diamonds
+function drawWorkSign(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.moveTo(x, y - r - 1.5); ctx.lineTo(x + r + 1.5, y); ctx.lineTo(x, y + r + 1.5); ctx.lineTo(x - r - 1.5, y); ctx.closePath();
+  ctx.fillStyle = MAP.halo;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
+  ctx.fillStyle = '#ff8a1f';
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, r * 0.2);
+  ctx.strokeStyle = '#1b1b1c';
+  ctx.beginPath();
+  ctx.moveTo(x, y - r * 0.82); ctx.lineTo(x + r * 0.82, y); ctx.lineTo(x, y + r * 0.82); ctx.lineTo(x - r * 0.82, y); ctx.closePath();
+  ctx.stroke();
+  ctx.fillStyle = '#1b1b1c';
+  ctx.fillRect(x - r * 0.38, y - r * 0.12, r * 0.76, r * 0.24);
+}
+
 function drawPlayerArrow(ctx, tipY, halfWidth, tailY) {
   ctx.beginPath();
   ctx.moveTo(0, tipY);
@@ -1006,6 +1025,12 @@ class CityMapSystem {
       }
     }
 
+    // Road work: an orange diamond at each closed block (road-work.js; set by main.js)
+    for (const site of this.workSites || []) {
+      const sx = toX(site.x), sy = toY(site.z);
+      if (Math.abs(sx) < w * 0.48 && Math.abs(sy) < h * 0.48) drawWorkSign(ctx, sx, sy, 5);
+    }
+
     // Camera FOV Cone & Player Arrow at center (0, 0)
     const camDir = this.cameraSystem.currentLookAt.clone().sub(this.cameraSystem.currentPos);
     const camAngle = Math.atan2(camDir.x, camDir.z);
@@ -1079,6 +1104,12 @@ class CityMapSystem {
       const wy = toY(this.waypoint.z);
       drawRoute(ctx, toX(ent.position.x), toY(ent.position.z), wx, wy, 4);
       drawWaypoint(ctx, wx, wy, 7);
+    }
+
+    // Road work: an orange diamond at each closed block
+    for (const site of this.workSites || []) {
+      const sx = toX(site.x), sy = toY(site.z);
+      if (Math.abs(sx) < v.w * 0.5 && Math.abs(sy) < v.h * 0.5) drawWorkSign(ctx, sx, sy, 7);
     }
 
     // Live Player Blip & Heading Arrow, with a slow pulse to find it at a glance

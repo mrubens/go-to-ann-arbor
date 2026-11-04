@@ -14,13 +14,14 @@ import {
   step,
   smoothstep,
   length,
-  fwidth
+  fwidth,
+  select
 } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { LoftGeometry } from 'three/addons/geometries/LoftGeometry.js';
 import { part } from './vehicles.js';
 
-// The player's sightseeing helicopter: a lofted fuselage with tube skids, rotors and its TSL material.
+// The player's helicopter, painted as U-M's Survival Flight: a lofted fuselage with tube skids, rotors and its TSL material.
 
 const _down = new THREE.Vector3(0, -1, 0);
 
@@ -298,7 +299,7 @@ function buildHelicopterTailRotorGeometry() {
 let _heliLoftedMat = null;
 
 /**
- * Creates the TSL procedural material for the 3D Lofted Sightseeing Helicopter:
+ * Creates the TSL procedural material for the 3D Lofted Survival Flight Helicopter:
  * - Renders wrap-around panoramic windscreen, chin bubble windows, sightseeing cabin side windows,
  *   and overhead skylight glass using anti-aliased `roundedRect` SDFs with rubber seals & frame pillars.
  * - Renders a sleek flush executive sightseeing livery (Pearl Aviation White upper cabin,
@@ -360,14 +361,25 @@ function createLoftedHelicopterMaterial() {
       .mul(isFuselage)
       .toVar();
 
-    // 2. Flush Executive Sightseeing Livery (Aviation White + Midnight Navy + Sweeping Gold Ribbon)
-    const navyCurveY = float(1.00).add(p.z.mul(-0.085));
+    // 2. Survival Flight's colours: a royal blue body over a maize belly, a maize nose tip, and on each side a
+    // maize lens sweeping back from the nose under the windows that trails off in pinstripes toward the tail
     const edgeW = max(fwidth(p.y), 0.008);
-    const isLowerNavy = smoothstep(navyCurveY.add(edgeW), navyCurveY.sub(edgeW), p.y);
-    const goldStripeDist = abs(p.y.sub(navyCurveY.add(0.065)));
-    const isGoldStripe = smoothstep(0.055, 0.038, goldStripeDist);
-    const redPinDist = abs(p.y.sub(navyCurveY.add(0.145)));
-    const isRedPin = smoothstep(0.022, 0.012, redPinDist);
+    const bellyY = float(0.80).add(p.z.mul(-0.075)).add(smoothstep(-0.6, -2.4, p.z).mul(0.42));
+    const isBelly = smoothstep(bellyY.add(edgeW), bellyY.sub(edgeW), p.y);
+    const isNose = smoothstep(2.52, 2.58, p.z);
+    // the lens: an ellipse ring from z -1.2 to the nose, between the belly and the window line
+    const ez = p.z.sub(0.75).div(1.95), ey = p.y.sub(0.98).div(0.30);
+    const er = length(vec2(ez, ey));
+    const ring = smoothstep(0.2, 0.12, abs(er.sub(0.86))).mul(step(0.3, abs(n.x)));
+    const lensFill = smoothstep(0.58, 0.52, er).mul(step(0.3, abs(n.x))).mul(smoothstep(0.2, 0.6, ez));
+    // pinstripes behind it: four thin lines, each ending a little sooner, fading out along the tailboom root
+    const pinZ = p.z.negate().sub(1.0);
+    const pinBand = p.y.sub(float(0.86).add(p.z.mul(-0.16))).div(0.075);
+    const pinLine = smoothstep(0.32, 0.18, abs(fract(pinBand).sub(0.5))).mul(step(0.0, pinBand)).mul(step(pinBand, 4.0));
+    const pins = pinLine.mul(step(0.0, pinZ)).mul(step(pinZ, float(1.5).sub(pinBand.mul(0.22)))).mul(step(0.3, abs(n.x)));
+    const isGoldStripe = clamp(max(max(isBelly, isNose), max(max(ring, lensFill), pins)), 0.0, 1.0);
+    const isLowerNavy = float(1.0);
+    const isRedPin = float(0.0);
 
     // Cabin door panel seams & handles
     const doorSeam1 = smoothstep(0.012, 0.004, abs(p.z.sub(1.06)));
@@ -380,9 +392,9 @@ function createLoftedHelicopterMaterial() {
       .mul(smoothstep(1.75, 1.65, p.y));
 
     const whitePaint = color(0xf4f7fb);
-    const navyPaint = color(0x132c58);
-    const goldPaint = color(0xffbe28);
-    const redPaint = color(0xd8222b);
+    const navyPaint = color(0x1c3a86); // royal blue
+    const goldPaint = color(0xffcb05); // maize
+    const redPaint = whitePaint;
 
     const baseLivery = mix(
       mix(mix(whitePaint, navyPaint, isLowerNavy), goldPaint, isGoldStripe),
@@ -398,14 +410,16 @@ function createLoftedHelicopterMaterial() {
       .mul(step(0.35, abs(n.x)));
     const louverSlats = step(0.45, fract(p.y.mul(55.0))).mul(0.4).add(0.35);
     const cowlingCol = mix(
-      mix(whitePaint, goldPaint, smoothstep(2.02, 1.97, p.y)),
+      mix(navyPaint, goldPaint, smoothstep(2.02, 1.97, p.y)),
       color(0x181c22).mul(louverSlats),
       intakeGrille
     );
 
-    // 4. Swept Tail Fin & Stabilizer: Deep Navy with Gold Tip Accent
-    const finGoldBand = smoothstep(2.42, 2.45, p.y).mul(smoothstep(2.62, 2.59, p.y));
-    const finCol = mix(navyPaint, goldPaint, finGoldBand);
+    // 4. Tail fin: blue at the front, maize behind a line swept back parallel to its leading edge, and the
+    // stabilizer and its endplates maize as the tail rotor's shroud is
+    const finMid = float(-5.25).sub(p.y.sub(1.48).mul(0.59));
+    const finGold = smoothstep(finMid.sub(0.04), finMid.sub(0.08), p.z).mul(step(1.5, p.y));
+    const finCol = mix(navyPaint, goldPaint, clamp(max(finGold, step(0.6, abs(p.x))), 0.0, 1.0));
 
     // 5. Rotor Blades: Matte Anthracite Carbon with High-Visibility Yellow Safety Tips
     const radialDist = length(vec2(p.x, p.z));

@@ -1481,3 +1481,9 @@ body.touch-enabled .pop-item { min-height: 44px; }
   font: 600 30px/1.2 system-ui, sans-serif; pointer-events: none; opacity: 0; transition: opacity 0.25s; z-index: 50;
 }
 .notice.show { opacity: 1; }
+
+/* Recording mode: the button turns red with the time running while a video records */
+#btn-record[aria-pressed="true"] { color: #ff4d4d; background: rgba(255, 60, 60, 0.14); }
+#btn-record[aria-pressed="true"] .icon { animation: rec-pulse 1.2s ease-in-out infinite; }
+#btn-record .rec-time { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: left; }
+@keyframes rec-pulse { 50% { opacity: 0.35; } }

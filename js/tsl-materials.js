@@ -2941,6 +2941,8 @@ function createWaterMaterial() {
     metalness: 0.0,
     roughness: 0.25
   });
+  // both faces, so a camera under the river sees its surface overhead
+  mat.side = THREE.DoubleSide;
 
   const waveTex = getWaterWaveTexture();
   const harbourY = TOWN_BOUNDS ? TOWN_BOUNDS.waterLevel : -2.2;

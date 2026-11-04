@@ -328,13 +328,16 @@ function buildParkedCars(group, nearTrack = null) {
   }
 
   // The parked car nearest (x, z) within `reach` metres, or null
-  function nearest(x, z, reach) {
-    let best = null, bestD = reach * reach;
+  // the nearest car within reach; `weigh(car)` scales how near each one counts (the player prefers the one they face)
+  function nearest(x, z, reach, weigh = null) {
+    let best = null, bestD = reach * reach, bestS = Infinity;
     for (const set of sets) {
       for (const c of set.cars) {
         if (c.gone) continue;
         const d = (c.x - x) ** 2 + (c.z - z) ** 2;
-        if (d < bestD) { bestD = d; best = c; }
+        if (!weigh) { if (d < bestD) { bestD = d; best = c; } continue; }
+        const sc = d < reach * reach ? d * weigh(c) ** 2 : Infinity;
+        if (sc < bestS) { bestS = sc; best = c; }
       }
     }
     return best;

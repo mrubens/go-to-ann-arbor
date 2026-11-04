@@ -1101,7 +1101,7 @@ class ThirdPersonControllerManager {
 
     return {
       type: 'helicopter',
-      label: 'Sightseeing Helicopter',
+      label: 'Helicopter',
       mesh: root,
       tiltPivot,
       mainRotorPivot,
@@ -1336,10 +1336,18 @@ class ThirdPersonControllerManager {
       p.riding = mode;
       return { mode: 'person' };
     }
-    let best = null, score = 1;
+    let best = null, score = Infinity;
+    // what the player faces counts as nearer, what's behind them farther: of two cars in reach, the one ahead is taken
+    const fs = Math.sin(p.heading), fc = Math.cos(p.heading);
+    const facing = (x, z) => {
+      const dx = x - p.position.x, dz = z - p.position.z, d = Math.hypot(dx, dz);
+      return d < 0.3 ? 1 : 1 - 0.45 * ((dx * fs + dz * fc) / d);
+    };
     const consider = (m, x, z, reach, car = null) => {
       const d = Math.hypot(x - p.position.x, z - p.position.z) / reach;
-      if (d < score) { score = d; best = { mode: m, parked: car }; }
+      if (d >= 1) return;
+      const s = d * facing(x, z);
+      if (s < score) { score = s; best = { mode: m, parked: car }; }
     };
     for (const [m, reach] of [['car', 4.2], ['cyclist', 2.4], ['kayak', 7], ['helicopter', 7.5]]) {
       const e = this.entities[m];
@@ -1348,15 +1356,15 @@ class ThirdPersonControllerManager {
     }
     // a kayak pulled up on the bank at a put-in (kayak-launches.js)
     const beach = this.kayakLaunches?.nearest(p.position.x, p.position.z, 3);
-    if (beach && beach.d / 3 < score) { score = beach.d / 3; best = { mode: 'kayak', beach }; }
-    const near = parked?.nearest(p.position.x, p.position.z, 4.2);
+    if (beach && beach.d / 3 * facing(beach.x, beach.z) < score) { score = beach.d / 3 * facing(beach.x, beach.z); best = { mode: 'kayak', beach }; }
+    const near = parked?.nearest(p.position.x, p.position.z, 4.2, (c) => facing(c.x, c.z));
     if (near) consider('car', near.x, near.z, 4.2, near);
     // a dump truck or excavator at the road work, from beside its cab or tracks
     const mach = this.roadWork?.nearestMachine(p.position.x, p.position.z, 2.5);
-    if (mach && mach.d / 2.5 < score) { score = mach.d / 2.5; best = { mode: 'car', machine: mach }; }
+    if (mach && mach.d / 2.5 * facing(mach.x, mach.z) < score) { score = mach.d / 2.5 * facing(mach.x, mach.z); best = { mode: 'car', machine: mach }; }
     // a car going by in traffic (traffic.js), within reach
     const passing = traffic?.nearestCar(p.position.x, p.position.z, 5);
-    if (passing != null && passing / 5 < score) { score = passing / 5; best = { mode: 'car', moving: true }; }
+    if (passing != null && passing / 5 < Math.min(1, score)) { score = passing / 5; best = { mode: 'car', moving: true }; }
     if (best) {
       p.riding = best.mode;
       this.entities[best.mode].leftEmpty = false;
@@ -2174,7 +2182,7 @@ class ThirdPersonControllerManager {
       const bx = x - (ux / ul) * back, bz = z - (uz / ul) * back;
       const behind = Math.max(this.getGroundHeight(bx, bz, 'car'), this.carRoof(c, bx, bz, prevY, false));
       // up a dirt pile's ramp (road-work.js) it climbs its full slope, so it flies off the top
-      const steep = this.roadWork?.pileTop(x, z) > -Infinity ? 0.7 : 0.45;
+      const steep = this.roadWork?.pileTop(x, z) > -Infinity ? 1.0 : 0.45;
       slopeVy = Math.max(-0.45, Math.min(steep, (ground - behind) / back)) * (ul / dt);
     }
     const ballistic = prevY + c.vy * dt - 4.9 * dt * dt;

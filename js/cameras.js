@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { groundHeight, stadiumGround } from './terrain.js';
+import { groundHeight, stadiumGround, waterLevel, riverDepth } from './terrain.js';
 import { hot, log } from '../lamp-game.js';
 
 // Lamp: the camera systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so a
@@ -226,7 +226,11 @@ class CameraSystem {
       const cx = best.x, cz = best.z;
       // never below the arc's lower end (the take-off or where it lands), so a bowl or a dip doesn't hide it
       const landY = surface(p.x + vx * tLeft, p.z + vz * tLeft);
-      const camY = Math.max(surface(cx, cz) + (best.n >= 1 ? 3.2 : 1.1), Math.min(p.y, landY) + 1.4);
+      // and over the river, above its water (the ground there is its bed), so the car is seen going in, not landing
+      // on what looks like dry ground under the surface
+      const above = (x, z) => (riverDepth(x, z) > 0 ? Math.max(surface(x, z), waterLevel(x, z) ?? -Infinity) : surface(x, z));
+      const camY = Math.max(above(cx, cz) + (best.n >= 1 ? 3.2 : 1.1),
+        Math.min(p.y, Math.max(landY, above(p.x + vx * tLeft, p.z + vz * tLeft))) + 1.4);
       jc = this.jumpCam = { entity, after: 0, pos: new THREE.Vector3(cx, camY, cz) };
       this.currentPos.copy(jc.pos);
       this.currentLookAt.set(p.x, p.y + 0.6, p.z);
@@ -456,6 +460,13 @@ class CameraSystem {
       this.currentPos.set(entity.position.x, this.followBaseY, entity.position.z).add(this.followOffset);
       this.currentLookAt.set(entity.position.x, this.followBaseY, entity.position.z).add(this.followLookOffset);
       this.currentPos.y = Math.max(groundHeight(this.currentPos.x, this.currentPos.z) + 0.55, this.currentPos.y);
+      // a car or bike driven into the river: once its roof is under, the camera goes under with it
+      const level = entity.type === 'kayak' || entity.type === 'helicopter' ? null : waterLevel(entity.position.x, entity.position.z);
+      if (level != null && riverDepth(entity.position.x, entity.position.z) > 0.2 && entity.position.y + 1.3 < level) {
+        const bed = groundHeight(this.currentPos.x, this.currentPos.z) + 0.4;
+        this.currentPos.y = Math.max(bed, Math.min(this.currentPos.y, level - 0.4));
+        this.currentLookAt.y = Math.min(this.currentLookAt.y, level - 0.5);
+      }
     } else {
       this.followEntity = null;
       const k = 1 - Math.exp(-dt * 8.5);
