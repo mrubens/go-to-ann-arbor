@@ -24,7 +24,7 @@ import { buildTrafficControls } from './traffic-controls.js';
 import { buildShopSigns } from './shop-signs.js';
 import { ThirdPersonControllerManager } from './controllers.js';
 import { TouchControls } from './touch-controls.js';
-import { reportMemory } from './memory-report.js';
+import { reportMemory, memoryCheckpoint, MEASURE_MEMORY } from './memory-report.js';
 import { gpuOnly, releaseUploaded, useRenderer } from './gpu-only.js';
 import { TIER } from './device-tier.js';
 import { GamepadControls } from './gamepad-controls.js';
@@ -36,7 +36,8 @@ import { createWaterSplash } from './water-splash.js';
 import { createSkidEffects } from './skid-effects.js';
 import { CityMapSystem } from './city-map.js';
 import { setupSceneCulling, updateSceneCulling, cullAlso, showShadowStandIns } from './scene-culling.js';
-import { loadTerrain, setOnTerrain, groundHeight, waterLevel, riverDepth, streamGround, updateGroundStreaming } from './terrain.js';
+import { loadTerrain, setOnTerrain, groundHeight, waterLevel, riverDepth, streamGround, updateGroundStreaming, streamNear } from './terrain.js';
+import { loadYardData, allYards } from './yards.js';
 import { buildCascades, CASCADE_START } from './cascades.js';
 import { buildRiverPeople } from './river-people.js';
 import { CityAudioSystem } from './audio-system.js';
@@ -130,12 +131,15 @@ async function initApp() {
   if (QUALITY.streetLights) renderer.lighting = new ClusteredLighting(256, 32, 28, 48);
 
   // Start-up phase timings (logged once as "[init] ...") to keep load-time regressions traceable
+  // with ?memory in the address, each stage of the start logs what the city holds then (memory-report.js), to find the start's peak
+  let scene = null;
   let initTimings = [];
   let initMark = performance.now();
   const markInit = (label) => {
     const now = performance.now();
     initTimings.push(`${label} ${Math.round(now - initMark)}ms`);
-    initMark = now;
+    if (MEASURE_MEMORY && scene) memoryCheckpoint(label, scene, renderer, log);
+    initMark = performance.now();
   };
 
   // Whether this renderer has compiled the city's shaders already: kept with it, so the code running again for a change
@@ -150,7 +154,7 @@ async function initApp() {
 
   // 2. Scene, atmosphere and lighting
   await showLoadingStage('Creating sky and environment lighting...');
-  const scene = live.keep('scene', () => new THREE.Scene());
+  scene = live.keep('scene', () => new THREE.Scene());
   // What the run before put in the scene goes first, so the lights built here own only what they add: each part of the
   // city comes back below, and the rest is made again.
   scene.clear();
@@ -204,13 +208,17 @@ async function initApp() {
     };
   }
   await showLoadingStage('Building streets, parks and the Huron River...');
+  // Lamp: the yards, woods and curb cuts, read from their own files (yards.js): where the city streams, the yards'
+  // squares are read only as the player comes near; built whole, every square now
+  await loadYardData();
   const grid = await live.keep('grid', () => cityPart(async (g) => {
-    const made = buildCityGrid(g);
+    const made = buildCityGrid(g, TIER.stream ? null : await allYards());
     // Lamp: the street level built flat at y = 0, set on the ground (cut on several cores the first time, then read
-    // back from what that start saved: terrain.js)
-    await setOnTerrain(g.getObjectByName('CityGrid'));
+    // back from what that start saved: terrain.js), and the yards near the player when they stream
+    await Promise.all([setOnTerrain(g.getObjectByName('CityGrid')), streamNear(made.yardLayers)]);
     return made;
-  }, { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/cascades.js', 'js/river.js', 'js/tsl-materials.js', 'js/playgrounds.js'] });
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/cascades.js', 'js/river.js', 'js/tsl-materials.js', 'js/playgrounds.js',
+    'js/yards.js', 'data/yards/index.json', 'data/woods.bin.gz', 'data/curb-cuts.bin.gz'] });
   const cityGrid = grid.made;
   restoreCityGrid(cityGrid.shared);
   markInit('cityGrid');
@@ -312,7 +320,7 @@ async function initApp() {
   const railPart = live.keep('railways', () => cityPart((g) => buildRailways(g, railCrossings, wolverine), { still: true }), { inputs: [heights], from: ['data/rail-crossings.json', 'data/wolverine.json'] });
   const railways = railPart.made;
   // Cars parked in the lots and along the main streets downtown, solid to the player (parked-cars.js)
-  const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack)), { inputs: [heights], from: ['js/parked-cars.js', 'js/railways.js'] });
+  const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack)), { inputs: [heights], from: ['js/parked-cars.js', 'js/railways.js', 'data/curb-cuts.bin.gz'] });
   const parkedCars = parkedPart.made;
   // Kayaks pulled up on the river's banks at the parks, to get into there (kayak-launches.js)
   const launchesPart = live.keep('kayakLaunches', () => cityPart((g) => buildKayakLaunches(g)), { inputs: [heights], from: ['js/kayak-launches.js'] });
@@ -609,7 +617,7 @@ async function initApp() {
     if (group) group.visible = false;
   }
   console.log(`[quality] ${JSON.stringify(QUALITY)}`);
-  reportMemory(scene, renderer, log, TIER.name !== 'full');
+  if (MEASURE_MEMORY) reportMemory(scene, renderer, log, TIER.name !== 'full');
 
   // On WebGPU, small InstancedMeshes (<= 1000 instances) keep their matrices in uniform buffers that three.js
   // re-uploads on every draw of every pass (~2.5 MB/frame with the shadow cascades, stalling the GPU queue).
@@ -1517,7 +1525,7 @@ async function initApp() {
     // the still parts' script copies let go once uploaded; the memory logged again once they've mostly gone
     if (warmedUp && (++releaseFrame & 31) === 0) {
       freedSinceReport += releaseUploaded(renderer);
-      if (freedSinceReport > 0 && elapsed - reportedAt > 12) {
+      if (MEASURE_MEMORY && freedSinceReport > 0 && elapsed - reportedAt > 12) {
         reportedAt = elapsed; freedSinceReport = 0;
         reportMemory(scene, renderer, log, TIER.name !== 'full');
       }

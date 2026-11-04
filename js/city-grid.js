@@ -60,11 +60,12 @@ import {
 } from './tsl-materials.js';
 import { createRoadPaintChunkBuilder } from './road-paint.js';
 import { GEO } from './city-geodata.js';
+import { woodsTrees, squareYards, yardSquares, yardsVersion } from './yards.js';
 import { tagLot, createStripeMaterial } from './parking-stripes.js';
 import { buildPlaygrounds } from './playgrounds.js';
 import { buildGolf, buildTrails } from './golf.js';
 import { buildRiver } from './river.js';
-import { riverDepth, drawOver } from './terrain.js';
+import { riverDepth, drawOver, streamFromSquares } from './terrain.js';
 import { LIFT } from './ground-lifts.js';
 import { cascadeGaps } from './cascades.js';
 
@@ -1505,7 +1506,10 @@ function buildWaterfrontPiers(group) {
   B.build(group, new Set([BL, PA]));
 }
 
-function buildCityGrid(scene) {
+// `yards`: the whole city's lawns, driveways and curb cuts (yards.js allYards), or none to stream them square by square
+// (a change to how the yards are sorted into their looks raises YARDS_LOOK, so the tiles a play saved are made again)
+const YARDS_LOOK = 1;
+function buildCityGrid(scene, yards = null) {
   streetGroundSurfaces = [];
   const group = new THREE.Group();
   group.name = 'CityGrid';
@@ -1651,6 +1655,13 @@ function buildCityGrid(scene) {
       group.add(m);
     }
   };
+  // the same, as one geometry (a square's yards when the city streams: terrain.js streamFromSquares)
+  const mergeFlat = (geos) => {
+    const flat = geos.map((g) => (g.index ? g.toNonIndexed() : g));
+    const common = Object.keys(flat[0].attributes).filter((k) => flat.every((g) => g.attributes[k]));
+    for (const g of flat) for (const k of Object.keys(g.attributes)) if (!common.includes(k)) g.deleteAttribute(k);
+    return mergeGeometries(flat, false);
+  };
   mergeInto(curbGeos, curbMat, false);
   mergeInto(slabGeos, sidewalkMat);
   mergeInto(hedgeGeos, medianHedgeMat, true);
@@ -1738,7 +1749,7 @@ function buildCityGrid(scene) {
 
   // Ann Arbor: green lawns inside the sidewalk ring of every residential, campus and park block, the surface parking
   // lots on them, the Huron River & its ponds, and the trees of the parks, the Arb's woods and the front yards
-  // (city-config.js WATER_POLYGONS, PARKING_LOTS; GEO.lawns, GEO.woods from build-annarbor.py)
+  // (city-config.js WATER_POLYGONS, PARKING_LOTS; the lawns and woods from build-annarbor.py, read by yards.js)
   const toRing = (flat) => {
     const out = [];
     for (let i = 0; i < flat.length; i += 2) out.push({ x: flat[i], z: flat[i + 1] });
@@ -1763,54 +1774,56 @@ function buildCityGrid(scene) {
   const drivewayBlacktopMat = new THREE.MeshStandardNodeMaterial({ color: 0x5c5d60, roughness: 0.95 });
   // drawn in front of the lawn under them wherever the two meet, so the two don't flicker far off (drawOver, terrain.js)
   for (const m of [drivewayConcreteMat, drivewayBlacktopMat]) drawOver(m);
-  const lawnGeos = [];
-  for (const rings of GEO.lawns) lawnGeos.push(flatGeo(rings.map(toRing), LAWN_Y));
-  mergeInto(lawnGeos, cpLawnMat);
-  if (bankLawn.length) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(bankLawn, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(bankLawn.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(bankLawn.length / 3 * 2), 2));
-    mergeInto([g], cpLawnMat);
-  }
-  // Driveways, front walks and patios: the city's paved surfaces on each lot, in pale concrete or asphalt
-  // (GEO.driveways from build-annarbor.py, joined to the curb across the tree lawn and sidewalk)
-  const concreteGeos = [], blacktopGeos = [], plazaGeos = [];
-  for (const rings of GEO.driveways || []) {
-    const r = rings.map(toRing);
-    // big paved yards (lots the map doesn't call parking, school and church yards) are asphalt
-    let area = 0;
-    for (let i = 0, j = r[0].length - 1; i < r[0].length; j = i++) area += r[0][j].x * r[0][i].z - r[0][i].x * r[0][j].z;
-    // Lamp: the aprons that join a driveway across the sidewalk and tree lawn to the curb (small, four-cornered) are
-    // always concrete, as the sidewalk is: picked at random, a blacktop one read as a dark hole in the sidewalk
-    const apron = r[0].length <= 5 && Math.abs(area) / 2 < 40;
-    // Lamp: a paving that winds around lawns (holes in it) is a web of walks, as on the Diag and the campus's quads, and
-    // one narrow throughout (its area over half its edge, under 7 m) a long drive or walk: concrete, or now and then
-    // blacktop as the small ones, like the footpaths drawn along them; only wide paved yards are always blacktop
-    let edge = 0, net = Math.abs(area);
-    for (let k = 0; k < r.length; k++) {
-      const ring = r[k];
-      let a = 0;
-      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-        edge += Math.hypot(ring[i].x - ring[j].x, ring[i].z - ring[j].z);
-        a += ring[j].x * ring[i].z - ring[i].x * ring[j].z;
+  // Lamp: the yards' paving and lawns (GEO's lawns and driveways, from build-annarbor.py, now read from their own files:
+  // yards.js), each kind's pieces in a list: the lawns, the concrete, the blacktop, the plazas' pavers and the curb
+  // cuts' ramps. Built for the whole city at once, or square by square as the player comes near when it streams.
+  const cutMat = new THREE.MeshStandardNodeMaterial({ color: 0xa29e96, roughness: 0.93, side: THREE.DoubleSide });
+  cutMat.polygonOffset = true;
+  cutMat.polygonOffsetFactor = -1;
+  cutMat.polygonOffsetUnits = -2;
+  let plazaMat = null;
+  const plazaLook = () => {
+    if (!plazaMat) { plazaMat = createParkPavingMaterial(); drawOver(plazaMat); }
+    return plazaMat;
+  };
+  const yardGeometries = (lawns, driveways, cuts) => {
+    const out = { lawn: [], concrete: [], blacktop: [], plaza: [], cuts: [] };
+    for (const rings of lawns) out.lawn.push(flatGeo(rings.map(toRing), LAWN_Y));
+    // Driveways, front walks and patios: the city's paved surfaces on each lot, in pale concrete or asphalt
+    // (joined to the curb across the tree lawn and sidewalk)
+    for (const rings of driveways) {
+      const r = rings.map(toRing);
+      // big paved yards (lots the map doesn't call parking, school and church yards) are asphalt
+      let area = 0;
+      for (let i = 0, j = r[0].length - 1; i < r[0].length; j = i++) area += r[0][j].x * r[0][i].z - r[0][i].x * r[0][j].z;
+      // Lamp: the aprons that join a driveway across the sidewalk and tree lawn to the curb (small, four-cornered) are
+      // always concrete, as the sidewalk is: picked at random, a blacktop one read as a dark hole in the sidewalk
+      const apron = r[0].length <= 5 && Math.abs(area) / 2 < 40;
+      // Lamp: a paving that winds around lawns (holes in it) is a web of walks, as on the Diag and the campus's quads, and
+      // one narrow throughout (its area over half its edge, under 7 m) a long drive or walk: concrete, or now and then
+      // blacktop as the small ones, like the footpaths drawn along them; only wide paved yards are always blacktop
+      let edge = 0, net = Math.abs(area);
+      for (let k = 0; k < r.length; k++) {
+        const ring = r[k];
+        let a = 0;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          edge += Math.hypot(ring[i].x - ring[j].x, ring[i].z - ring[j].z);
+          a += ring[j].x * ring[i].z - ring[i].x * ring[j].z;
+        }
+        if (k) net -= Math.abs(a);
       }
-      if (k) net -= Math.abs(a);
+      const big = Math.abs(area) / 2 > 120, web = r.length > 1, wide = net / edge >= 7;
+      const asphalt = big ? wide && !web || (!web && hashDrive(r[0][0].x, r[0][0].z) < 0.25)
+        : !apron && hashDrive(r[0][0].x, r[0][0].z) < 0.25;
+      const dg = flatGeo(r, LAWN_Y + 0.008);
+      // Lamp: a vast web of walks (the plazas around Michigan Stadium, its gates and concourses) in one flat pale gray
+      // read as a blank slab: it's laid in granite pavers, jointed and weathered, like the city's plazas
+      if (web && Math.abs(area) / 2 > 5000) { out.plaza.push(setPavingStyle(dg, 1)); continue; }
+      (asphalt ? out.blacktop : out.concrete).push(dg);
     }
-    const big = Math.abs(area) / 2 > 120, web = r.length > 1, wide = net / edge >= 7;
-    const asphalt = big ? wide && !web || (!web && hashDrive(r[0][0].x, r[0][0].z) < 0.25)
-      : !apron && hashDrive(r[0][0].x, r[0][0].z) < 0.25;
-    const dg = flatGeo(r, LAWN_Y + 0.008);
-    // Lamp: a vast web of walks (the plazas around Michigan Stadium, its gates and concourses) in one flat pale gray
-    // read as a blank slab: it's laid in granite pavers, jointed and weathered, like the city's plazas
-    if (web && Math.abs(area) / 2 > 5000) { plazaGeos.push(setPavingStyle(dg, 1)); continue; }
-    (asphalt ? blacktopGeos : concreteGeos).push(dg);
-  }
-  // Curb cuts: where a driveway meets the street, a concrete ramp flaring down over the curb to the gutter
-  // (GEO.curbCuts: x, z where its middle meets the curb, the way to the street, its width)
-  {
-    const C = (GEO.curbCuts || []).flat();
-    const pos = new Float32Array((C.length / 5) * 15 * 9);
+    // Curb cuts: where a driveway meets the street, a concrete ramp flaring down over the curb to the gutter
+    // (x, z where its middle meets the curb, the way to the street, its width)
+    const C = cuts, pos = new Float32Array((C.length / 5) * 15 * 9);
     let o = 0;
     const put = (...v) => { pos.set(v, o); o += v.length; };
     for (let i = 0; i < C.length; i += 5) {
@@ -1831,21 +1844,50 @@ function buildCityGrid(scene) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, o), 3));
       g.computeVertexNormals();
-      const cutMat = new THREE.MeshStandardNodeMaterial({ color: 0xa29e96, roughness: 0.93, side: THREE.DoubleSide });
-      cutMat.polygonOffset = true;
-      cutMat.polygonOffsetFactor = -1;
-      cutMat.polygonOffsetUnits = -2;
-      const m = new THREE.Mesh(g, cutMat);
-      m.receiveShadow = true;
-      group.add(m);
+      out.cuts.push(g);
     }
+    return out;
+  };
+  // the lawn down the river's banks (river.js), drawn whole
+  if (bankLawn.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(bankLawn, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(bankLawn.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(bankLawn.length / 3 * 2), 2));
+    mergeInto([g], cpLawnMat);
   }
-  if (concreteGeos.length) mergeInto(concreteGeos, drivewayConcreteMat);
-  if (blacktopGeos.length) mergeInto(blacktopGeos, drivewayBlacktopMat);
-  if (plazaGeos.length) {
-    const plazaMat = createParkPavingMaterial();
-    drawOver(plazaMat);
-    mergeInto(plazaGeos, plazaMat);
+  const yardLooks = { lawn: cpLawnMat, concrete: drivewayConcreteMat, blacktop: drivewayBlacktopMat, cuts: cutMat };
+  const yardLayers = [];
+  if (yards) {
+    const y = yardGeometries(yards.lawns, yards.driveways, yards.cuts);
+    mergeInto(y.lawn, cpLawnMat);
+    mergeInto(y.cuts, cutMat);
+    mergeInto(y.concrete, drivewayConcreteMat);
+    mergeInto(y.blacktop, drivewayBlacktopMat);
+    if (y.plaza.length) mergeInto(y.plaza, plazaLook());
+  } else {
+    // streamed (device-tier.js): each kind a layer of the ground made square by square, its pieces built from the
+    // square's file when the player comes near and let go when they're far (terrain.js streamFromSquares)
+    const made = new Map();
+    const square = (k) => {
+      if (!made.has(k)) {
+        made.set(k, squareYards(k).then(({ lawns, driveways, cuts }) => {
+          const y = yardGeometries(lawns, driveways, cuts);
+          const merged = {};
+          for (const kind of ['lawn', 'concrete', 'blacktop', 'plaza', 'cuts']) merged[kind] = y[kind].length ? mergeFlat(y[kind]) : null;
+          return merged;
+        }));
+        // the last few squares' pieces, for the layers that ask for the same square one after another
+        if (made.size > 8) made.delete(made.keys().next().value);
+      }
+      return made.get(k);
+    };
+    for (const kind of ['lawn', 'concrete', 'blacktop', 'plaza', 'cuts']) {
+      const layer = streamFromSquares('Yards', { name: `Yards-${kind}`, key: `${YARDS_LOOK}.${yardsVersion()}.${kind}`, squares: yardSquares(),
+        make: (k) => square(k).then((m) => m[kind]), look: { material: kind === 'plaza' ? plazaLook() : yardLooks[kind] } });
+      group.add(layer.group);
+      yardLayers.push(layer);
+    }
   }
   const lotGeos = [];
   const stripeGeos = [];
@@ -1859,7 +1901,7 @@ function buildCityGrid(scene) {
   // The river sunk into its banks, with its bridges (river.js)
   buildRiver(group, [...WATER_POLYGONS, ...cascadeGaps()].map((rings) => flatGeo(rings, 0)), waterMat);
   // Woods (kind 0: oaks & maples, close together), park and cemetery trees (1) and yard trees (2)
-  const W = GEO.woods;
+  const W = woodsTrees();
   for (let i = 0; i < W.length; i += 3) {
     const x = W[i], z = W[i + 1], kind = W[i + 2];
     const r = prand(x, z, 2);
@@ -1961,7 +2003,7 @@ function buildCityGrid(scene) {
   // the module runs again in place (restoreCityGrid) instead of leaving them empty (the parks' and woods' trees)
   const shared = { bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes, pavedPlazaRects, sidewalkBlocks, fdrViaduct,
     streetGroundSurfaces };
-  return { group, sidewalks, footprints, highwayLanes, colliders, shared, playTop: playgrounds.top };
+  return { group, sidewalks, footprints, highwayLanes, colliders, shared, playTop: playgrounds.top, yardLayers };
 }
 
 // Puts back what a kept grid shared (buildCityGrid's `shared`) after this module ran again in place

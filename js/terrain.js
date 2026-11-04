@@ -858,8 +858,9 @@ async function writeSaved(part, keys, made) {
 // Cuts the layers (`jobs`: { layer, tolerance }) on several cores: each long triangle halved first (splitLong), then the
 // triangles shared out in many small pieces by how much ground they cover, round and round the workers, so the hills
 // fall to all of them. Answers each job's draped layer, in order.
-async function cutOnCores(ground, jobs) {
-  const cores = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
+async function cutOnCores(ground, jobs, most = 8) {
+  // (each worker gets its own copy of the ground's mesh: a few streamed tiles are cut on fewer)
+  const cores = Math.max(2, Math.min(most, (navigator.hardwareConcurrency || 4) - 1));
   const pieces = [];
   let total = 0;
   const weights = jobs.map((job) => {
@@ -1017,6 +1018,25 @@ function streamLayer(part, job, groundKey) {
   return layer;
 }
 
+// A ground layer made square by square from files (yards.js) rather than kept flat for the whole city: `squares` its
+// tiles' keys, `make(k)` a promise of the flat geometry there (or none), made only when a tile is wanted and not saved
+// from an earlier play, and let go once cut. `key` names what it's made from, for the saved tiles.
+function streamFromSquares(part, { name, key, squares, make, look, tolerance = 0.16 }) {
+  const { key: groundKey } = groundOfGrid(grid);
+  const group = new THREE.Group();
+  group.name = name;
+  group.userData.terrain = 'set';
+  const layer = { part, key: `${groundKey}.s${tolerance}.${key}`, tolerance, group, make, flat: new Map(squares.map((k) => [k, null])), built: new Map(), away: 0,
+    look: { castShadow: false, receiveShadow: true, renderOrder: 0, frustumCulled: true, mask: 1, ...look } };
+  stream.layers.push(layer);
+  return layer;
+}
+// Draws a part's streamed layers near the player now, before the part is shown
+function streamNear(layers) {
+  if (layers.length) forgetOldTiles(layers[0].part, layers.map((layer) => layer.key));
+  return buildTiles(wantedTiles(stream.x, stream.z, layers));
+}
+
 // The tiles wanted near (x, z) and not drawn, nearest first, as [layer, tile key]
 function wantedTiles(x, z, layers = stream.layers) {
   const want = [];
@@ -1035,15 +1055,29 @@ async function buildTiles(list) {
   const { ground } = groundOfGrid(grid);
   const names = list.map(([layer, k]) => `${layer.key}/${k}`);
   const saved = await readTiles(names);
-  const missing = list.map((item, i) => [item, i]).filter(([, i]) => !saved[i]);
+  let missing = list.map((item, i) => [item, i]).filter(([, i]) => !saved[i]);
+  // a layer made square by square makes its tile now: flat, in its tiles as a whole layer's are, this one kept
+  // (a tile with nothing of it is saved empty, so it isn't made again)
+  const flats = await Promise.all(missing.map(async ([[layer, k]]) => {
+    if (!layer.make) return layer.flat.get(k);
+    const geo = await layer.make(k);
+    if (!geo?.attributes.position?.count) return null;
+    return tilesOfLayer(splitLong(layerOfGeometry(geo)), STREAM_TILE, true).get(k) || null;
+  }));
+  missing.forEach(([, i], n) => { if (!flats[n]) saved[i] = { count: 0, attrs: [] }; });
+  const empty = missing.filter((_, n) => !flats[n]);
+  if (empty.length) writeTiles(empty.map(([, i]) => [names[i], saved[i]]));
+  const toCut = flats.filter(Boolean);
+  missing = missing.filter((_, n) => flats[n]);
   if (missing.length) {
-    const cut = await cutOnCores(ground, missing.map(([[layer, k]]) => ({ layer: layer.flat.get(k), tolerance: layer.tolerance })));
+    const cut = await cutOnCores(ground, toCut.map((flat, n) => ({ layer: flat, tolerance: missing[n][0][0].tolerance })), 3);
     missing.forEach(([, i], n) => { saved[i] = cut[n]; });
     writeTiles(missing.map(([, i]) => [names[i], saved[i]]));
     stream.cut += missing.length;
   }
   list.forEach(([layer, k], i) => {
     if (layer.built.has(k)) return;
+    if (!saved[i].count) { layer.built.set(k, null); return; }
     const { look } = layer;
     const mesh = new THREE.Mesh(geometryOfLayer(saved[i]), look.material);
     mesh.castShadow = look.castShadow;
@@ -1076,8 +1110,8 @@ function updateGroundStreaming(x, z) {
     if (top.isScene) { layer.placed = true; layer.away = 0; } else if (layer.placed) layer.away++;
     for (const [k, mesh] of layer.built) {
       if (tileDistance(k, x, z) < stream.radius + AWAY) continue;
-      mesh.removeFromParent();
-      mesh.geometry.dispose();
+      mesh?.removeFromParent();
+      mesh?.geometry.dispose();
       layer.built.delete(k);
       changed = true;
     }
@@ -1095,6 +1129,19 @@ function updateGroundStreaming(x, z) {
   return changed;
 }
 
+// What the streamed layers keep flat in the script for the tiles not drawn yet, in bytes
+function groundStreamBytes(byLayer = null) {
+  let bytes = 0;
+  for (const layer of stream.layers) {
+    if (layer.away) continue;
+    let b = 0;
+    for (const t of layer.flat.values()) if (t) for (const a of t.attrs) b += a.array.byteLength;
+    bytes += b;
+    if (byLayer && b) byLayer.push([`${layer.group.name}(${layer.flat.values().next().value?.attrs.map((a) => a.name).join('/')})`, b]);
+  }
+  return bytes;
+}
+
 // Where the streaming is centred now: the player's last place, or where they start
 function groundStreamCenter() {
   return { x: stream.x, z: stream.z };
@@ -1103,7 +1150,7 @@ function groundStreamCenter() {
 // What's streamed now: tiles drawn, and their vertices
 function groundStreamStats() {
   let tiles = 0, layers = 0;
-  for (const layer of stream.layers) { tiles += layer.built.size; layers++; }
+  for (const layer of stream.layers) { for (const m of layer.built.values()) if (m) tiles++; layers++; }
   return { layers, tiles, radius: stream.radius };
 }
 
@@ -1235,5 +1282,5 @@ export {
   drawOver, cityGround,
   loadTerrain, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
   tessellate, drapeGeometry, liftGeometry, liftInstances, setOnTerrain,
-  streamGround, updateGroundStreaming, groundStreamStats, groundStreamCenter
+  streamGround, updateGroundStreaming, groundStreamStats, groundStreamCenter, groundStreamBytes, streamFromSquares, streamNear
 };

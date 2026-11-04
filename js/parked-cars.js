@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { GEO } from './city-geodata.js';
+import { curbCuts } from './yards.js';
 import { PARKING_LOTS } from './city-config.js';
 import { BODY_SPECS, buildCarGeometry, buildCarProxyGeometry, buildSteerableWheelGeo, createLoftedCarMaterial, annArborCar } from './cars.js';
 import { groundHeight, groundTilt } from './terrain.js';
@@ -85,7 +85,8 @@ function lotCars(out) {
 
 function streetCars(out) {
   const cuts = [];
-  for (const c of GEO.curbCuts || []) cuts.push(c[0], c[1]);
+  const C = curbCuts();
+  for (let i = 0; i < C.length; i += 5) cuts.push(C[i], C[i + 1]);
   const cutGrid = new Map();
   for (let i = 0; i < cuts.length; i += 2) {
     const k = `${Math.floor(cuts[i] / 20)},${Math.floor(cuts[i + 1] / 20)}`;
