@@ -5,8 +5,8 @@ import { GEO } from './city-geodata.js';
 // Assets/Tools/build-annarbor.py from OpenStreetMap and the City of Ann Arbor's open data).
 //
 // World frame: 1 unit = 1 m, x = east, z = south (north = -z), origin at the centreline intersection of Main St &
-// Liberty St downtown, true north up. The detailed city runs from about Stadium Blvd's west end to Gallup Park, and
-// from the North Campus hills down to I-94; beyond it the countryside rolls on to the fogged horizon (outskirts.js).
+// Liberty St downtown, true north up. The detailed city is the whole of the City of Ann Arbor's limits, from
+// Skyline and Bird Hills to Arbor Hills and Gallup Park, and from Plymouth Rd's north edge down to Briarwood and I-94; beyond it the countryside rolls on to the fogged horizon (outskirts.js).
 // TOWN_EDGE is the detailed area's edge; the parts a street grid would have (numbered streets, avenues, a big park,
 // piers, suspension bridges) are empty, so the code that once drew them draws nothing.
 
@@ -30,7 +30,7 @@ const ALL_STREETS = [];
 // No big park drawn on its own: its bounds are far away, so every "inside the park" test is false
 const BIG_PARK_BOUNDS = { minX: FAR, maxX: FAR + 1, minZ: FAR, maxZ: FAR + 1 };
 
-// The detailed area's edge (a rectangle around the city): the "shore" tests find land everywhere inside it
+// The detailed area's edge (the city's limits and a margin round them): the "shore" tests find land everywhere inside it
 const TOWN_EDGE = toPts(GEO.edge);
 const TOWN_BOUNDS = (() => {
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -39,6 +39,40 @@ const TOWN_BOUNDS = (() => {
   }
   return { minX, maxX, minZ, maxZ, sidewalkHeight: 0.22, waterLevel: -2.2 };
 })();
+// Inside the detailed area's edge (the city's limits and a margin round them): a 25 m grid of the outline, answered at once
+const TOWN_CELL = 25;
+const townMask = (() => {
+  const B = TOWN_BOUNDS, cols = Math.ceil((B.maxX - B.minX) / TOWN_CELL) + 1, rows = Math.ceil((B.maxZ - B.minZ) / TOWN_CELL) + 1;
+  const mask = new Uint8Array(cols * rows);
+  // each row's crossings of the outline, filled between pairs (even-odd)
+  for (let r = 0; r < rows; r++) {
+    const z = B.minZ + (r + 0.5) * TOWN_CELL, xs = [];
+    for (let i = 0, j = TOWN_EDGE.length - 1; i < TOWN_EDGE.length; j = i++) {
+      const a = TOWN_EDGE[i], b = TOWN_EDGE[j];
+      if ((a.z > z) !== (b.z > z)) xs.push(a.x + (z - a.z) / (b.z - a.z) * (b.x - a.x));
+    }
+    xs.sort((u, v) => u - v);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const c0 = Math.max(0, Math.ceil((xs[k] - B.minX) / TOWN_CELL - 0.5)), c1 = Math.min(cols - 1, Math.floor((xs[k + 1] - B.minX) / TOWN_CELL - 0.5));
+      for (let c = c0; c <= c1; c++) mask[r * cols + c] = 1;
+    }
+  }
+  return { mask, cols, rows };
+})();
+function inTown(x, z) {
+  const c = Math.floor((x - TOWN_BOUNDS.minX) / TOWN_CELL), r = Math.floor((z - TOWN_BOUNDS.minZ) / TOWN_CELL);
+  return c >= 0 && r >= 0 && c < townMask.cols && r < townMask.rows && townMask.mask[r * townMask.cols + c] === 1;
+}
+// The City of Ann Arbor's official limits, as the map draws them (each outline, and each township island's)
+const CITY_LIMITS = (GEO.limits || []).map(toPts);
+// The middle of town (downtown, campus, Kerrytown, the Old West Side, the big parks), drawn at full detail; the outer
+// neighborhoods beyond it get simpler houses and fewer props
+const CORE_BOUNDS = (() => {
+  const pts = GEO.core ? toPts(GEO.core) : TOWN_EDGE;
+  return { minX: Math.min(...pts.map((p) => p.x)), maxX: Math.max(...pts.map((p) => p.x)), minZ: Math.min(...pts.map((p) => p.z)), maxZ: Math.max(...pts.map((p) => p.z)) };
+})();
+const inCore = (x, z) => x >= CORE_BOUNDS.minX && x <= CORE_BOUNDS.maxX && z >= CORE_BOUNDS.minZ && z <= CORE_BOUNDS.maxZ;
+
 function getTownBoundsAtZ() {
   return { westX: TOWN_BOUNDS.minX, eastX: TOWN_BOUNDS.maxX };
 }
@@ -212,6 +246,8 @@ LANDMARKS.push({ id: 'amtrak', name: 'Ann Arbor Amtrak Station', short: 'Amtrak'
 // Theater (both by their real places: the city survey's depot, and the alley's gap between the buildings)
 LANDMARKS.push({ id: 'gandy', name: 'The Gandy Dancer', short: 'Gandy Dancer', x: 549, z: -845, district: districtLabel(districtAt(549, -845)) });
 LANDMARKS.push({ id: 'graffiti', name: 'Graffiti Alley', short: 'Graffiti Alley', x: 487, z: 12, district: districtLabel(districtAt(487, 12)) });
+// Huron High School on Fuller Rd (by the city survey's outline: OpenStreetMap's point for it sits off the building)
+LANDMARKS.push({ id: 'huron', name: 'Huron High School', short: 'Huron High', x: 3746, z: -205, district: districtLabel(districtAt(3746, -205)) });
 // The Argo Cascades beside Argo Dam: the middle of their channel (cascades.js)
 LANDMARKS.push({ id: 'cascades', name: 'Argo Cascades', short: 'Argo Cascades', x: 419, z: -1228, district: districtLabel(districtAt(419, -1228)) });
 
@@ -240,7 +276,17 @@ const TELEPORT_LOCATIONS = {
   rackham: view(846, -70, 834, -130, 1.5), // Rackham's south entrance
   yost: view(648, 1256, 607, 1320, 1.5), // Yost Ice Arena
   market: view(206, -500, 155, -478, 0.5), // the Farmers Market sheds
-  towerplaza: view(548, 203, 496, 182, 7) // Tower Plaza, looking up
+  towerplaza: view(548, 203, 496, 182, 7), // Tower Plaza, looking up
+  // the outer neighborhoods (places, not modelled landmarks: their buildings are the city's survey)
+  briarwood: view(97, 4508, 140, 4365, 2), // Briarwood Mall from its south lot
+  pioneer: view(-686, 2059, -583, 2132, 2), // Pioneer High from its lot on Seventh St
+  arborhills: view(4123, 2600, 4075, 2552, 1), // Arbor Hills' shops on Washtenaw
+  buhr: view(3103, 3539, 3103, 3423, 0), // Buhr Park from its lot
+  countyfarm: view(3560, 2780, 3545, 2638, 0), // County Farm Park's meadows
+  leslie: view(1629, -3149, 1841, -3307, 0), // Leslie Park
+  skyline: view(-2521, -2642, -2380, -2837, 2), // Skyline High from its lot
+  vets: view(-2380, -503, -2441, -421, 0), // Veterans Memorial Park
+  huron: view(3688, -98, 3768, -205, 1) // Huron High School, its spine and round pods from the south-west
 };
 
 // The city's building names (Bldg_Name, GEO.places): each named building's centre and half its size, in 100 m cells
@@ -294,7 +340,7 @@ function getLocationLabel(x, z) {
   if (near.length >= 2) return `${lead}${near[0].road.name} & ${near[1].road.name}`;
   if (near.length) return `${lead}${near[0].road.name}`;
   if (historic) return historic;
-  if (x < TOWN_BOUNDS.minX || x > TOWN_BOUNDS.maxX || z < TOWN_BOUNDS.minZ || z > TOWN_BOUNDS.maxZ) return 'Washtenaw County';
+  if (!inTown(x, z)) return 'Washtenaw County';
   return districtLabel(districtAt(x, z)) === 'Ann Arbor' ? 'Ann Arbor' : `${districtLabel(districtAt(x, z))}, Ann Arbor`;
 }
 
@@ -351,6 +397,10 @@ export {
   LANDMARK_SITES,
   TELEPORT_LOCATIONS,
   TOWN_BOUNDS,
+  inTown,
+  CITY_LIMITS,
+  CORE_BOUNDS,
+  inCore,
   BLOCKS,
   CUT_Z,
   SIGNAL_TIMING,

@@ -7,7 +7,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "0c1fecf07a342d867432773d7bd1b230fba1b7ab",
+      "commit" : "3da510f4e36412da805f83a9996d23bd50e91083",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"
@@ -127,6 +127,12 @@
     {
       "author" : "City of Ann Arbor",
       "license" : "None",
+      "name" : "City Boundary",
+      "url" : "https://ckan.a2gov.org/dataset/c5d51794-60bb-478e-8cef-da420869d98d"
+    },
+    {
+      "author" : "City of Ann Arbor",
+      "license" : "None",
       "name" : "Land Use",
       "url" : "https://ckan.a2gov.org/dataset/land-use"
     },
@@ -193,12 +199,6 @@
       "license" : "CC-BY-SA-4.0",
       "name" : "Mapillary street-level imagery (decides house and shopfront looks; no photos ship)",
       "url" : "https://www.mapillary.com"
-    },
-    {
-      "author" : "City of Ann Arbor",
-      "license" : "None",
-      "name" : "Parcels with assessor's year built and storeys",
-      "url" : "https://a2maps.a2gov.org/a2arcgis/rest/services/WaterServiceLeadMaterialAll/MapServer/3"
     }
   ]
 }

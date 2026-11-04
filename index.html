@@ -203,6 +203,15 @@
     <button id="tp-yost" class="pop-item tp-btn" data-teleport="yost" type="button"><span class="pop-name">Yost Ice Arena</span><span class="pop-sub">S State St · Athletic Campus</span></button>
     <button id="tp-market" class="pop-item tp-btn" data-teleport="market" type="button"><span class="pop-name">Farmers Market</span><span class="pop-sub">Detroit St · Kerrytown</span></button>
     <button id="tp-towerplaza" class="pop-item tp-btn" data-teleport="towerplaza" type="button"><span class="pop-name">Tower Plaza</span><span class="pop-sub">E William St · Downtown</span></button>
+    <button id="tp-huron" class="pop-item tp-btn" data-teleport="huron" type="button"><span class="pop-name">Huron High School</span><span class="pop-sub">Fuller Rd · Northeast side</span></button>
+    <button id="tp-briarwood" class="pop-item tp-btn" data-teleport="briarwood" type="button"><span class="pop-name">Briarwood Mall</span><span class="pop-sub">Eisenhower Pkwy · South side</span></button>
+    <button id="tp-pioneer" class="pop-item tp-btn" data-teleport="pioneer" type="button"><span class="pop-name">Pioneer High</span><span class="pop-sub">S Main St · Old West Side</span></button>
+    <button id="tp-arborhills" class="pop-item tp-btn" data-teleport="arborhills" type="button"><span class="pop-name">Arbor Hills</span><span class="pop-sub">Washtenaw Ave · East side</span></button>
+    <button id="tp-buhr" class="pop-item tp-btn" data-teleport="buhr" type="button"><span class="pop-name">Buhr Park</span><span class="pop-sub">Packard St · Southeast</span></button>
+    <button id="tp-countyfarm" class="pop-item tp-btn" data-teleport="countyfarm" type="button"><span class="pop-name">County Farm Park</span><span class="pop-sub">Platt Rd · Southeast</span></button>
+    <button id="tp-leslie" class="pop-item tp-btn" data-teleport="leslie" type="button"><span class="pop-name">Leslie Park</span><span class="pop-sub">Traver Rd · North side</span></button>
+    <button id="tp-skyline" class="pop-item tp-btn" data-teleport="skyline" type="button"><span class="pop-name">Skyline High</span><span class="pop-sub">Skyline High School Rd · Northwest</span></button>
+    <button id="tp-vets" class="pop-item tp-btn" data-teleport="vets" type="button"><span class="pop-name">Veterans Memorial Park</span><span class="pop-sub">Jackson Ave · West side</span></button>
   </div>
 
   <!-- Bottom-Left: Street-Name Signs & Live GPS Radar Minimap -->
@@ -330,12 +339,11 @@
         <div>
           <h2>Ann Arbor Street Atlas</h2>
           <p id="fullmap-player-info" class="fullmap-subtitle">You are at 5th Ave &amp; 35th St</p>
-          <p class="fullmap-subtitle fullmap-credit">Made from Mr.doob's Slop New York</p>
         </div>
       </div>
       <label class="panel fullmap-search-wrap">
         <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
-        <input id="fullmap-search" class="fullmap-search" type="text" placeholder="Search streets &amp; landmarks — Broadway, Canal, Wall St…" aria-label="Search street or landmark" autocomplete="off" spellcheck="false" />
+        <input id="fullmap-search" class="fullmap-search" type="text" placeholder="Search streets &amp; landmarks — Main St, State St, Liberty…" aria-label="Search street or landmark" autocomplete="off" spellcheck="false" />
       </label>
       <button id="close-fullmap-btn" class="panel tool-btn fullmap-close" type="button" title="Close map [M / Esc]">
         <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg><span class="tool-label">Close</span><kbd data-key="Escape" data-pad="B">Esc</kbd>
@@ -390,7 +398,7 @@
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of Go To Ann Arbor with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"0c1fecf07a342d867432773d7bd1b230fba1b7ab","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"3da510f4e36412da805f83a9996d23bd50e91083","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');

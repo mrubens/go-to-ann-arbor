@@ -5,6 +5,8 @@ import {
   LANDMARKS,
   LANDMARK_SITES,
   TOWN_BOUNDS,
+  CITY_LIMITS,
+  inTown,
   getTownBoundsAtZ,
   TOWN_EDGE,
   getLocationLabel,
@@ -51,7 +53,8 @@ const MAP = {
   bike: '#43d17f', // bike lanes, shown while cycling
   bikePath: '#2fa565',
   search: '#5fd0ff',
-  halo: 'rgba(8, 11, 15, 0.9)'
+  halo: 'rgba(8, 11, 15, 0.9)',
+  limits: 'rgba(255, 214, 150, 0.6)' // the City of Ann Arbor's official limits, dashed
 };
 
 // Landmarks modelled by landmarks.js on their real OpenStreetMap lots (outlined in amber)
@@ -178,6 +181,9 @@ function mapLayers() {
   // The detailed town inside its edge
   L.town = new Path2D();
   addRing(L.town, TOWN_EDGE);
+  // The city's official limits (and each township island inside them)
+  L.limits = new Path2D();
+  for (const ring of CITY_LIMITS) addRing(L.limits, ring);
 
   // Parkland (OpenStreetMap's parks), the curb islands (blocks: raised sidewalks & lots) and the park blocks, exactly
   // as city-grid.js / buildings.js treat them
@@ -729,7 +735,16 @@ class CityMapSystem {
   clampToTown(p) {
     const z = Math.max(TOWN_BOUNDS.minZ + 25, Math.min(TOWN_BOUNDS.maxZ - 25, p.z));
     const shore = getTownBoundsAtZ(z);
-    return { x: Math.max(shore.westX + 12, Math.min(shore.eastX - 12, p.x)), z };
+    const q = { x: Math.max(shore.westX + 12, Math.min(shore.eastX - 12, p.x)), z };
+    if (inTown(q.x, q.z)) return q;
+    // beyond the city's edge: the nearest place inside it, on a ring search
+    for (let r = 25; r < 3000; r += 25) {
+      for (let i = 0; i < 24; i++) {
+        const a = i * Math.PI / 12, x = q.x + Math.cos(a) * r, zz = q.z + Math.sin(a) * r;
+        if (inTown(x, zz)) return { x, z: zz };
+      }
+    }
+    return q;
   }
 
   textWidth(ctx, text) {
@@ -833,6 +848,13 @@ class CityMapSystem {
     ctx.strokeStyle = MAP.highway;
     ctx.lineWidth = Math.max(px(isMinimap ? 2.4 : 1.6), 14);
     ctx.stroke(L.highways);
+
+    // 9. The city limits, dashed
+    ctx.strokeStyle = MAP.limits;
+    ctx.lineWidth = Math.max(px(isMinimap ? 1.4 : 1.8), 3);
+    ctx.setLineDash([Math.max(px(8), 14), Math.max(px(6), 10)]);
+    ctx.stroke(L.limits);
+    ctx.setLineDash([]);
 
     // 10. Search highlight: every stretch of the matching streets
     if (this.searchPath && !isMinimap) {

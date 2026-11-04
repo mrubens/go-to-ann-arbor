@@ -25,6 +25,7 @@ The wish itself, to open in [Lamp](https://lamp.dev) and change, is on the [main
 - Uses [Fire Hydrants](https://ckan.a2gov.org/dataset/fire-hydrants) by City of Ann Arbor, None
 - Uses [Park Amenities](https://ckan.a2gov.org/dataset/park-amenities) by City of Ann Arbor, None
 - Uses [Address Points](https://ckan.a2gov.org/dataset/address-points) by City of Ann Arbor, None
+- Uses [City Boundary](https://ckan.a2gov.org/dataset/c5d51794-60bb-478e-8cef-da420869d98d) by City of Ann Arbor, None
 - Uses [Land Use](https://ckan.a2gov.org/dataset/land-use) by City of Ann Arbor, None
 - Uses [Historic Districts](https://ckan.a2gov.org/dataset/historic-districts) by City of Ann Arbor, None
 - Uses [Huron River at Ann Arbor gauge (04174500), live flow](https://waterdata.usgs.gov/monitoring-location/04174500/) by U.S. Geological Survey, LicenseRef-US-Government-Public-Domain
@@ -38,7 +39,6 @@ The wish itself, to open in [Lamp](https://lamp.dev) and change, is on the [main
 - Uses [Ann Arbor scooter locations (GBFS)](https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs) by Bird Rides (Spin), LicenseRef-Bird-GBFS-Data-License
 - Uses [Snow depth (Open-Meteo)](https://open-meteo.com) by Open-Meteo.com, CC-BY-4.0
 - Uses [Mapillary street-level imagery (decides house and shopfront looks; no photos ship)](https://www.mapillary.com) by Mapillary contributors, CC-BY-SA-4.0
-- Uses [Parcels with assessor's year built and storeys](https://a2maps.a2gov.org/a2arcgis/rest/services/WaterServiceLeadMaterialAll/MapServer/3) by City of Ann Arbor, None
 
 Map data is ODbL-1.0: it stays under that license, credited, in this remix.
 
@@ -70,6 +70,8 @@ Park Amenities is used under its own terms (None).
 
 Address Points is used under its own terms (None).
 
+City Boundary is used under its own terms (None).
+
 Land Use is used under its own terms (None).
 
 Historic Districts is used under its own terms (None).
@@ -81,8 +83,6 @@ Amtrak GTFS timetable (Wolverine stops at Ann Arbor) is used under its own terms
 Ann Arbor scooter locations (GBFS) is used under its own terms (LicenseRef-Bird-GBFS-Data-License).
 
 Mapillary street-level imagery (decides house and shopfront looks; no photos ship) is CC-BY-SA-4.0, so this remix is too: anyone may share it on under the same license.
-
-Parcels with assessor's year built and storeys is used under its own terms (None).
 
 Remixed from [New York](https://github.com/lampdotdev/newyork) (a Lamp starter).
 

@@ -3,6 +3,7 @@ import {
   TOWN_BOUNDS,
   BIG_PARK_BOUNDS,
   getTownBoundsAtZ,
+  inTown,
   isTypingInField,
   blockAt,
   streetZ
@@ -615,6 +616,7 @@ class ThirdPersonControllerManager {
         const west = shore.westX + 8, east = shore.eastX - 8;
         if (west > east) return null;
         px = Math.max(west, Math.min(east, px));
+        if (!inTown(px, pz)) return null; // outside the city's limits: the plain land round it
       }
       return { x: px, z: pz };
     };
@@ -1538,6 +1540,16 @@ class ThirdPersonControllerManager {
         pos.x = maxShoreX;
         if (carEntity && carEntity.speed) carEntity.speed *= 0.4;
       }
+      // the city's limits (and 120 m round them) are the edge: beyond is plain land, so slide along it
+      const kept = (this._lastInTown ??= new Map());
+      const key = entity || this.activeMode, last = kept.get(key);
+      if (!inTown(pos.x, pos.z) && last) {
+        if (inTown(pos.x, last.z)) pos.z = last.z;
+        else if (inTown(last.x, pos.z)) pos.x = last.x;
+        else { pos.x = last.x; pos.z = last.z; }
+        if (carEntity && carEntity.speed) carEntity.speed *= 0.4;
+      }
+      if (inTown(pos.x, pos.z)) { if (last) { last.x = pos.x; last.z = pos.z; } else kept.set(key, { x: pos.x, z: pos.z }); }
     }
 
     const body = collisionBody(this.activeMode, radius, carEntity ? carEntity.heading : 0);

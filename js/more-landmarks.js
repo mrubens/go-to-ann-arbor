@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { builder, groundOf } from './campus-landmarks.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
+import { groundHeight } from './terrain.js';
 
 // Lamp: the rest of Ann Arbor's landmark buildings, modelled by hand on the city survey's own outline of each (found by
 // a point inside it, so the model stands exactly where the survey's plain block stood, which it replaces):
@@ -19,6 +20,9 @@ import { polygonContains } from './building-collision.js';
 // - Tower Plaza: the 26-storey brown brick tower, windows in vertical strips, and its rooftop penthouse.
 // - The Gandy Dancer (1886): the Michigan Central depot in rough fieldstone with red sandstone arches, a red hipped
 //   roof, its round tower and the platform porch along the tracks.
+// - Huron High School (1969, Lane, Riebe, Weiland): three storeys of brown brick under a concrete fascia, its round
+//   classroom pods joined by a long diagonal spine, curved wings around them, the gym block to the north, glass dome
+//   skylights over the pods and ribbon windows wrapping every curve.
 // Colliders follow each outline in strips, so the neighbours stay; the survey's block is dropped by `replaces`.
 
 const LIME = [0.84, 0.8, 0.72];
@@ -576,6 +580,84 @@ function amtrakStation(B, T) {
   return { s, maxY: Y(5.4) };
 }
 
+// Huron High School (1969) on Fuller Rd: the survey's one outline of its pods, spine and wings, three storeys of
+// brown brick with ribbon windows following each wall at its own ground (the site falls toward the river), a concrete
+// fascia standing proud of the roof, the taller gym block to the north, and a glass dome skylight on each round pod.
+const HURON_BRICK = [[0.45, 0.28, 0.2], [0.4, 0.25, 0.18], [0.5, 0.32, 0.23]];
+const HURON_CONCRETE = [0.66, 0.63, 0.58];
+function huronHigh(B, T) {
+  const s = surveyAt(3746, -205);
+  if (!s) return null;
+  const r = s.ring, n = r.length / 2;
+  let low = Infinity, sum = 0;
+  for (let i = 0; i < n; i++) { const h = groundHeight(r[i * 2], r[i * 2 + 1]); low = Math.min(low, h); sum += h; }
+  const roof = sum / n + Math.min(12, Math.max(10, s.height)), top = roof + 0.5;
+  B.prism(r, low - 2, roof, HURON_BRICK[0], ROOF);
+  for (const e of edgesOf(r)) {
+    const ge = groundHeight(e.ax + e.tx * e.L / 2 + e.nx * 2, e.az + e.tz * e.L / 2 + e.nz * 2) - 0.3;
+    // a plinth of concrete where the wall meets the ground, the brick's courses in three tones
+    T.ebox(e, 0, e.L, low - 1, ge + 0.6, 0, 0.05, HURON_CONCRETE);
+    if (e.L > 6) for (let y = ge + 0.9, k = 0; y < roof - 1.6; y += 0.9, k++) T.ebox(e, 0, e.L, y, y + 0.12, 0, 0.02, HURON_BRICK[1 + (k % 2)]);
+    // the ribbon windows, one band a storey, with their frames
+    if (e.L > 2.4) {
+      for (const [y0, y1] of [[1.1, 2.6], [4.7, 6.2], [8.3, 9.6]]) {
+        if (ge + y1 > roof - 1.4) continue;
+        T.ebox(e, 0.5, e.L - 0.5, ge + y0, ge + y1, 0.02, 0.07, GLASS, B.glass);
+        T.ebox(e, 0.5, e.L - 0.5, ge + y0 - 0.25, ge + y0, 0.02, 0.2, HURON_CONCRETE);
+        const count = Math.max(1, Math.round((e.L - 1) / 3.6));
+        for (let k = 1; k < count; k++) { const u = 0.5 + (k * (e.L - 1)) / count; T.ebox(e, u - 0.08, u + 0.08, ge + y0, ge + y1, 0.02, 0.11, DARK_FRAME); }
+      }
+    }
+    // the fascia: a deep concrete band standing proud of the wall and above the roof
+    T.ebox(e, -0.3, e.L + 0.3, roof - 1.3, top, 0, 0.35, HURON_CONCRETE);
+  }
+  // the gym block to the north, a storey taller, blank brick with a band of clerestory glass under its fascia
+  const gym = [3661, -366.5, 3698.5, -361.5, 3694.5, -293.3, 3649.8, -299];
+  const gTop = roof + 4.5;
+  B.prism(gym, roof - 0.5, gTop - 1.3, HURON_BRICK[1], ROOF);
+  for (const e of edgesOf(gym)) {
+    T.ebox(e, 1, e.L - 1, gTop - 2.9, gTop - 1.6, 0.02, 0.07, GLASS, B.glass);
+    T.ebox(e, -0.3, e.L + 0.3, gTop - 1.3, gTop, 0, 0.35, HURON_CONCRETE);
+  }
+  B.prism(gym, gTop - 1.3, gTop - 1.25, ROOF);
+  // a glass dome skylight on each round pod, on a concrete curb
+  for (const [cx, cz, rad] of [[3664, -257, 6], [3802, -169, 8]]) {
+    const ring = [], layers = 5;
+    for (let k = 0; k < 16; k++) { const a = (k / 16) * Math.PI * 2; ring.push(cx + Math.cos(a) * rad, cz + Math.sin(a) * rad); }
+    B.prism(scaleRing(ring, 1.12), roof, roof + 0.6, HURON_CONCRETE);
+    for (let l = 0; l < layers; l++) {
+      const a0 = (l / layers) * (Math.PI / 2), a1 = ((l + 1) / layers) * (Math.PI / 2);
+      const ra = scaleRing(ring, Math.cos(a0)), rb = scaleRing(ring, Math.max(0.02, Math.cos(a1)));
+      const ya = roof + 0.6 + Math.sin(a0) * rad * 0.45, yb = roof + 0.6 + Math.sin(a1) * rad * 0.45;
+      for (let i = 0; i < 16; i++) {
+        const j = (i + 1) % 16;
+        B.quad(B.glass, [ra[i * 2], ya, ra[i * 2 + 1]], [ra[j * 2], ya, ra[j * 2 + 1]], [rb[j * 2], yb, rb[j * 2 + 1]], [rb[i * 2], yb, rb[i * 2 + 1]], GLASS);
+      }
+    }
+    // the dome's ribs
+    for (let i = 0; i < 16; i += 2) {
+      const a = (i / 16) * Math.PI * 2;
+      for (let l = 0; l < layers; l++) {
+        const p0 = (l / layers) * (Math.PI / 2), p1 = ((l + 1) / layers) * (Math.PI / 2);
+        const x0 = cx + Math.cos(a) * rad * Math.cos(p0), z0 = cz + Math.sin(a) * rad * Math.cos(p0);
+        const x1 = cx + Math.cos(a) * rad * Math.cos(p1), z1 = cz + Math.sin(a) * rad * Math.cos(p1);
+        const y0 = roof + 0.6 + Math.sin(p0) * rad * 0.45, y1 = roof + 0.6 + Math.sin(p1) * rad * 0.45;
+        const ox = -Math.sin(a) * 0.07, oz = Math.cos(a) * 0.07;
+        B.quad(B.stone, [x0 - ox, y0 + 0.04, z0 - oz], [x0 + ox, y0 + 0.04, z0 + oz], [x1 + ox, y1 + 0.04, z1 + oz], [x1 - ox, y1 + 0.04, z1 - oz], DARK_FRAME);
+      }
+    }
+  }
+  // rooftop units on the spine
+  for (const [x, z] of [[3730, -225], [3752, -208], [3708, -238]]) B.box(x - 2.2, x + 2.2, roof, roof + 1.8, z - 1.5, z + 1.5, TIN);
+  // the main doors on the spine's south side, under a flat concrete canopy on slim columns
+  const e = edgeFacing(r, 0.6, 0.8), c = e.L / 2, ge = groundHeight(e.ax + e.tx * c + e.nx * 4, e.az + e.tz * c + e.nz * 4) - 0.3;
+  T.ebox(e, c - 6, c + 6, ge, ge + 3, 0.02, 0.08, GLASS, B.glass);
+  for (let u = c - 6; u <= c + 6.01; u += 2) T.ebox(e, u - 0.07, u + 0.07, ge, ge + 3, 0.02, 0.12, DARK_FRAME);
+  T.ebox(e, c - 9, c + 9, ge + 3.4, ge + 4, 0, 5, HURON_CONCRETE);
+  for (const du of [-8.4, -2.8, 2.8, 8.4]) T.ecolumn(e, c + du, ge - 0.3, ge + 3.4, 0.22, 4.4, HURON_CONCRETE);
+  return { s, maxY: gTop };
+}
+
 const MODELS = [
   ['Michigan League', michiganLeague],
   ['Rackham Building', rackham],
@@ -588,7 +670,8 @@ const MODELS = [
   ['District Library', districtLibrary],
   ['Tower Plaza', towerPlaza],
   ['Gandy Dancer', gandyDancer],
-  ['Amtrak Station', amtrakStation]
+  ['Amtrak Station', amtrakStation],
+  ['Huron High School', huronHigh]
 ];
 
 function buildMoreLandmarks(group, colliders) {

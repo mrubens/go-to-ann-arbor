@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { positionWorld, vec2, vec3, float, floor, fract, sin, dot, mix, smoothstep, abs, fwidth, min } from 'three/tsl';
-import { TOWN_BOUNDS } from './city-config.js';
+import { TOWN_BOUNDS, inTown } from './city-config.js';
 import { groundHeight, cityGround } from './terrain.js';
 import { coreTriangles, coreHeightAt } from './ground-core.js';
 import { log } from '../lamp-game.js';
@@ -64,7 +64,8 @@ function buildOutskirts(scene) {
     for (let i = 0; i + 1 < nx; i++) {
       const cx0 = x0 + i * STEP, cz0 = z0 + j * STEP;
       // leave out the cells under the city (its streets & lawns cover the ground there)
-      if (cx0 >= B.minX && cx0 + STEP <= B.maxX && cz0 >= B.minZ && cz0 + STEP <= B.maxZ) continue;
+      // (a cell is left out only where the town covers it all, with 25 m to spare: the town's edge follows the city limits)
+      if (inTown(cx0 - 25, cz0 - 25) && inTown(cx0 + STEP + 25, cz0 - 25) && inTown(cx0 - 25, cz0 + STEP + 25) && inTown(cx0 + STEP + 25, cz0 + STEP + 25)) continue;
       const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1;
       idx.push(a, c, b, b, c, d);
     }

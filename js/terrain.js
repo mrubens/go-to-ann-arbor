@@ -44,10 +44,11 @@ async function readHeights(url) {
   try {
     const bytes = await unzipped(url);
     if (new TextDecoder().decode(new Uint8Array(bytes, 0, 4)) !== 'ELV2') throw new Error('unknown format');
-    const [x0, z0, step, cols, rows] = new Float32Array(bytes, 4, 6);
+    // lo: the lowest height (under the base, down the river east of town), which they're stored up from
+    const [x0, z0, step, cols, rows, lo] = new Float32Array(bytes, 4, 6);
     const centimetres = new Uint16Array(bytes, 28, cols * rows);
     const heights = new Float32Array(cols * rows);
-    for (let i = 0; i < heights.length; i++) heights[i] = centimetres[i] / 100;
+    for (let i = 0; i < heights.length; i++) heights[i] = centimetres[i] / 100 + lo;
     console.log(`[terrain] ${cols} × ${rows} heights at ${step} m`);
     const g = { x0, z0, step, cols, rows, heights };
     digBowl(g);
@@ -115,7 +116,7 @@ async function readRiver(g, url) {
     const [dx0, dz0, dstep, dcols, drows, lx0, lz0, lstep, lcols, lrows] = new Float32Array(bytes, 4, 10);
     const n = dcols * drows;
     const dig = new Uint8Array(bytes, 44, n);
-    const cm = new Uint16Array(bytes, 44 + n + (n % 2), lcols * lrows);
+    const cm = new Int16Array(bytes, 44 + n + (n % 2), lcols * lrows); // under the base east of town
     const level = new Float32Array(cm.length);
     for (let i = 0; i < cm.length; i++) level[i] = cm[i] / 100;
     const r = { dx0, dz0, dstep, dcols, drows, dig, lx0, lz0, lstep, lcols, lrows, level, bridges: [], buckets: new Map() };
