@@ -122,6 +122,9 @@ class CityAudioSystem {
 
   unlock() {
     if (!this.supported || !this.enabled || this.disposed || document.hidden) return;
+    // a browser lets sound start only after the player has clicked or pressed a key on the page: until then, wait,
+    // rather than make a context it refuses (and warns about in its console)
+    if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
     try {
       if (!this.context) this.initialize();
       if (this.context.state !== 'running') {

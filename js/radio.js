@@ -3,7 +3,8 @@
 // pick a station, then that one, kept between visits (`phones`); main.js shows white earbuds on them while it plays.
 // Each car is tuned to a station of its own (the player's SUV keeps the one they last chose); R or the controller's
 // d-pad left and right change it, Off among them. The stream plays in the app around the page (Sources/Native.swift,
-// radioPlay): elsewhere, and in Lamp's preview, the dial still shows but stays quiet.
+// radioPlay, which also reads the song on); in a browser, the page plays it itself in an audio element, without the
+// song's title (the streams don't let a page read it).
 import { hot, save, load, log, random } from '../lamp-game.js';
 
 const STW = (call) => `https://playerservices.streamtheworld.com/api/livestream-redirect/${call}.mp3`;
@@ -34,6 +35,9 @@ class CarRadio {
     this.subEl = document.getElementById('radio-now');
     // a stream left on by the code before this one
     this.native?.call('radioStop').catch(() => {});
+    if (window.__radioAudio) { window.__radioAudio.pause(); window.__radioAudio.removeAttribute('src'); window.__radioAudio.load(); }
+    this.audio = null;
+    this.retry = 0;
     document.getElementById('radio-prev')?.addEventListener('click', () => this.tune(-1));
     document.getElementById('radio-next')?.addEventListener('click', () => this.tune(1));
     document.getElementById('radio-current')?.addEventListener('click', () => this.tune(1));
@@ -79,8 +83,12 @@ class CarRadio {
         if (want === OFF) native.call('radioStop').catch(() => {});
         else native.call('radioPlay', { url: STATIONS[want].url, volume: VOLUME })
           .catch((e) => log(`[radio] ${STATIONS[want].call} would not play: ${e?.message || e}`));
-      }
+      } else this.webPlay(want);
       this.draw();
+    }
+    // in a browser, a stream that dropped or wouldn't start tries again every few seconds
+    if (!this.native && this.playing !== OFF && this.audio && (this.audio.error || this.audio.ended || this.failed)) {
+      if ((this.retry -= dt) <= 0) { this.retry = 5; this.webPlay(this.playing); }
     }
     // the song on now, asked every few seconds while a station plays
     this.titleAt -= dt;
@@ -91,6 +99,25 @@ class CarRadio {
         if (text !== this.title) { this.title = text; this.draw(); }
       }).catch(() => {});
     }
+  }
+
+  // the browser's own player: one audio element for the page, streaming the station straight from it
+  webPlay(want) {
+    let a = this.audio;
+    if (!a) {
+      a = this.audio = window.__radioAudio || (window.__radioAudio = new Audio());
+      a.preload = 'none';
+      a.addEventListener('playing', () => { this.failed = false; });
+    }
+    if (want === OFF) { a.pause(); a.removeAttribute('src'); a.load(); this.failed = false; return; }
+    a.src = STATIONS[want].url;
+    a.volume = VOLUME;
+    this.failed = false;
+    a.play().catch((e) => {
+      // a browser that wants a click on the page first, or a station that's down: tried again shortly
+      this.failed = true;
+      log(`[radio] ${STATIONS[want].call} would not play in the browser: ${e?.name || e}`);
+    });
   }
 
   draw() {
@@ -113,6 +140,7 @@ class CarRadio {
   stop() {
     this.playing = OFF;
     this.native?.call('radioStop').catch(() => {});
+    if (this.audio) this.webPlay(OFF);
   }
 }
 
