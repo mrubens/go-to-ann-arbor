@@ -63,7 +63,8 @@ function builder() {
   const faceArch = (cx, cz, half, side, u, y0, y1, w, d, col, m = glass) => {
     const r = w / 2;
     faceBox(cx, cz, half, side, u - r, u + r, y0, y1 - r, d, d + 0.06, col, m);
-    const steps = 5;
+    // a big arch needs finer steps to read as a curve
+    const steps = Math.max(5, Math.round(w * 1.6));
     for (let k = 0; k < steps; k++) {
       const a = ((k + 0.5) / steps) * (Math.PI / 2), hw = Math.cos(a) * r;
       faceBox(cx, cz, half, side, u - hw, u + hw, y1 - r + Math.sin((k / steps) * Math.PI / 2) * r,
@@ -82,8 +83,9 @@ function builder() {
     for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(pts, []))
       tri(stone, [pts[i].x, y1, pts[i].y], [pts[j].x, y1, pts[j].y], [pts[k].x, y1, pts[k].y], top);
   };
-  // windows along every wall of a ring: `floors` [y0, y1] rows, one every `every` m along each wall, set `d` out
-  const ringWindows = (ring, floors, every, w, col, d = 0.04) => {
+  // windows along every wall of a ring: `floors` [y0, y1] rows over `base` (the building's ground), one every `every` m
+  // along each wall, set `d` out
+  const ringWindows = (ring, floors, every, w, col, d = 0.04, base = groundOf(ring) - 0.3) => {
     const n = ring.length / 2;
     let area = 0;
     for (let i = 0; i < n; i++) {
@@ -101,7 +103,8 @@ function builder() {
       const off = (L - count * every) / 2 + every / 2;
       for (let k = 0; k < count; k++) {
         const u = off + k * every, ox = ax + tx * u + nx * d, oz = az + tz * u + nz * d;
-        for (const [y0, y1] of floors) {
+        for (const [r0, r1] of floors) {
+          const y0 = base + r0, y1 = base + r1;
           const p = (uu, y) => [ox + tx * uu, y, oz + tz * uu];
           quad(glass, p(-w / 2, y0), p(w / 2, y0), p(w / 2, y1), p(-w / 2, y1), col);
           // a limestone sill under each
@@ -228,7 +231,7 @@ function hillAuditorium(B, site) {
   B.prism(hall, Y(3), Y(15.5), BRICK_HILL, ROOF);
   B.box(hx0 - 0.3, hx1 + 0.3, Y(15.5), Y(16.3), hz0 - 0.3, hz1 + 0.3, LIMESTONE);
   B.hip(hx0 + 1, hx1 - 1, hz0 + 1, hz1 - 1, Y(16.3), Y(22), ROOF);
-  B.ringWindows([hx1, hz0, hx1, hz1, hx0, hz1, hx0, hz0], [[4.5, 7.5], [9.5, 13.5]], 4.6, 1.5, GLASS);
+  B.ringWindows([hx1, hz0, hx1, hz1, hx0, hz1, hx0, hz0], [[4.5, 7.5], [9.5, 13.5]], 4.6, 1.5, GLASS, 0.04, g);
   // the lobby front: limestone base, five tall arched windows between giant pilasters, an entablature and cornice
   const fx0 = 751.8, fx1 = 786.9, fz = 27.9, fz1 = 44;
   const fcx = (fx0 + fx1) / 2, half = (fz1 - fz) / 2, fcz = (fz + fz1) / 2;
@@ -266,14 +269,14 @@ function hillAuditorium(B, site) {
 }
 
 // The Michigan Union: its real outline in red brick with limestone bands and battlements, and its tower over the
-// State Street door (the outline's west front, between its two wings)
+// State Street door (the outline's east front, where the entrance steps out toward State)
 function michiganUnion(B, site) {
   const ring = site.ring;
   const g = groundOf(ring) - 0.3;
   const Y = (y) => g + y;
   B.prism(ring, g - 2, Y(1.4), LIMESTONE_DARK);
   B.prism(ring, Y(1.4), Y(16), BRICK_UNION, ROOF);
-  B.ringWindows(ring, [[2.4, 4.6], [5.8, 8], [9.2, 11.4], [12.6, 14.6]], 3.3, 1.5, GLASS, 0.03);
+  B.ringWindows(ring, [[2.4, 4.6], [5.8, 8], [9.2, 11.4], [12.6, 14.6]], 3.3, 1.5, GLASS, 0.03, g);
   // limestone string courses and a crenellated parapet with its coping
   for (const [y0, y1] of [[5.2, 5.5], [15.6, 16.1]]) {
     for (let i = 0; i < ring.length; i += 2) {
@@ -285,7 +288,7 @@ function michiganUnion(B, site) {
   B.prism(ring, Y(16), Y(16.9), BRICK_UNION, ROOF);
   B.ringBattlements(ring, Y(16.9), 0.8, 1.0, LIMESTONE);
   // the tower: 12 m square, its face on the front between the wings, up to 33 m with corner piers and pinnacles
-  const tz = 500.6, th = 6.2, tx0 = 529.6;
+  const tz = 492.6, th = 6.2, tx0 = 590.8;
   const tcx = tx0 + th, tcz = tz;
   B.box(tx0, tx0 + 2 * th, g - 2, Y(1.4), tz - th, tz + th, LIMESTONE_DARK);
   B.box(tx0, tx0 + 2 * th, Y(1.4), Y(30), tz - th, tz + th, BRICK_UNION);
@@ -299,7 +302,7 @@ function michiganUnion(B, site) {
   B.box(tx0 - 0.1, tx0 + 2 * th + 0.1, Y(30), Y(30.6), tz - th - 0.1, tz + th + 0.1, LIMESTONE);
   B.ringBattlements([tx0, tz - th, tx0, tz + th, tx0 + 2 * th, tz + th, tx0 + 2 * th, tz - th], Y(30.6), 0.9, 0.9, LIMESTONE);
   // the front: a Tudor-arched door in a limestone surround, the two-storey oriel above, tall windows to the top
-  const S = 3; // west
+  const S = 1; // east, on State Street
   B.faceBox(tcx, tcz, th, S, -2.6, 2.6, Y(0), Y(5), 0, 0.35, LIMESTONE);
   B.faceArch(tcx, tcz, th, S, 0, Y(0.2), Y(4.4), 2.8, 0.36, DOOR, B.stone);
   B.faceBox(tcx, tcz, th, S, -3, 3, Y(6), Y(14.5), 0, 1.1, LIMESTONE);
@@ -307,7 +310,7 @@ function michiganUnion(B, site) {
     B.faceBox(tcx, tcz, th, S, u - 0.55, u + 0.55, Y(6.6), Y(9.6), 1.1, 1.14, GLASS, B.glass);
     B.faceBox(tcx, tcz, th, S, u - 0.55, u + 0.55, Y(10.4), Y(13.8), 1.1, 1.14, GLASS, B.glass);
   }
-  B.box(tx0 - 1.25, tx0 + 0.2, Y(14.5), Y(15.1), tz - 3.2, tz + 3.2, LIMESTONE_DARK);
+  B.box(tx0 + 2 * th - 0.2, tx0 + 2 * th + 1.25, Y(14.5), Y(15.1), tz - 3.2, tz + 3.2, LIMESTONE_DARK);
   for (let side = 0; side < 4; side++) {
     for (const u of [-2.2, 0, 2.2]) {
       if (side === S) {

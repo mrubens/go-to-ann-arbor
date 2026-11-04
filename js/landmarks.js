@@ -1,10 +1,12 @@
 import * as THREE from 'three/webgpu';
-import { stadiumGround } from './terrain.js';
+import { stadiumGround, groundHeight } from './terrain.js';
 import { GEO } from './city-geodata.js';
 import { buildCampusLandmarks } from './campus-landmarks.js';
 import { buildMichiganTheater } from './michigan-theater.js';
 import { buildMoreLandmarks } from './more-landmarks.js';
 import { buildDiagM } from './diag-m.js';
+import { buildGraffitiAlley } from './graffiti-alley.js';
+import { REAL_BUILDINGS } from './building-geodata.js';
 import { STADIUM, N, radiiAt, FIELD_Y, WALL_TOP, SEAT_TOP, RIM_Y, WALL_Y, AISLE_IN, CONCOURSE } from './stadium-shape.js';
 
 // Ann Arbor's landmarks are the city's own surveyed buildings (Burton Tower, Hill Auditorium, the Union...), drawn by
@@ -34,8 +36,22 @@ function buildBigHouse(group, colliders) {
     const a = (k / N) * Math.PI * 2;
     return [cx + Math.cos(a) * r, G + y, cz + Math.sin(a) * r];
   };
+  // the outer wall stands at least a parapet's height over the ground outside it, where the hill rises above the
+  // lowest of it (the north end, up the slope from Main St)
+  const wallTop = [];
+  for (let k = 0; k <= N; k++) {
+    const a = (k / N) * Math.PI * 2, r = radiiAt(a)[1] + 4;
+    wallTop.push(Math.max(WALL_Y, groundHeight(cx + Math.cos(a) * r, cz + Math.sin(a) * r) - G + 1.6));
+  }
+  // smoothed round the ring (the ground's bumps would make it a sawtooth)
+  const raw = wallTop.slice(0, N);
+  for (let k = 0; k <= N; k++) {
+    let sum = 0;
+    for (let d = -8; d <= 8; d++) sum += raw[(k + d + N) % N];
+    wallTop[k] = Math.max(WALL_Y, sum / 17);
+  }
   for (let k = 0; k < N; k++) {
-    const k1 = k + 1;
+    const k1 = k + 1, wy0 = wallTop[k], wy1 = wallTop[k1];
     const [i0, o0] = radiiAt((k / N) * Math.PI * 2), [i1, o1] = radiiAt((k1 / N) * Math.PI * 2);
     const isAisle = k % AISLE_EVERY === 0;
     // the field wall: blue padding with a maize line along its top
@@ -57,10 +73,10 @@ function buildBigHouse(group, colliders) {
     quad(at(k, e0, RIM_Y - 0.15), at(k1, e1, RIM_Y - 0.15), at(k1, e1, RIM_Y), at(k, e0, RIM_Y), maize);
     quad(at(k, e0, RIM_Y), at(k1, e1, RIM_Y), at(k1, o1 - 0.6, RIM_Y), at(k, o0 - 0.6, RIM_Y), concrete);
     // the outer wall: a stone parapet over brick, down to the ground (and a little under it, on a slope)
-    quad(at(k, o0 - 0.6, RIM_Y), at(k1, o1 - 0.6, RIM_Y), at(k1, o1 - 0.6, WALL_Y), at(k, o0 - 0.6, WALL_Y), brick);
-    quad(at(k, o0 - 0.6, WALL_Y), at(k1, o1 - 0.6, WALL_Y), at(k1, o1, WALL_Y), at(k, o0, WALL_Y), stone);
-    quad(at(k, o0, WALL_Y), at(k1, o1, WALL_Y), at(k1, o1, WALL_Y - 0.7), at(k, o0, WALL_Y - 0.7), stone);
-    quad(at(k, o0, WALL_Y - 0.7), at(k1, o1, WALL_Y - 0.7), at(k1, o1, -3), at(k, o0, -3), brick);
+    quad(at(k, o0 - 0.6, RIM_Y), at(k1, o1 - 0.6, RIM_Y), at(k1, o1 - 0.6, wy1), at(k, o0 - 0.6, wy0), brick);
+    quad(at(k, o0 - 0.6, wy0), at(k1, o1 - 0.6, wy1), at(k1, o1, wy1), at(k, o0, wy0), stone);
+    quad(at(k, o0, wy0), at(k1, o1, wy1), at(k1, o1, wy1 - 0.7), at(k, o0, wy0 - 0.7), stone);
+    quad(at(k, o0, wy0 - 0.7), at(k1, o1, wy1 - 0.7), at(k1, o1, -3), at(k, o0, -3), brick);
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -267,6 +283,19 @@ function buildBigHouse(group, colliders) {
   screenTex.colorSpace = THREE.SRGBColorSpace;
   screenTex.anisotropy = 8;
   const screenMat = new THREE.MeshBasicNodeMaterial({ map: screenTex });
+  // and their backs, toward the street: a maize block M on Michigan blue
+  const bv = document.createElement('canvas');
+  bv.width = 1024; bv.height = 420;
+  const bx = bv.getContext('2d');
+  bx.fillStyle = '#00274c'; bx.fillRect(0, 0, 1024, 420);
+  bx.font = '900 360px "Arial Black", "Helvetica Neue", Arial, sans-serif';
+  bx.textAlign = 'center'; bx.textBaseline = 'middle';
+  bx.lineJoin = 'miter'; bx.lineWidth = 16; bx.strokeStyle = '#ffcb05';
+  bx.fillStyle = '#ffcb05'; bx.fillText('M', 512, 226);
+  const backTex = new THREE.CanvasTexture(bv);
+  backTex.colorSpace = THREE.SRGBColorSpace;
+  backTex.anisotropy = 8;
+  const backMat = new THREE.MeshStandardNodeMaterial({ map: backTex, roughness: 0.55 });
   for (const s of [-1, 1]) {
     const a = s < 0 ? -Math.PI / 2 : Math.PI / 2, rOut = radiiAt(a)[1];
     const bz = cz + s * (rOut - 2);
@@ -278,6 +307,10 @@ function buildBigHouse(group, colliders) {
     screen.position.set(cx, G + 23.5, bz - s * 1.05);
     if (s > 0) screen.rotation.y = Math.PI;
     group.add(screen);
+    const back = new THREE.Mesh(new THREE.PlaneGeometry(33, 13.5), backMat);
+    back.position.set(cx, G + 23, bz + s * 1.02);
+    if (s < 0) back.rotation.y = Math.PI;
+    group.add(back);
     const band = new THREE.Mesh(new THREE.BoxGeometry(34.2, 1.2, 2.2), new THREE.MeshStandardNodeMaterial({ color: 0xffcb05, roughness: 0.6 }));
     band.position.set(cx, G + 16.6, bz);
     group.add(band);
@@ -296,6 +329,11 @@ function buildBigHouse(group, colliders) {
     minZ = Math.min(minZ, cz + Math.sin(a) * r); maxZ = Math.max(maxZ, cz + Math.sin(a) * r);
   }
   colliders.push({ minX, maxX, minZ, maxZ, maxY: G + 45, stadium: true }); // the helicopter flies into the bowl
+  // the survey draws each end's video board as a thin block just outside the wall: the boards above stand for them
+  for (const b of REAL_BUILDINGS) {
+    if (b.maxZ - b.minZ > 6 || b.maxX - b.minX < 30 || b.maxX < minX || b.minX > maxX) continue;
+    if (b.maxZ > minZ - 10 && b.minZ < minZ + 4 || b.minZ < maxZ + 10 && b.maxZ > maxZ - 4) colliders.push({ replaces: b, minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, maxY: G + 30, keepsSurvey: true });
+  }
   // stood on the ground it was measured from: setOnTerrain leaves it be
   group.userData.terrain = 'set';
 }
@@ -313,6 +351,8 @@ function buildLandmarks(scene) {
   campus.push(...buildMoreLandmarks(group, colliders));
   // the bronze block M where the Diag's walks meet
   if (buildDiagM(group)) campus.push('the Diag M');
+  // Graffiti Alley beside the theater, painted over every surface
+  if (buildGraffitiAlley(group, colliders)) campus.push('Graffiti Alley');
   console.info(`[landmarks] the Big House, ${campus.join(', ')}`);
   scene.add(group);
   return { group, colliders };

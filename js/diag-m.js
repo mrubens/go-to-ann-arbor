@@ -2,6 +2,7 @@
 // Students say stepping on it before your first blue book exam means you'll fail it.
 import * as THREE from 'three/webgpu';
 import { groundHeight } from './terrain.js';
+import { LIFT } from './ground-lifts.js';
 
 // the open middle of the Diag's web of walks (its widest clear spot, from the survey's paving)
 const AT = { x: 839.5, z: 300.5 };
@@ -15,17 +16,18 @@ const M = [
 ];
 
 function buildDiagM(group) {
-  let g = Infinity;
-  for (let a = 0; a < 6.28; a += 0.785) g = Math.min(g, groundHeight(AT.x + Math.cos(a) * 2, AT.z + Math.sin(a) * 2));
-  g = Math.min(g, groundHeight(AT.x, AT.z));
-  const top = g + 0.06;
+  let g = -Infinity;
+  for (let a = 0; a < 6.28; a += 0.785) g = Math.max(g, groundHeight(AT.x + Math.cos(a) * 2, AT.z + Math.sin(a) * 2));
+  g = Math.max(g, groundHeight(AT.x, AT.z));
+  // the paving is laid a lawn's lift over the ground: the inlay sits just over it
+  const top = g + LIFT.lawn + 0.02;
 
   // the granite disc, flush with the paving, and a bronze rim around it
   const disc = new THREE.Mesh(new THREE.CylinderGeometry(1.9, 1.9, 0.2, 48),
-    new THREE.MeshStandardNodeMaterial({ color: 0x7d7873, roughness: 0.55 }));
+    new THREE.MeshStandardNodeMaterial({ color: 0x3a3836, roughness: 0.5 }));
   disc.position.set(AT.x, top - 0.1, AT.z);
   disc.name = 'DiagMDisc';
-  const bronze = new THREE.MeshStandardNodeMaterial({ color: 0xb48a4e, metalness: 0.9, roughness: 0.32 });
+  const bronze = new THREE.MeshStandardNodeMaterial({ color: 0xd2a656, metalness: 0.55, roughness: 0.3 });
   const rim = new THREE.Mesh(new THREE.RingGeometry(1.9, 2.0, 64), bronze);
   rim.rotation.x = -Math.PI / 2;
   rim.position.set(AT.x, top + 0.004, AT.z);

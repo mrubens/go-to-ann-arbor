@@ -120,13 +120,17 @@ function buildMichiganTheater(group, colliders, site) {
     fbox(u - 0.12, u, Y(0.5), Y(3.4), 0, 0.1, FRAME);
     fbox(u + 3.4, u + 3.52, Y(0.5), Y(3.4), 0, 0.1, FRAME);
   }
-  // the entrance: a row of glass doors set back under the marquee, the ticket booth between them
-  fbox(DOOR_U - 6.5, DOOR_U + 6.5, Y(0), Y(3.4), -1.6, -1.5, GLASS, B.glass);
-  for (let u = DOOR_U - 6; u <= DOOR_U + 6.01; u += 1.5) fbox(u - 0.06, u + 0.06, Y(0), Y(3.4), -1.5, -1.4, FRAME);
-  fbox(DOOR_U - 6.8, DOOR_U - 6.5, Y(0), Y(3.5), -1.6, 0, TERRA);
-  fbox(DOOR_U + 6.5, DOOR_U + 6.8, Y(0), Y(3.5), -1.6, 0, TERRA);
-  fbox(DOOR_U - 0.9, DOOR_U + 0.9, Y(0), Y(2.6), -1.4, 0.2, MARQUEE);
-  fbox(DOOR_U - 0.7, DOOR_U + 0.7, Y(1.2), Y(2.2), 0.2, 0.22, GLASS, B.glass);
+  // the entrance: a row of glass doors in bronze frames under the marquee (on the face, since the front block is
+  // solid), deep terra-cotta jambs either side, and the ticket booth standing out between them
+  fbox(DOOR_U - 6.5, DOOR_U + 6.5, Y(0.3), Y(3.4), 0.02, 0.06, GLASS, B.glass);
+  for (let u = DOOR_U - 6.5; u <= DOOR_U + 6.51; u += 1.3) fbox(u - 0.07, u + 0.07, Y(0.3), Y(3.4), 0.02, 0.14, FRAME);
+  fbox(DOOR_U - 6.5, DOOR_U + 6.5, Y(3.3), Y(3.5), 0.02, 0.16, FRAME);
+  fbox(DOOR_U - 6.5, DOOR_U + 6.5, Y(2.3), Y(2.4), 0.06, 0.12, FRAME);
+  fbox(DOOR_U - 7.1, DOOR_U - 6.5, Y(0), Y(3.6), 0, 0.5, TERRA);
+  fbox(DOOR_U + 6.5, DOOR_U + 7.1, Y(0), Y(3.6), 0, 0.5, TERRA);
+  fbox(DOOR_U - 0.9, DOOR_U + 0.9, Y(0), Y(2.6), 0, 1.4, MARQUEE);
+  fbox(DOOR_U - 0.7, DOOR_U + 0.7, Y(1.2), Y(2.2), 1.4, 1.42, GLASS, B.glass);
+  fbox(DOOR_U - 1, DOOR_U + 1, Y(2.6), Y(2.8), -0.05, 1.5, CREAM);
 
   // two floors of paired windows with terra-cotta sills and heads; three tall ones over the entrance
   for (let u = 2.4; u < L - 2; u += 3) {

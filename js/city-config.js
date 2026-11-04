@@ -208,47 +208,39 @@ const LANDMARKS = [
 });
 // The Amtrak station on Depot St (by its real place: OpenStreetMap's name for it is just "Ann Arbor")
 LANDMARKS.push({ id: 'amtrak', name: 'Ann Arbor Amtrak Station', short: 'Amtrak', x: 432, z: -905, district: 'Lower Town' });
+// The Gandy Dancer, in the old Michigan Central depot on Depot St, and Graffiti Alley off Liberty beside the Michigan
+// Theater (both by their real places: the city survey's depot, and the alley's gap between the buildings)
+LANDMARKS.push({ id: 'gandy', name: 'The Gandy Dancer', short: 'Gandy Dancer', x: 549, z: -845, district: districtLabel(districtAt(549, -845)) });
+LANDMARKS.push({ id: 'graffiti', name: 'Graffiti Alley', short: 'Graffiti Alley', x: 487, z: 12, district: districtLabel(districtAt(487, 12)) });
 // The Argo Cascades beside Argo Dam: the middle of their channel (cascades.js)
 LANDMARKS.push({ id: 'cascades', name: 'Argo Cascades', short: 'Argo Cascades', x: 419, z: -1228, district: districtLabel(districtAt(419, -1228)) });
 
-// Street-level arrivals shared by every travel mode: the nearest point of a named street to each place, facing it.
-// Heading 0 faces south (+z), PI north.
-function arrival(x, z, fallback) {
-  const near = nearestRoads(x, z, 260).filter((r) => !r.road.highway);
-  if (!near.length) return { x: fallback.x, z: fallback.z, heading: 0 };
-  const { road } = near[0];
-  let best = null;
-  for (let i = 0; i + 1 < road.pts.length; i++) {
-    const a = road.pts[i], b = road.pts[i + 1];
-    const dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz || 1e-9;
-    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / L2));
-    const px = a.x + t * dx, pz = a.z + t * dz, d = Math.hypot(px - x, pz - z);
-    if (!best || d < best.d) best = { d, px, pz, dx, dz };
-  }
-  // stand on the right-hand lane, looking toward the place
-  const L = Math.hypot(best.dx, best.dz) || 1;
-  const side = Math.sign((x - best.px) * (-best.dz / L) + (z - best.pz) * (best.dx / L)) || 1;
-  const px = best.px + (-best.dz / L) * side * Math.min(3.5, road.w * 0.25);
-  const pz = best.pz + (best.dx / L) * side * Math.min(3.5, road.w * 0.25);
-  return { x: px, z: pz, heading: Math.atan2(x - px, z - pz) };
-}
-const lm = (id) => LANDMARKS.find((l) => l.id === id) || { x: 0, z: 0 };
+// Authored arrivals: [x, z] where you land, the heading facing the landmark (heading 0 faces south, +z), and how far
+// the camera looks up (each checked by eye for a clear view of its model)
+const view = (x, z, tx, tz, lookUp = 0) => ({ x, z, heading: Math.atan2(tx - x, tz - z), lookUp });
 const TELEPORT_LOCATIONS = {
   mainst: { x: -19.2, z: 112, heading: Math.PI }, // Main St between William and Liberty, looking north up Main
-  diag: arrival(lm('diag').x, lm('diag').z, lm('diag')),
-  stadium: arrival(lm('stadium').x, lm('stadium').z, lm('stadium')),
-  burton: arrival(lm('burton').x, lm('burton').z, lm('burton')),
-  theater: arrival(lm('theater').x, lm('theater').z, lm('theater')),
-  kerrytown: arrival(lm('kerrytown').x, lm('kerrytown').z, lm('kerrytown')),
-  arb: arrival(lm('arb').x, lm('arb').z, lm('arb')),
-  gallup: arrival(lm('gallup').x, lm('gallup').z, lm('gallup')),
-  hill: arrival(lm('hill').x, lm('hill').z, lm('hill')),
-  union: arrival(lm('union').x, lm('union').z, lm('union')),
-  umma: arrival(lm('umma').x, lm('umma').z, lm('umma')),
-  library: arrival(lm('library').x, lm('library').z, lm('library')),
-  crisler: arrival(lm('crisler').x, lm('crisler').z, lm('crisler')),
-  amtrak: arrival(lm('amtrak').x, lm('amtrak').z, lm('amtrak')),
-  cascades: arrival(lm('cascades').x, lm('cascades').z, lm('cascades'))
+  diag: view(846, 284, 838, 380, 0), // the Diag, looking north up the walk to the block M and the Graduate Library
+  stadium: view(-175, 1450, -29, 1529, 3), // Michigan Stadium from the west
+  burton: view(866, -2, 799, 22, 4), // Burton Tower from the east, looking up at the clock
+  theater: view(541, 40, 523, 20, 2.5), // the Michigan Theater's marquee from across Liberty
+  kerrytown: view(208, -586, 175, -556, 1), // Kerrytown's brick market halls
+  arb: view(2100, -100, 2250, -220, 0), // the Arb's woods
+  gallup: view(4280, 330, 4420, 430, 0), // Gallup Park's riverside path
+  hill: view(736, 8, 770, 36, 1), // Hill Auditorium's columns
+  union: view(648, 470, 597, 494, 3), // the Michigan Union's front on State St
+  umma: view(640, 425, 690, 450, 1), // UMMA's glass wing
+  library: view(178, 190, 205, 160, 1.5), // the downtown library's Fifth Ave entrance
+  crisler: view(165, 1708, 137, 1623, 0.5), // Crisler Center from the south
+  amtrak: view(418, -870, 429, -903, 1), // the Amtrak station's glass front
+  cascades: view(380, -1214.5, 470, -1224, 0), // the Argo Cascades, looking downstream
+  gandy: view(522, -808, 552, -840, 2), // the Gandy Dancer's stone depot
+  graffiti: view(486.8, 20, 487.2, 3, 1), // down Graffiti Alley from Liberty
+  league: view(836, 14, 874, 4, 1.5), // the Michigan League
+  rackham: view(846, -70, 834, -130, 1.5), // Rackham's south entrance
+  yost: view(648, 1256, 607, 1320, 1.5), // Yost Ice Arena
+  market: view(206, -500, 155, -478, 0.5), // the Farmers Market sheds
+  towerplaza: view(548, 203, 496, 182, 7) // Tower Plaza, looking up
 };
 
 // The city's building names (Bldg_Name, GEO.places): each named building's centre and half its size, in 100 m cells

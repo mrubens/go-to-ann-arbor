@@ -1140,12 +1140,15 @@ async function initApp() {
     elLocation.replaceChildren(...nodes);
   }
 
-  function teleportTo(x, z, heading = Math.PI) {
+  function teleportTo(x, z, heading = Math.PI, lookUp) {
     const destination = controllerManager.teleportActiveTo(x, z, heading);
+    log(`[teleport] asked ${x.toFixed(1)}, ${z.toFixed(1)} → landed ${destination.x.toFixed(1)}, ${destination.z.toFixed(1)} as ${controllerManager.activeMode}`);
     touchControls.reset();
     gamepadControls.reset();
     cameraSystem.resetForTeleport();
     selectCamera('chase', true);
+    // a tall landmark's viewpoint looks up at it, until the player moves off
+    if (Number.isFinite(lookUp)) cameraSystem.lookUp = lookUp;
     mapSystem.waypoint = {
       x: destination.x,
       z: destination.z,
@@ -1178,7 +1181,7 @@ async function initApp() {
       const key = btn.getAttribute('data-teleport');
       const loc = TELEPORT_LOCATIONS[key];
       if (loc) {
-        teleportTo(loc.x, loc.z, loc.heading);
+        teleportTo(loc.x, loc.z, loc.heading, loc.lookUp);
       }
       closePopovers();
     });

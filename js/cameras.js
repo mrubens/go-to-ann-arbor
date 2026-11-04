@@ -161,6 +161,7 @@ class CameraSystem {
     this.orbitPitchOffset = 0.09;
     this.zoomMultiplier = 1;
     this.userOrbitTimer = 0;
+    this.lookUp = 0;
   }
 
   resetForTeleport() {
@@ -278,6 +279,11 @@ class CameraSystem {
       this.orbitYawOffset -= Math.round(this.orbitYawOffset / (Math.PI * 2)) * (Math.PI * 2);
       this.orbitYawOffset += (0.0 - this.orbitYawOffset) * (1 - Math.exp(-dt * 2.2));
     }
+    // a teleport to a tall landmark looks up at it (lookUp, in meters), and eases down once the player moves off
+    if (this.lookUp && (this.isDragging || Math.abs(entity.speed) > 0.5)) {
+      this.lookUp *= Math.exp(-dt * 2.5);
+      if (this.lookUp < 0.05) this.lookUp = 0;
+    }
 
     // The follow cameras pull back with speed, eased so that they drift back as the entity speeds up (and in as it
     // slows down); speedLag is about how far their former world-space smoothing left them trailing at 60 FPS
@@ -303,7 +309,7 @@ class CameraSystem {
         const lookUpBias = entity.type === 'helicopter' ? 0.2 : (entity.type === 'car' ? 0.52 : 1.55);
         desiredLook.set(
           entity.position.x + Math.sin(entity.heading) * 5.2,
-          entity.position.y + entity.cameraTargetOffset.y + lookUpBias,
+          entity.position.y + entity.cameraTargetOffset.y + lookUpBias + (this.lookUp || 0),
           entity.position.z + Math.cos(entity.heading) * 5.2
         );
         break;
