@@ -199,6 +199,16 @@
       "license" : "CC-BY-SA-4.0",
       "name" : "Mapillary street-level imagery (decides house and shopfront looks; no photos ship)",
       "url" : "https://www.mapillary.com"
+    },
+    {
+      "adapted" : false,
+      "author" : "Kenney",
+      "files" : [
+        "Web/assets/kenney-interface-sounds/confirmation_004.ogg"
+      ],
+      "license" : "CC0-1.0",
+      "name" : "Interface Sounds",
+      "url" : "https://opengameart.org/content/interface-sounds"
     }
   ]
 }

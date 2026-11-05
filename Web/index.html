@@ -269,10 +269,29 @@
     </nav>
   </footer>
 
+  <aside id="driving-directions" class="panel hidden" aria-label="Driving directions">
+    <div class="nav-main"><span id="nav-arrow" aria-hidden="true">↑</span><div><strong id="nav-turn">Choose a destination</strong><div id="nav-street"></div></div></div>
+    <div class="nav-bottom"><span id="nav-destination"></span><button id="nav-stop" type="button" aria-label="End directions">×</button></div>
+    <div id="nav-remaining"></div>
+  </aside>
   <!-- Bottom-Right: Speed Cluster & Camera Switcher -->
   <div class="hud hud-bottom-right">
     <section id="hud-cluster" class="panel cluster" aria-label="Vehicle telemetry and camera">
       <div class="gauge">
+        <div id="ev-dashboard" aria-label="Electric vehicle dashboard">
+          <div class="ev-heading">ELECTRIC <span id="ev-drive">D</span></div>
+          <div id="ev-speed">0</div><div class="ev-unit">MPH</div>
+          <div class="ev-energy"><span>BATTERY</span><strong id="ev-battery">80%</strong></div>
+          <div class="ev-track"><div id="ev-fill"></div></div>
+          <div id="ev-range">Estimated range</div>
+          <div class="ev-power-labels"><span>REGEN</span><span>POWER</span></div>
+          <div class="ev-power-track" role="meter" id="ev-power-meter" aria-label="Regenerative braking or motor power" aria-valuemin="-100" aria-valuemax="100" aria-valuenow="0">
+            <div id="ev-regen-bar"></div><div id="ev-power-bar"></div>
+          </div>
+          <div id="ev-power-value">READY · 0%</div>
+          <div id="ev-status" role="status">READY · ELECTRIC</div>
+          <button id="ev-charge" type="button" title="Stop anywhere to fast-charge; accelerating disconnects">Park &amp; charge</button>
+        </div>
         <svg id="dial" class="dial" viewBox="0 0 200 200" role="img" aria-label="Speedometer">
           <defs>
             <radialGradient id="dial-face" cx="50%" cy="42%" r="62%">
@@ -391,13 +410,14 @@
         <img class="mta-bullet app-logo" src="img/app-icon.png" alt="" aria-hidden="true">
         <div>
           <h2>Ann Arbor Street Atlas</h2>
-          <p id="fullmap-player-info" class="fullmap-subtitle">You are at 5th Ave &amp; 35th St</p>
+          <p id="fullmap-player-info" class="fullmap-subtitle">Search mapped places for driving directions</p>
         </div>
       </div>
-      <label class="panel fullmap-search-wrap">
+      <div class="panel fullmap-search-wrap">
         <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
-        <input id="fullmap-search" class="fullmap-search" type="text" placeholder="Search streets &amp; landmarks — Main St, State St, Liberty…" aria-label="Search street or landmark" autocomplete="off" spellcheck="false" />
-      </label>
+        <input id="fullmap-search" class="fullmap-search" type="text" placeholder="Where to? Search places, businesses, streets" aria-label="Search destinations" autocomplete="off" spellcheck="false" />
+        <div id="destination-results" aria-label="Destination search results"></div>
+      </div>
       <button id="close-fullmap-btn" class="panel tool-btn fullmap-close" type="button" title="Close map [M / Esc]">
         <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg><span class="tool-label">Close</span><kbd data-key="Escape" data-pad="B">Esc</kbd>
       </button>
@@ -425,7 +445,7 @@
 
     <div class="fullmap-footer">
       <div class="panel fullmap-status">
-        <span id="fullmap-hover-info">Click anywhere to teleport &amp; set your GPS route · Drag to pan · Scroll to zoom</span>
+        <span id="fullmap-hover-info">Search a destination or click the map for directions · Drag to pan · Scroll to zoom</span>
       </div>
       <button id="map-clear-route" class="panel tool-btn map-clear-route hidden" type="button" title="Clear the GPS route">
         <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg><span>Clear route</span>

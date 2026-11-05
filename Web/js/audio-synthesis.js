@@ -1,4 +1,21 @@
 import { CAR_RATIOS, BUS_RATIOS, newGearState, shiftGear, engineRPM } from './gearbox.js';
+import { sound } from '../lamp-game.js';
+
+// A seamless motor tone follows wheel speed, without combustion pulses or gear changes.
+const electricTone = sound.tone({ wave: 'sine', from: 200, to: 200, attack: 0, hold: 1, release: 0, volume: 0.5 });
+function createElectricVoice() {
+  let voice = null;
+  return {
+    update({ speed = 0, load = 0, doppler = 1, electricVolume = 0, electricPan = 0 }) {
+      const moving = Math.min(1, Math.abs(speed) / 1.5);
+      const volume = electricVolume * moving * (0.035 + 0.085 * load);
+      const pitch = (0.65 + Math.abs(speed) * 0.065) * doppler;
+      if (!voice && volume > 0) voice = sound.play(electricTone, { loop: true, volume, pitch, pan: electricPan });
+      if (voice) sound.set(voice, { volume, pitch, pan: electricPan });
+    },
+    dispose() { if (voice) sound.stop(voice); voice = null; }
+  };
+}
 // Shared procedural audio and continuously running, mono vehicle voices. Spatial placement and overall mixing
 // belong to the caller; every source and processing node created by a voice is released by dispose().
 
@@ -300,6 +317,7 @@ function smoothParameter(parameter, timeConstant = 0.07, epsilon = 0.0001, snapI
 }
 
 export function createMotorVoice(context, resources, kind, output) {
+  if (kind === 'electric') return createElectricVoice();
   if (!['sedan', 'suv', 'moto', 'bus', 'helicopter', 'cyclist', 'siren'].includes(kind)) {
     throw new RangeError(`Unknown motor voice: ${kind}`);
   }

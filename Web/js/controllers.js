@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { isElectric, batteryFor, ELECTRIC_CARS } from './powertrain.js';
 import {
   TOWN_BOUNDS,
   BIG_PARK_BOUNDS,
@@ -105,6 +106,13 @@ const MACHINES = { dumptruck: 'Dump Truck', excavator: 'Excavator', stairtruck: 
 const carDrive = (kind) => {
   const d = { mass: 1500, steer: 10, roll: 0.012, pitch: 0.026, ...CAR_DRIVE, ...CAR_HANDLING[kind] };
   d.grip *= 1.3; d.cornering *= 1.45; d.steer *= 1.6;
+  d.electric = isElectric(kind);
+  if (d.electric) {
+    d.acceleration *= kind === 'cybertruck' ? 1.7 : 1.25;
+    if (kind === 'cybertruck') { d.powerSpeed = 30; d.grip = Math.max(d.grip, 14); }
+    d.coast = 4.2; // Immediate one-pedal braking all the way to a stop.
+  }
+  d.tuningVersion = 2;
   // the air's drag never holds it short of its top speed: at most what leaves a fifth of its pull there
   const pull = d.acceleration * (d.powerSpeed ? d.powerSpeed / Math.max(d.powerSpeed, d.speed) : 1) - d.rolling;
   d.drag = Math.min(d.drag, (0.8 * pull) / (d.speed * d.speed));
@@ -176,7 +184,9 @@ function driveSpeed(speed, throttle, dt, drive) {
 
   const limit = throttle < 0 ? drive.reverseSpeed : drive.speed;
   let acceleration = drive.acceleration;
-  if (drive.powerSpeed) acceleration *= drive.powerSpeed / Math.max(drive.powerSpeed, magnitude);
+  if (drive.powerSpeed) acceleration *= drive.electric
+    ? 1 / Math.sqrt(1 + (magnitude / drive.powerSpeed) ** 2)
+    : drive.powerSpeed / Math.max(drive.powerSpeed, magnitude);
   // Collision momentum above the powered limit decays naturally instead of being clamped.
   return Math.sign(throttle) * Math.min(Math.max(limit, coasting), coasting + Math.abs(throttle) * acceleration * dt);
 }
@@ -803,6 +813,7 @@ class ThirdPersonControllerManager {
       lastCollisionSpark: null,
       steerAngle: 0,
       wheelSpin: 0,
+      battery: batteryFor(look),
       cameraTargetOffset: new THREE.Vector3(0, 0.96, 0),
       chaseDistance: 6.9,
       chaseHeight: 2.12,
@@ -1196,6 +1207,7 @@ class ThirdPersonControllerManager {
     car.riderMesh?.removeFromParent();
     delete car.bike; delete car.quiet; delete car.riderMesh; delete car.riderPose; delete car.machine; delete car.boxW; delete car.boxL;
     this._motoThrow = 0;
+    delete car.battery;
     Object.assign(car, fresh, { position, heading, prevX: position.x, prevZ: position.z });
     root.traverse((child) => {
       if (child.isMesh && !child.material?.transparent && !child.material?.isMeshBasicNodeMaterial) {
@@ -1203,7 +1215,7 @@ class ThirdPersonControllerManager {
         child.receiveShadow = true;
       }
     });
-    this.carLook = { kind: look.kind, hex: look.hex, style: look.style ?? 0 };
+    this.carLook = { kind: look.kind, hex: look.hex, style: look.style ?? 0, energyId: look.energyId };
     root.position.copy(position);
     root.rotation.y = heading;
     root.updateMatrixWorld(true);
@@ -2419,15 +2431,34 @@ class ThirdPersonControllerManager {
   updateCar(dt) {
     if (dt <= 0) return;
     const c = this.entities.car;
-    const D = c.drive || (c.drive = carDrive(this.carLook?.kind));
+    const D = c.drive?.tuningVersion === 2 ? c.drive : (c.drive = carDrive(this.carLook?.kind));
 
     let throttle = 0;
     if (this.keys.forward) throttle = this.keys.forward;
     else if (this.keys.backward) throttle = -this.keys.backward;
 
+    const battery = c.battery;
+    if (battery) {
+      if (Math.abs(c.speed) > 0.3 || throttle || c.airborne) battery.charging = false;
+      const speed = Math.abs(c.speed);
+      const regenerating = !c.airborne && speed > 0.05 && (!throttle || c.speed * throttle < 0);
+      const effort = c.speed * throttle >= 0 ? Math.abs(throttle) : 0;
+      battery.power = battery.charging || c.airborne ? 0 : regenerating
+        ? -Math.min(1, speed / 3) * (throttle ? Math.abs(throttle) : D.coast / D.brake)
+        : battery.charge > 0 ? effort / Math.sqrt(1 + (speed / D.powerSpeed) ** 2) : 0;
+      // Distance consumption plus acceleration losses; braking recovers some, never all, of that energy.
+      const range = ELECTRIC_CARS[this.carLook.kind] * 1609;
+      battery.charge = Math.max(0, Math.min(1, battery.charge + dt * (battery.charging
+        ? 0.025 * (battery.charge > 0.8 ? 0.4 : 1)
+        : regenerating ? speed * 0.00000065 : -(speed / range + effort * speed * 0.000006))));
+      if (battery.charge >= 1) battery.charging = false;
+      if (battery.charge <= 0 && c.speed * throttle >= 0) throttle = 0;
+    }
+
     // Space, the controller's A, the touch button: the handbrake locks the back wheels
     const handbrakeInput = +(this.keys.up || 0);
-    const braking = c.speed * throttle < 0 || handbrakeInput > 0;
+    const braking = c.speed * throttle < 0 || handbrakeInput > 0
+      || (D.electric && !throttle && Math.abs(c.speed) > 0.05 && !c.airborne);
 
     let steerInput = 0;
     if (this.keys.left) steerInput = this.keys.left;

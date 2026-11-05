@@ -279,6 +279,8 @@ class CityAudioSystem {
       params.verticalSpeed = source.verticalSpeed;
       params.seed = source.seed;
       params.doppler = clamp(343 / (343 + radial), 0.85, 1.18);
+      params.electricVolume = (source.gain ?? 1) * Math.min(1, 4 / Math.max(4, distance)) * (1 - slot.emitter.obstruction * 0.7);
+      params.electricPan = clamp((source.x - this.listener.x) / Math.max(10, distance), -1, 1);
       slot.voice.update(params, now);
       slot.distance = distance;
       slot.x = source.x; slot.y = source.y; slot.z = source.z;

@@ -496,7 +496,7 @@ class CityMapSystem {
     this.searchHighlight = '';
     this.searchPath = null;
     this.textWidths = new Map();
-    // No GPS route until a teleport sets one; Clear route on the full map takes it away
+    // DrivingNavigation restores a selected destination; Clear route ends its guidance.
     this.waypoint = null;
 
     // Street names measured before the web font arrived would be spaced for the fallback font: measure & draw again
@@ -520,6 +520,7 @@ class CityMapSystem {
     const fullIslandBtn = document.getElementById('map-view-all');
     this.clearRouteBtn = document.getElementById('map-clear-route');
     this.clearRouteBtn?.addEventListener('click', () => {
+      if (this.navigation) { this.navigation.clear(); return; }
       this.waypoint = null;
       this.renderFullMap();
     });
@@ -565,7 +566,7 @@ class CityMapSystem {
     }
 
     if (this.elSearchInput) {
-      this.elSearchInput.addEventListener('input', () => this.search(this.elSearchInput.value));
+      this.elSearchInput.addEventListener('input', () => { if (!this.navigation) this.search(this.elSearchInput.value); });
       // the game's keyboard stops Space and the arrows from doing anything on the page; keep them in the field, so
       // "main st" types its space and the arrows move the caret instead of the player
       this.elSearchInput.addEventListener('keydown', (e) => {
@@ -627,7 +628,7 @@ class CityMapSystem {
         if (mx >= 0 && mx <= rect.width && my >= 0 && my <= rect.height) {
           const wPos = this.screenToWorld(mx, my, rect.width, rect.height);
           if (this.elHoverInfo) {
-            this.elHoverInfo.textContent = `${getLocationLabel(wPos.x, wPos.z)} · Click to teleport here`;
+            this.elHoverInfo.textContent = `${getLocationLabel(wPos.x, wPos.z)} · Click for driving directions`;
           }
         }
       });
@@ -642,14 +643,12 @@ class CityMapSystem {
           const my = e.clientY - rect.top;
           if (mx >= 0 && mx <= rect.width && my >= 0 && my <= rect.height) {
             const wPos = this.clampToTown(this.screenToWorld(mx, my, rect.width, rect.height));
-            this.waypoint = {
+            const destination = {
               x: wPos.x,
               z: wPos.z,
               name: getLocationLabel(wPos.x, wPos.z)
             };
-            if (this.onTeleport) {
-              this.onTeleport(wPos.x, wPos.z);
-            }
+            this.navigation?.choose(destination);
             this.renderFullMap();
           }
         }
@@ -1102,7 +1101,7 @@ class CityMapSystem {
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
       const wy = toY(this.waypoint.z);
-      drawRoute(ctx, 0, 0, wx, wy, 3);
+      this.navigation?.drawMap(ctx, v, 3);
       drawWaypoint(ctx, wx, wy, 4.5);
     }
 
@@ -1199,7 +1198,7 @@ class CityMapSystem {
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
       const wy = toY(this.waypoint.z);
-      drawRoute(ctx, toX(ent.position.x), toY(ent.position.z), wx, wy, 4);
+      this.navigation?.drawMap(ctx, v, 4);
       drawWaypoint(ctx, wx, wy, 7);
     }
 

@@ -6,6 +6,9 @@ import { ssr } from 'three/addons/tsl/display/SSRNode.js';
 import { createPostProcessing } from './post-processing.js';
 import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
 import { CarRadio } from './radio.js';
+import { DrivingNavigation } from './navigation.js';
+import { isElectric, ELECTRIC_CARS, saveBatteries } from './powertrain.js';
+import { sound } from '../lamp-game.js';
 import { CAR_RATIOS, newGearState, shiftGear, engineRPM } from './gearbox.js';
 import { getLocationLabel, isTypingInField, ROADS, LANDMARKS, TELEPORT_LOCATIONS } from './city-config.js';
 import { buildKayakLaunches } from './kayak-launches.js';
@@ -502,6 +505,7 @@ async function initApp() {
 
   function savePlayerState() {
     try {
+      saveBatteries();
       const entities = Object.fromEntries(Object.entries(controllerManager.entities).map(([mode, entity]) => [mode, {
         x: entity.position.x, y: entity.position.y, z: entity.position.z, heading: entity.heading
       }]));
@@ -735,6 +739,34 @@ async function initApp() {
   const elAltitude = document.getElementById('hud-altitude');
   const elGear = document.getElementById('hud-gear');
   const elRpm = document.getElementById('hud-rpm');
+  const evSpeed = document.getElementById('ev-speed');
+  const evBattery = document.getElementById('ev-battery');
+  const evRange = document.getElementById('ev-range');
+  const evStatus = document.getElementById('ev-status');
+  const evFill = document.getElementById('ev-fill');
+  const evPowerBar = document.getElementById('ev-power-bar');
+  const evRegenBar = document.getElementById('ev-regen-bar');
+  const evPowerValue = document.getElementById('ev-power-value');
+  const evPowerMeter = document.getElementById('ev-power-meter');
+  const evCharge = document.getElementById('ev-charge');
+  const chargeSound = await sound.load('assets/kenney-interface-sounds/confirmation_004.ogg');
+  const CHARGE_CONTROL = { key: 'KeyT', pad: BUTTON.DOWN };
+  let chargeHint = '';
+  onInput(() => {
+    const hint = input().kind === 'keyboard' ? label(CHARGE_CONTROL.key) : label(CHARGE_CONTROL.pad);
+    chargeHint = hint || '';
+    evCharge.title = `Stop anywhere to fast-charge${hint ? ` · ${hint}` : ''}. Accelerating disconnects.`;
+  });
+  function toggleCharging() {
+    const car = controllerManager.entities.car;
+    if (controllerManager.activeMode !== 'car' || !car.battery) return;
+    if (Math.abs(car.speed) > 0.3 || car.airborne) { showNotice('Stop the car to charge'); return; }
+    car.battery.charging = !car.battery.charging && car.battery.charge < 1;
+    if (audioSystem.enabled) sound.play(chargeSound, { volume: 0.3 });
+    log(`[electric] ${car.battery.charging ? 'charging connected' : 'charging disconnected'}`);
+    savePlayerState();
+  }
+  evCharge?.addEventListener('click', toggleCharging);
   const elLocation = document.getElementById('hud-location');
   const elControlsHint = document.getElementById('hud-controls-hint');
   const gamepadControls = new GamepadControls(controllerManager, cameraSystem, {
@@ -746,7 +778,8 @@ async function initApp() {
     onGetInOut: getInOrOut,
     onToggleMap: () => mapSystem.toggleFullMap(!mapSystem.isFullMapOpen),
     onCloseMap: () => mapSystem.toggleFullMap(false),
-    onRadio: (dir) => carRadio.tune(dir)
+    onRadio: (dir) => carRadio.tune(dir),
+    onCharge: toggleCharging
   });
   const carRadio = new CarRadio();
 
@@ -1356,7 +1389,7 @@ async function initApp() {
     selectCamera('chase', true);
     // a tall landmark's viewpoint looks up at it, until the player moves off
     if (Number.isFinite(lookUp)) cameraSystem.lookUp = lookUp;
-    mapSystem.waypoint = {
+    mapSystem.waypoint = mapSystem.navigation?.target || {
       x: destination.x,
       z: destination.z,
       name: getLocationLabel(destination.x, destination.z)
@@ -1375,13 +1408,16 @@ async function initApp() {
       gamepadControls.setEnabled(!open);
       const mapHint = document.getElementById('fullmap-hover-info');
       if (open && touchControls.available && mapHint) {
-        mapHint.textContent = 'Tap to teleport · Drag to pan · Use + / − to zoom';
+        mapHint.textContent = 'Tap for directions · Drag to pan · Use + / − to zoom';
       }
     },
     onTeleport: teleportTo
   });
   // the road work on the maps: the middle of each closed block
   mapSystem.workSites = (roadWork?.closures || []).map((e) => ({ x: e.sx + e.dx * e.len / 2, z: e.sz + e.dz * e.len / 2 }));
+  const navigation = new DrivingNavigation(scene, mapSystem, controllerManager, trafficSystem.network, () => {
+    if (audioSystem.enabled) sound.play(chargeSound, { volume: 0.3 });
+  });
 
   teleportButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1444,6 +1480,9 @@ async function initApp() {
         break;
       case 'KeyF':
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) getInOrOut();
+        break;
+      case 'KeyT':
+        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !mapSystem.isFullMapOpen) toggleCharging();
         break;
       case 'KeyV':
         cycleCamera(e.shiftKey ? -1 : 1);
@@ -1711,6 +1750,7 @@ async function initApp() {
     if (streetDetails.update) streetDetails.update(cameraSystem.camera);
     mark('street details');
     lightingSystem.update(cameraSystem.currentPos);
+    navigation.update(dt);
     mapSystem.update();
     if (lightingSystem.activePresetId === 'now' && elapsed - nowCheckedAt > 60) {
       nowCheckedAt = elapsed;
@@ -1805,14 +1845,36 @@ async function initApp() {
     {
       const ent = controllerManager.getActiveEntity();
       const dialMode = controllerManager.activeMode;
+      const electric = dialMode === 'car' && isElectric(controllerManager.carLook?.kind);
+      document.body.classList.toggle('electric-car', electric);
       const mphExact = (dialMode === 'kayak' ? ent.groundSpeed || 0 : Math.abs(ent.speed)) * 2.237;
       const mph = Math.round(mphExact);
+      if (electric && ent.battery) {
+        const b = ent.battery;
+        evSpeed.textContent = String(mph);
+        evBattery.textContent = `${Math.round(b.charge * 100)}%`;
+        evRange.textContent = `~${Math.round(b.charge * ELECTRIC_CARS[controllerManager.carLook.kind])} mi range`;
+        evFill.style.width = `${b.charge * 100}%`;
+        const power = Math.max(-1, Math.min(1, b.power || 0));
+        const powerPercent = Math.round(Math.abs(power) * 100);
+        evPowerBar.style.width = `${Math.max(0, power) * 50}%`;
+        evRegenBar.style.width = `${Math.max(0, -power) * 50}%`;
+        evPowerValue.textContent = `${power < 0 ? 'REGEN' : power > 0 ? 'POWER' : 'READY'} · ${powerPercent}%`;
+        evPowerValue.style.color = power > 0 ? '#f5c277' : '#b4fff0';
+        evPowerMeter.setAttribute('aria-valuenow', String(Math.round(power * 100)));
+        evPowerMeter.setAttribute('aria-valuetext', evPowerValue.textContent);
+        evStatus.textContent = b.charging ? 'CHARGING · FAST CHARGE' : b.charge <= 0 ? 'BATTERY EMPTY · PARK TO CHARGE' : b.power < 0 ? 'REGEN · RECOVERING ENERGY' : b.power > 0 ? 'POWER · SINGLE SPEED' : 'READY · ELECTRIC';
+        evCharge.textContent = b.charging ? 'Disconnect charger' : b.charge >= 1 ? 'Battery full' : 'Park & charge';
+        evCharge.disabled = Math.abs(ent.speed) > 0.3 || !!ent.airborne || b.charge >= 1;
+        if (chargeHint) evCharge.textContent += ` · ${chargeHint}`;
+        document.getElementById('ev-drive').textContent = b.charging ? 'P' : ent.speed < -0.1 ? 'R' : 'D';
+      }
       if (elSpeed && mph !== hud.shownMph) { hud.shownMph = mph; elSpeed.textContent = String(mph); }
       if (elSpeedMeter && dialScale.max) {
         elSpeedMeter.style.transform = `rotate(${-DIAL_SWEEP + Math.min(1, mphExact / dialScale.max) * DIAL_SWEEP * 2}deg)`;
       }
       // the gear and revs are worked out ten times a second, which is the rate the engine sound reads them at
-      if (dialMode === 'car' && elGear && hud.clock - hud.lastClock >= 0.1) {
+      if (dialMode === 'car' && !electric && elGear && hud.clock - hud.lastClock >= 0.1) {
         const read = gearReadout(Math.abs(ent.speed), ent.speed >= 0);
         if (read.gear !== hud.shownGear) { hud.shownGear = read.gear; elGear.textContent = read.gear; }
         if (elRpm && read.rpm !== hud.shownRpm) { hud.shownRpm = read.rpm; elRpm.textContent = String(read.rpm); }
@@ -1857,12 +1919,13 @@ async function initApp() {
     const entities = Object.fromEntries(Object.entries(controllerManager.entities).map(([mode, entity]) => [mode, {
       x: entity.position.x, y: entity.position.y, z: entity.position.z, heading: entity.heading, speed: entity.speed || 0
     }]));
-    return { version: 2, activeMode: controllerManager.activeMode, entities, camera: cameraSystem.activePresetId,
+    return { version: 2, carLook: controllerManager.carLook, activeMode: controllerManager.activeMode, entities, camera: cameraSystem.activePresetId,
              zoom: cameraSystem.zoomMultiplier, time: lightingSystem.activePresetId,
              map: mapSystem.isFullMapOpen, hudHidden: document.body.classList.contains('hud-minimized') };
   }
   function startFrom(state) {
     if (state?.version !== 2) return;
+    if (state.carLook) controllerManager.restyleCar(state.carLook);
     for (const mode of Object.keys(controllerManager.entities)) {
       const p = state.entities?.[mode];
       if (!p || ![p.x, p.y, p.z, p.heading].every(Number.isFinite)) continue;
@@ -1886,7 +1949,7 @@ async function initApp() {
     const was = pendingRestore(); if (was) startFrom(was);
   }, frame, touch: false, keyboard: false, snapshot, sharp: TIER.name !== 'phone',
     // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.
-    dispose() { cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); scenePass.dispose(); } });
+    dispose() { navigation.dispose(); cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); scenePass.dispose(); } });
   container.appendChild(renderer.domElement);
 }
 
