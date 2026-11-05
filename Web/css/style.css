@@ -860,6 +860,26 @@ body.hud-minimized .icon-show {
 /* ------------------------------------------------------------------------------------------------------------------
    Bottom right: speed cluster & camera switcher
    ------------------------------------------------------------------------------------------------------------------ */
+.fullmap-search-wrap { position: relative; }
+#destination-results { position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-height: min(50vh, 390px); overflow-y: auto; background: #161d24f5; border-radius: 12px; box-shadow: 0 8px 24px #0008; }
+#destination-results:empty { display: none; }
+.destination-result { display: block; width: 100%; padding: 12px 14px; color: #f3f5f7; background: transparent; border: 0; border-bottom: 1px solid #ffffff12; text-align: left; cursor: pointer; font: inherit; }
+.destination-result:hover, .destination-result:focus-visible { background: #ffcb0522; outline: 2px solid #ffcb05; outline-offset: -2px; }
+.destination-result small { display: block; color: #aab8c5; font-size: 11px; margin-top: 3px; }
+.destination-empty { padding: 14px; font-size: 12px; color: #bec8d2; }
+#driving-directions { position: fixed; z-index: 30; left: var(--edge, 20px); top: 110px; width: min(320px, calc(100vw - 40px)); padding: 16px; pointer-events: auto; }
+#driving-directions.hidden { display: none; }
+html.mac-window #driving-directions { top: 128px; }
+.nav-main { display: flex; align-items: center; gap: 14px; }
+#nav-arrow { font-size: 38px; color: #ffcb05; line-height: 1; }
+#nav-turn { font-size: 21px; color: #fff; }
+#nav-street { font-size: 14px; color: #e1e6ed; margin-top: 4px; }
+.nav-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; border-top: 1px solid #ffffff20; padding-top: 8px; }
+#nav-destination { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#nav-stop { border: 0; background: transparent; color: white; cursor: pointer; font-size: 24px; padding: 0 4px; }
+#nav-remaining { font-size: 12px; color: #c1cbd5; }
+body.hud-minimized #driving-directions { display: none; }
+@media (max-width: 820px) { #driving-directions { top: 105px; padding: 10px; width: min(275px, calc(100vw - 40px)); } #nav-turn { font-size: 17px; } }
 .cluster {
   width: 284px;
   overflow: hidden;
@@ -868,6 +888,30 @@ body.hud-minimized .icon-show {
 .gauge {
   padding: 12px 14px 8px;
 }
+
+#ev-dashboard { display: none; width: 200px; max-width: 100%; margin: auto; padding: 12px 4px; color: #b4fff0; font-variant-numeric: tabular-nums; }
+body.electric-car #dial { display: none; }
+body.electric-car #ev-dashboard { display: block; }
+.ev-heading, .ev-unit { font-size: 10px; letter-spacing: .2em; }
+.ev-heading { display: flex; justify-content: space-between; }
+#ev-drive { color: white; }
+#ev-speed { text-align: center; font-size: 62px; font-weight: 500; line-height: 1.1; color: white; }
+.ev-unit { text-align: center; margin-bottom: 14px; }
+.ev-energy { display: flex; align-items: center; justify-content: space-between; font-size: 10px; letter-spacing: .12em; }
+#ev-battery { font-size: 17px; }
+.ev-track { height: 5px; border-radius: 4px; background: #28463f; margin: 7px 0; overflow: hidden; }
+#ev-fill { height: 100%; background: #69efd0; }
+#ev-range { font-size: 12px; color: #c0d2ce; }
+.ev-power-labels { display: flex; justify-content: space-between; font-size: 9px; letter-spacing: .1em; margin-top: 12px; }
+.ev-power-labels span:last-child { color: #f5c277; }
+.ev-power-track { position: relative; height: 9px; background: #ffffff12; border-radius: 3px; margin: 5px 0; overflow: hidden; }
+.ev-power-track::after { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #edf8f5; }
+#ev-regen-bar { position: absolute; right: 50%; height: 100%; background: #69efd0; }
+#ev-power-bar { position: absolute; left: 50%; height: 100%; background: #f5c277; }
+#ev-power-value { font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
+#ev-status { font-size: 8px; letter-spacing: .06em; margin: 10px 0; }
+#ev-charge { width: 100%; border: 1px solid #69efd066; border-radius: 7px; background: #69efd015; color: #b4fff0; padding: 7px; font: inherit; font-size: 12px; cursor: pointer; }
+#ev-charge:disabled { opacity: .4; cursor: default; }
 
 .dial {
   display: block;

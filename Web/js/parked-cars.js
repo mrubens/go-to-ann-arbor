@@ -462,15 +462,16 @@ function buildParkedCars(group, nearTrack = null) {
       if (!set) sets.push(set = setFor(drop.kind));
       if (set.cars.length < set.capacity) {
         left = record(drop, drop.kind, drop.hex, drop.style ?? 0);
+        left.energyId = drop.energyId;
         set.cars.push(left);
         set.left.push(left);
         colliders.push(left.collider);
       }
     }
     lastX = Infinity;
-    history.push({ take: car ? [car.x, car.z] : null, drop: drop ? { kind: drop.kind, hex: drop.hex, style: drop.style ?? 0, x: drop.x, z: drop.z, yaw: drop.yaw, y: drop.y || 0 } : null });
+    history.push({ take: car ? [car.x, car.z] : null, drop: drop ? { kind: drop.kind, hex: drop.hex, energyId: drop.energyId, style: drop.style ?? 0, x: drop.x, z: drop.z, yaw: drop.yaw, y: drop.y || 0 } : null });
     if (history.length > 40) history.shift();
-    return { look: car ? { kind: car.kind, hex: car.hex, style: car.style } : null, collider: left?.collider ?? null };
+    return { look: car ? { kind: car.kind, hex: car.hex, style: car.style, energyId: car.energyId } : null, collider: left?.collider ?? null };
   }
 
   // The cars taken and left in an earlier play, again

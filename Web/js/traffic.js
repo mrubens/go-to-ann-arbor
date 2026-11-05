@@ -65,12 +65,12 @@ const CAR_KINDS = {
   pickup: { half: 2.86, halfWidth: 0.96, axle: 1.92, halfL: 2.78, mass: 2400, engine: 'suv' },
   van: { half: 2.96, halfWidth: 0.95, axle: 1.8, halfL: 2.88, mass: 2700, engine: 'suv' },
   sports: { half: 2.25, halfWidth: 0.9, axle: 1.36, halfL: 2.18, mass: 1450, engine: 'sedan' },
-  // the electric cars (cars.js): their tyres heard, no engine's note
-  tesla: { half: 2.25, halfWidth: 0.92, axle: 1.4, halfL: 2.2, mass: 1850, engine: 'cyclist' },
-  ioniq: { half: 2.33, halfWidth: 0.94, axle: 1.5, halfL: 2.26, mass: 2100, engine: 'cyclist' },
-  r1s: { half: 2.3, halfWidth: 0.94, axle: 1.5, halfL: 2.22, mass: 2700, engine: 'cyclist' },
-  r1t: { half: 2.72, halfWidth: 0.96, axle: 1.72, halfL: 2.64, mass: 3000, engine: 'cyclist' },
-  cybertruck: { half: 2.86, halfWidth: 1.0, axle: 1.92, halfL: 2.8, mass: 3100, engine: 'cyclist' },
+  // Electric motors follow road speed without combustion pulses or shifts.
+  tesla: { half: 2.25, halfWidth: 0.92, axle: 1.4, halfL: 2.2, mass: 1850, engine: 'electric' },
+  ioniq: { half: 2.33, halfWidth: 0.94, axle: 1.5, halfL: 2.26, mass: 2100, engine: 'electric' },
+  r1s: { half: 2.3, halfWidth: 0.94, axle: 1.5, halfL: 2.22, mass: 2700, engine: 'electric' },
+  r1t: { half: 2.72, halfWidth: 0.96, axle: 1.72, halfL: 2.64, mass: 3000, engine: 'electric' },
+  cybertruck: { half: 2.86, halfWidth: 1.0, axle: 1.92, halfL: 2.8, mass: 3100, engine: 'electric' },
   // motorcycles (motorcycles.js), in town traffic only
   ...Object.fromEntries(Object.values(MOTO_SPECS).map((m) =>
     [m.name, { half: m.half, halfWidth: m.halfWidth, axle: m.axle, halfL: m.halfL, mass: m.mass, engine: m.quiet ? 'cyclist' : 'moto', moto: true, curb: !!m.quiet }]))

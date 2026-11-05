@@ -1,5 +1,6 @@
 import { signalPhase, walkSignal } from './city-config.js';
 import { groundHeight } from './terrain.js';
+import { isElectric } from './powertrain.js';
 
 // Lamp: how high something is above the ground under it (terrain.js)
 const aboveGround = (p) => p.y - groundHeight(p.x, p.z);
@@ -185,14 +186,14 @@ class CityAudioSources {
         // Inactive bicycles stop updating and are silent, even if their stored speed is left over from riding.
         if (entity.type === 'kayak' || (!player && (entity.type === 'cyclist' || entity.type === 'car'))) continue;
         // a truck or excavator from the road work rumbles like the buses' diesel
-        const kind = entity.type === 'car' ? (entity.bike ? (entity.quiet ? 'cyclist' : 'moto') : entity.machine ? 'bus' : 'sedan') : entity.type;
+        const kind = entity.type === 'car' ? (entity.bike ? (entity.quiet ? 'cyclist' : 'moto') : entity.machine ? 'bus' : isElectric(this.controllers.carLook?.kind) ? 'electric' : 'sedan') : entity.type;
         const helicopter = kind === 'helicopter';
         const verticalSpeed = player && helicopter ? helicopterVerticalSpeed(entity) : 0;
         const load = player ? helicopter ? helicopterLoad(entity, keys, verticalSpeed) : driveLoad(keys, entity.speed, kind === 'cyclist') : 0;
         const gain = player ? 1 : helicopter ? 0.22 : 0.5;
         const range = helicopter ? (player ? 500 : 200) : 160;
         // a motorbike is a voice of its own (the sound of a car the player had doesn't carry over)
-        this.motor(entity.bike ? entity.chassisPivot ?? entity : entity, kind, x, y + (helicopter ? 2.66 : 0.7), z, player ? entity.speed : 0, load, entity.heading,
+        this.motor(entity.type === 'car' ? entity.chassisPivot ?? entity : entity, kind, x, y + (helicopter ? 2.66 : 0.7), z, player ? entity.speed : 0, load, entity.heading,
           false, player, seedAt(i), false, gain, range, verticalSpeed);
       }
     }
