@@ -268,8 +268,14 @@ function buildDecks(g, r) {
   }
 }
 
-// The river's water level at (x, z), or null where there's no river
+// The town's swimming pools (pools.js), whose water answers here as the river's does
+let pools = null;
+function setPools(p) { pools = p; }
+
+// The river's water level at (x, z) (or a pool's), or null where there's no river
 function waterLevel(x, z) {
+  const pool = pools?.at(x, z);
+  if (pool) return pool.level;
   const r = grid?.river;
   return r ? cascadeLevel(x, z, levelAt(r, x, z)) : null; // stepping down the Argo Cascades (cascades.js)
 }
@@ -363,6 +369,7 @@ function riverbedHeight(x, z) {
 
 // How far (0-1) (x, z) is out in the river from its shore: 0 on land, 1 in open water
 function riverDepth(x, z) {
+  if (pools?.at(x, z)) return 1;
   const r = grid?.river;
   return r ? digAt(r, x, z) : 0;
 }
@@ -1362,7 +1369,7 @@ function drawOver(mat, lift = LIFT.over) {
 
 export {
   drawOver, cityGround,
-  loadTerrain, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
+  loadTerrain, setPools, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
   tessellate, drapeGeometry, liftGeometry, liftInstances, setOnTerrain,
   streamGround, updateGroundStreaming, groundStreamStats, groundStreamCenter, groundStreamBytes, streamFromSquares, streamNear
 };

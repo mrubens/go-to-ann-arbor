@@ -70,7 +70,8 @@ const CAR_HANDLING = {
   minivan: { mass: 2000, speed: 50.1, acceleration: 3.8, brake: 8.5, grip: 8.4, cornering: 8.5, wheelbase: 3.03, steer: 7.5, roll: 0.015 }, // 112 mph, a Sienna or Odyssey
   pickup: { mass: 2400, speed: 47.8, acceleration: 4.8, powerSpeed: 11, brake: 8, grip: 7.8, cornering: 7.6, wheelbase: 3.7, steer: 7, roll: 0.017, pitch: 0.034 }, // 107 mph, an F-150
   // the electric cars: heavy, with all their pull from a standstill
-  tesla: { mass: 1850, speed: 55.9, acceleration: 7.5, powerSpeed: 24, grip: 11, cornering: 11, wheelbase: 2.88, roll: 0.01 }, // 125 mph, a Model 3 or Model Y Long Range
+  // the electric performance sedan: a tri-motor's shove off the line (60 mph in about two seconds) and 200 mph flat out
+  tesla: { mass: 2070, speed: 89.4, acceleration: 13, powerSpeed: 30, brake: 12, drag: 0.0005, grip: 14, cornering: 14, wheelbase: 2.96, steer: 12, roll: 0.008, pitch: 0.018 },
   ioniq: { mass: 2100, speed: 51.4, acceleration: 6.5, powerSpeed: 20, grip: 9.6, cornering: 9.6, wheelbase: 3.0, steer: 8.5, roll: 0.013 }, // 115 mph, an Ioniq 5
   r1s: { mass: 2700, speed: 49.2, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 9, cornering: 9, wheelbase: 3.08, steer: 8, roll: 0.013 }, // 110 mph, a Rivian R1S
   r1t: { mass: 3000, speed: 49.2, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.6, cornering: 8.2, wheelbase: 3.45, steer: 7.5, roll: 0.013, pitch: 0.028 }, // 110 mph, a Rivian R1T
@@ -779,10 +780,10 @@ class ThirdPersonControllerManager {
 
     if (!root.parent) this.scene.add(root);
 
-    const kindName = { sedan: 'Sedan', suv: 'SUV', minivan: 'Minivan', pickup: 'Pickup', van: 'Van', forester: 'Wagon', sports: 'Sports Car', tesla: 'EV Sedan', ioniq: 'EV Hatch', cybertruck: 'Wedge Truck', r1s: 'EV SUV', r1t: 'EV Pickup' };
+    const kindName = { sedan: 'Sedan', suv: 'SUV', minivan: 'Minivan', pickup: 'Pickup', van: 'Van', forester: 'Wagon', sports: 'Sports Car', tesla: 'EV Sport Sedan', ioniq: 'EV Hatch', cybertruck: 'Wedge Truck', r1s: 'EV SUV', r1t: 'EV Pickup' };
     return {
       type: 'car',
-      label: own ? 'Your Car' : `Borrowed ${kindName[look.kind] || 'Car'}`,
+      label: own ? 'Your Car' : kindName[look.kind] || 'Car',
       mesh: root,
       chassisPivot,
       carState,
@@ -861,8 +862,10 @@ class ThirdPersonControllerManager {
     return {
       type: 'car',
       bike: true,
+      // pedals, a battery and a motor in a wheel hub: no gearbox and no revs to read
+      gears: !['bicycle', 'ebike', 'escooter', 'hoverboard'].includes(look.kind),
       quiet: !!spec.quiet,
-      label: `Borrowed ${names[look.kind]}`,
+      label: names[look.kind],
       mesh: root, chassisPivot, riderMesh, riderPose: motoRiderPose(look.kind), carState: mat.userData.carState, headLights, wheels,
       position: new THREE.Vector3(-19.2, 0.0, SPAWN_Z + 12), prevX: -19.2, prevZ: SPAWN_Z + 12,
       heading: Math.PI, speed: 0, vx: 0, vz: 0, angularVel: 0, pitchVel: 0, rollVel: 0, heaveY: 0, heaveVel: 0,
@@ -926,6 +929,7 @@ class ThirdPersonControllerManager {
       machine: look.kind,
       boxW: hw, boxL: hl,
       label: MACHINES[look.kind],
+      gears: look.kind !== 'excavator', // it crawls on tracks
       mesh: root, chassisPivot, carState: null, headLights, wheels,
       position: new THREE.Vector3(-19.2, 0.0, SPAWN_Z + 12), prevX: -19.2, prevZ: SPAWN_Z + 12,
       heading: Math.PI, speed: 0, vx: 0, vz: 0, angularVel: 0, pitchVel: 0, rollVel: 0, heaveY: 0, heaveVel: 0,
@@ -1369,9 +1373,13 @@ class ThirdPersonControllerManager {
   placePersonBeside(v) {
     const p = this.entities.person;
     const shape = collisionBody('person', 0.48, 0, 0.05);
+    // (up a parking structure, beside it on the same deck)
+    p.position.y = v.position.y;
+    const decked = this.parking?.inside(v.position.x, v.position.z) && v.position.y > groundHeight(v.position.x, v.position.z) + 2;
     const free = (x, z) => {
-      if (riverDepth(x, z) > 0.02 && !(this.livery?.dockTop(x, z) > -Infinity)) return false;
+      if (riverDepth(x, z) > 0.02 && !(this.livery?.dockTop(x, z) > -Infinity) && !(this.docks?.dockTop(x, z) > -Infinity)) return false;
       const y = this.getGroundHeight(x, z, 'person');
+      if (decked && Math.abs(y - v.position.y) > 1.2) return false;
       const inBowl = carSurface(x, z) !== null;
       for (const c of this.nearColliders(x, z, 3)) if (!(inBowl && isStadium(c)) && buildingContact(c, x, y, z, shape)) return false;
       return true;
@@ -1392,7 +1400,7 @@ class ThirdPersonControllerManager {
         const wide = v.boat === 'paddleboat' ? 1.6 : 1.1;
         for (const s of [wide, -wide, wide + 0.8, -(wide + 0.8)]) {
           const x = v.position.x + cs * s, z = v.position.z - sn * s;
-          if (riverDepth(x, z) > 0.08 && !(this.livery?.dockTop(x, z) > -Infinity)) { spot = { x, z, wet: true }; break; }
+          if (riverDepth(x, z) > 0.08 && !(this.livery?.dockTop(x, z) > -Infinity) && !(this.docks?.dockTop(x, z) > -Infinity)) { spot = { x, z, wet: true }; break; }
         }
       }
     } else {
@@ -1490,6 +1498,9 @@ class ThirdPersonControllerManager {
     // a rental kayak or pedal boat at the Gallup Park livery (gallup-livery.js)
     const boat = this.livery?.nearest(p.position.x, p.position.z, 3.2);
     if (boat && boat.d / 3.2 * facing(boat.x, boat.z) < score) { score = boat.d / 3.2 * facing(boat.x, boat.z); best = { mode: 'kayak', boat }; }
+    // a canoe, kayak or rowboat tied up at a dock (boat-docks.js)
+    const tied = this.docks?.nearest(p.position.x, p.position.z, 3.2);
+    if (tied && tied.d / 3.2 * facing(tied.x, tied.z) < score) { score = tied.d / 3.2 * facing(tied.x, tied.z); best = { mode: 'kayak', tied }; }
     // a bike on a rack or an e-bike at a dock by the Diag (bike-racks.js)
     const rack = this.bikeRacks?.nearest(p.position.x, p.position.z, 1.8, facing);
     if (rack && rack.d / 1.8 * facing(rack.x, rack.z) < score) { score = rack.d / 1.8 * facing(rack.x, rack.z); best = { mode: 'car', rack }; }
@@ -1528,19 +1539,28 @@ class ThirdPersonControllerManager {
   rampTop(x, z) {
     // and the airport's rolling airstairs (airport.js stairTop), run up and jumped off the landing
     // and the river's footbridges (terrain.js footbridgeTop), walked and ridden over
-    // and the Gallup Park livery's docks (gallup-livery.js dockTop)
+    // and the Gallup Park livery's docks (gallup-livery.js dockTop), and the river's other docks (boat-docks.js)
+    // and the skate park's bowl, quarter pipes, funbox and blocks (skate-park.js), and the mountain bike trails' berms,
+    // logs and tabletops (mtb-trails.js)
     const pile = Math.max(this.roadWork?.pileTop(x, z) ?? -Infinity, this.airport?.stairTop?.(x, z) ?? -Infinity, footbridgeTop(x, z),
-      this.livery?.dockTop(x, z) ?? -Infinity);
+      this.livery?.dockTop(x, z) ?? -Infinity, this.docks?.dockTop(x, z) ?? -Infinity, this.skatePark?.top(x, z) ?? -Infinity,
+      this.mtbTrails?.top(x, z) ?? -Infinity);
     const play = this.playTop ? this.playTop(x, z) : -Infinity;
     return play > -Infinity ? Math.max(pile, groundHeight(x, z) + 0.19 + play) : pile;
   }
 
-  getGroundHeight(x, z, mode = 'person') {
+  getGroundHeight(x, z, mode = 'person', y) {
     // Lamp: the ground's own height there (terrain.js), with what's laid on it, and up on a road work's dirt pile
     // (road-work.js pileTop), which is driven and walked over like a ramp
     // and on the airport's pavement, laid over the town's lawn (airport.js PAVE)
+    // in a swimming pool: its floor (pools.js), under its water
+    const pool = mode !== 'kayak' && this.pools?.at(x, z);
+    if (pool) return pool.floor(x, z);
     const base = groundHeight(x, z) + (mode !== 'kayak' && onAirfield(x, z) ? PAVE + 0.04 : 0);
-    const ground = Math.max(base, mode === 'kayak' ? -Infinity : this.rampTop(x, z));
+    let ground = Math.max(base, mode === 'kayak' ? -Infinity : this.rampTop(x, z));
+    // up a parking structure: the deck or ramp under them, the highest within a step of where they are now (their
+    // own height, else that mode's player's; -Infinity for the ground itself) (parking-structures.js)
+    if (this.parking && mode !== 'kayak') ground = Math.max(ground, this.parking.top(x, z, y ?? this.entities?.[mode]?.position.y));
     // Inside a big park drawn on its own (none in Ann Arbor: city-config.js BIG_PARK_BOUNDS is far away)
     const cp = BIG_PARK_BOUNDS;
     if (x > cp.minX && x < cp.maxX && z > cp.minZ && z < cp.maxZ) {
@@ -1665,6 +1685,9 @@ class ThirdPersonControllerManager {
       }
       if (buildingContact(c, pos.x, pos.y, pos.z, body, contact)) {
         const { nx, nz, depth } = contact;
+        // something that turns when it's pushed or hit (the Cube, the-cube.js) hears of the touch first, the speed
+        // still the one that hit it; it makes its own sound in place of a crash
+        if (c.onHit) c.onHit(entity, this.activeMode, pos, nx, nz);
         // a tree, pole or sign post the car hits hard enough goes over (knockdowns.js) instead of stopping it
         if (carEntity && c.knock && this.knockdowns) {
           const vx = sinH * carEntity.speed + (carEntity.vx || 0), vz = cosH * carEntity.speed + (carEntity.vz || 0);
@@ -1687,7 +1710,7 @@ class ThirdPersonControllerManager {
           && -(Math.sin(entity.heading) * entity.speed * nx + Math.cos(entity.heading) * entity.speed * nz) > RIDER_THROW_SPEED) {
           this._riderThrow = Math.max(this._riderThrow || 0, Math.abs(entity.speed));
         }
-        if (this._collisionListener && entity && entity.type !== 'person') {
+        if (this._collisionListener && entity && entity.type !== 'person' && !c.quiet) {
           const sin = carEntity ? sinH : Math.sin(entity.heading);
           const cos = carEntity ? cosH : Math.cos(entity.heading);
           const approachSpeed = -((sin * entity.speed + (entity.vx || 0)) * nx + (cos * entity.speed + (entity.vz || 0)) * nz);
@@ -1969,11 +1992,15 @@ class ThirdPersonControllerManager {
 
     if (this.activeMode === 'car') {
       this._motoThrow = 0;
+      const c = this.entities.car, px = c.position.x, pz = c.position.z, py = c.position.y;
       this.updateCar(dt, elapsed);
+      this.pools?.trap(c, px, py, pz, dt);
       if (this._motoThrow) this.throwMotoRider(this._motoThrow);
     } else if (this.activeMode === 'cyclist') {
       this._riderThrow = 0;
+      const b = this.entities.cyclist, px = b.position.x, pz = b.position.z, py = b.position.y;
       this.updateCyclist(dt, elapsed);
+      this.pools?.trap(b, px, py, pz, dt);
       if (this._riderThrow) this.throwRider(this._riderThrow);
     } else if (this.activeMode === 'helicopter') {
       this.updateHelicopter(dt, elapsed);
@@ -1995,6 +2022,7 @@ class ThirdPersonControllerManager {
             e.airRoll *= Math.exp(-dt * 1.5);
             pitch = e.airPitch; roll = e.airRoll;
           } else if (carSurface(e.position.x, e.position.z) !== null || this.rampTop(e.position.x, e.position.z) > -Infinity
+            || this.parking?.inside(e.position.x, e.position.z)
             || this.rampTop(e.position.x + Math.sin(e.heading) * 2.1, e.position.z + Math.cos(e.heading) * 2.1) > -Infinity
             || this.rampTop(e.position.x - Math.sin(e.heading) * 2.1, e.position.z - Math.cos(e.heading) * 2.1) > -Infinity) {
             const s = Math.sin(e.heading), co = Math.cos(e.heading), g = (dx, dz) => this.getGroundHeight(e.position.x + dx, e.position.z + dz, 'car');
@@ -2041,7 +2069,8 @@ class ThirdPersonControllerManager {
     }
     if (!p.rig.placed) p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
     p.rig.startRagdoll(vx, vy, vz, spin, tip);
-    p.fallen = { getUp: -1 };
+    // how it was flung, for the jump camera to cut to the side of a big one
+    p.fallen = { getUp: -1, launch: { vx, vy, vz, looked: false } };
     p.speed = p.verticalVel = 0;
     p._charHidden = false;
     if (p.mesh) p.mesh.visible = true;
@@ -2552,7 +2581,7 @@ class ThirdPersonControllerManager {
     const sn = Math.sin(c.heading), cs = Math.cos(c.heading);
     let roof = -Infinity;
     for (const k of this.nearColliders(x, z, 4)) {
-      if (isStadium(k) || k.thin || k.knock || k.parked || k.maxY < lastY - 40 || k.maxY - (k.minY ?? 0) < 2.2) continue;
+      if (isStadium(k) || k.thin || k.knock || k.parked || k.onHit || k.maxY < lastY - 40 || k.maxY - (k.minY ?? 0) < 2.2) continue;
       let top = -Infinity;
       for (const [s, f] of CAR_CORNERS) top = Math.max(top, roofHeightAt(k, x + cs * s + sn * f, z - sn * s + cs * f));
       if (!Number.isFinite(top) || top > lastY + 0.6) continue;
@@ -2681,10 +2710,10 @@ class ThirdPersonControllerManager {
   // lever steers its rudder, turning it only while it moves. The current carries it as it carries a kayak, on the
   // livery's still pond hardly at all, and it stays on open water.
   // Bumping the Gallup Park livery's docks, its tied-up pedal boats and the boats out on its water (gallup-livery.js
-  // collide): eased back clear of them, slowed, and a knock felt when it's hard
+  // collide), and the river's other docks and the boats tied to them (boat-docks.js): eased back clear of them, slowed, and a knock felt when it's hard
   bumpLiveryBoats(k, dt, afloat) {
     k._bumped = Math.max(0, (k._bumped || 0) - dt);
-    const hit = this.livery?.collide(k.position.x, k.position.z, k.heading, k.boat, k.speed);
+    const hit = this.livery?.collide(k.position.x, k.position.z, k.heading, k.boat, k.speed) || this.docks?.collide(k.position.x, k.position.z, k.heading);
     if (!hit) return;
     const l = Math.hypot(hit.x, hit.z), m = Math.min(l, 0.6) / l;
     if (afloat(k.position.x + hit.x * m, k.position.z + hit.z * m)) { k.position.x += hit.x * m; k.position.z += hit.z * m; }
@@ -2928,7 +2957,7 @@ class ThirdPersonControllerManager {
     standing.clear();
     const sn = Math.sin(h.heading), cs = Math.cos(h.heading);
     for (const c of this.nearColliders(x, z, 4)) {
-      if (isStadium(c) || c.thin || c.maxY < floor - 0.25) continue;
+      if (isStadium(c) || c.thin || c.onHit || c.maxY < floor - 0.25) continue;
       let top = -Infinity;
       for (const [s, f] of HELI_SKIDS) top = Math.max(top, roofHeightAt(c, x + cs * s + sn * f, z - sn * s + cs * f));
       // a roof it was above (or just landing on) holds it up; one above it is a wall it flew into

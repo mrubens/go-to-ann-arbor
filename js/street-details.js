@@ -104,7 +104,7 @@ function createWalkSignalMaterial(clock) {
   return mat;
 }
 
-function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
+function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStructure = null) {
   const group = new THREE.Group();
   group.name = 'StreetDetails';
 
@@ -235,7 +235,9 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
     return !(b.park > 0.6) && !inPlaza(x, z, 1.0);
   };
 
+  // nothing stands inside a parking structure: its decks would have a pole or a tree through them
   const isClearOfPoles = (x, z, minDist = 6.0) => {
+    if (inStructure?.(x, z)) return false;
     const md2 = minDist * minDist;
     for (let ix = Math.floor((x - minDist) / POLE_CELL); ix <= Math.floor((x + minDist) / POLE_CELL); ix++) {
       for (let iz = Math.floor((z - minDist) / POLE_CELL); iz <= Math.floor((z + minDist) / POLE_CELL); iz++) {
@@ -845,6 +847,23 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
       fBox(1.8, 0.05, 0.76, WOOD, 0, 0.72, 0), fBox(1.8, 0.04, 0.26, WOOD, 0, 0.42, 0.62), fBox(1.8, 0.04, 0.26, WOOD, 0, 0.42, -0.62),
       fBox(0.08, 0.72, 0.08, IRON, -0.7, 0, 0), fBox(0.08, 0.72, 0.08, IRON, 0.7, 0, 0)
     ]),
+    // a blue mail collection box on its four feet, its domed top and the pull-down chute on the front (+z)
+    mailbox: mergeGeometries([
+      ...[[-0.24, -0.2], [0.24, -0.2], [-0.24, 0.2], [0.24, 0.2]].map(([x, z]) => fBox(0.06, 0.14, 0.06, 0x1d3f7a, x, 0, z)),
+      fBox(0.56, 0.92, 0.5, 0x1f4e96, 0, 0.14, 0),
+      furnPart(new THREE.CylinderGeometry(0.28, 0.28, 0.5, 14, 1, false, Math.PI / 2, Math.PI).rotateX(Math.PI / 2).scale(1, 0.55, 1), 0x1f4e96, 0, 1.06, 0),
+      fBox(0.4, 0.1, 0.05, 0xb9bec4, 0, 0.92, 0.26), fBox(0.44, 0.03, 0.02, 0xb9bec4, 0, 0.6, 0.26)
+    ]),
+    // a flagpole: a tapered white pole, a gold ball, and the flag out from it along +x
+    flagpole: mergeGeometries([
+      fCyl(0.22, 0.26, 0.2, 0x9a9890, 0, 0, 0, 12), fCyl(0.045, 0.075, 9, 0xeeeeea, 0, 0.2, 0, 10),
+      furnPart(new THREE.SphereGeometry(0.08, 10, 8), 0xc9a43a, 0, 9.26, 0),
+      ...Array.from({ length: 13 }, (_, k) => fBox(1.55, 0.069, 0.012, k % 2 ? 0xf4f2ee : 0xb22234, 0.81, 9.1 - (k + 1) * 0.069, 0)),
+      fBox(0.62, 0.483, 0.016, 0x3c3b6e, 0.35, 9.1 - 0.483, 0)
+    ]),
+    // a blue recycling cart with its lid
+    recycling: mergeGeometries([fBox(0.58, 0.95, 0.7, 0x2763a8, 0, 0, 0), fBox(0.62, 0.05, 0.74, 0x1f4f88, 0, 0.95, 0.01),
+      fCyl(0.1, 0.1, 0.05, 0x222222, -0.24, 0, 0.36, 8), fCyl(0.1, 0.1, 0.05, 0x222222, 0.24, 0, 0.36, 8)]),
     // a Little Free Library: a book box with a gabled roof and a glass door (+z) on a post
     library: mergeGeometries([
       fBox(0.1, 1.05, 0.1, 0x5e4630, 0, 0, 0), fBox(0.3, 0.04, 0.3, 0x5e4630, 0, 1.0, 0),
@@ -858,7 +877,8 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
   };
   // kinds as build-street-furniture.py numbers them, with their footprints (w along x, d along z)
   const FURN_KINDS = [['bench', 1.9, 0.6], ['trash', 0.6, 0.6], ['table', 1.9, 1.6], ['grill', 0.7, 0.5],
-    ['fountain', 0.6, 0.6], ['rack', 1.4, 0.8], ['shelter', 7.6, 6.2]];
+    ['fountain', 0.6, 0.6], ['rack', 1.4, 0.8], ['shelter', 7.6, 6.2], ['mailbox', 0.6, 0.55], ['flagpole', 0.5, 0.5],
+    ['recycling', 0.6, 0.7]];
   const furnMatrices = Object.fromEntries(Object.keys(FURN_SHAPES).map((k) => [k, []]));
   const furnSites = { trash: [], bench: [] }; // where each knockable one stands, in the order of its instance
   const putFurniture = (kind, x, z, yaw, w, d) => {
@@ -901,12 +921,16 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null) {
     addFootprint(x, z, 0.4, 0.4, true);
   }
 
-  // Park amenities: benches, trash cans, picnic tables, grills, drinking fountains, bike racks and picnic shelters
+  // Park amenities: benches, trash cans, picnic tables, grills, drinking fountains, bike racks and picnic shelters, and
+  // OpenStreetMap's mailboxes, flagpoles and recycling carts
   const AM = streetFurniture?.amenities || [];
   for (let i = 0; i < AM.length; i += 4) {
     const x = AM[i], z = AM[i + 1], kind = FURN_KINDS[AM[i + 2]];
     if (!kind || !blockAt(x, z)) continue; // a point in a street is a slip of the map
-    putFurniture(kind[0], x, z, AM[i + 3], kind[1], kind[2]);
+    // one whose way the map doesn't say (OpenStreetMap's, yaw 9): on a sidewalk it faces the street, in a park as it falls
+    let yaw = AM[i + 3];
+    if (yaw === 9) yaw = isOnCurbIsland(x, z, 0) ? Math.PI / 2 - towardStreet(x, z) : (Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1) * Math.PI * 2;
+    putFurniture(kind[0], x, z, yaw, kind[1], kind[2]);
   }
   // Little Free Libraries, where OpenStreetMap has them, turned to face the nearest street
   const LIB = streetFurniture?.libraries || [];

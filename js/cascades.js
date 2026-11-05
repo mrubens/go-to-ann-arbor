@@ -144,6 +144,8 @@ function chuteNear(x, z) {
 const CASCADE_ENTRY = (() => { const g = segAt(HEAD + 2), [x, z] = along(HEAD + 2); return { x, z, tx: g.tx, tz: g.tz }; })();
 
 // Where a paddler starts (main.js SCENIC_STARTS): in the channel a little above its first drop, facing down it
+// The foot of the run, a little below where the channel's last drop meets the river again (the heron fishes here)
+const CASCADE_FOOT = (() => { const g = segAt(LENGTH), [x, z] = along(LENGTH + 10); return { x, z, tx: g.tx, tz: g.tz }; })();
 const CASCADE_START = (() => {
   const s = Math.max(HEAD + 4, Math.min(...DROPS.map((d) => d.s)) - 14), g = segAt(s), [x, z] = along(s);
   return { x, z, heading: Math.atan2(g.tx, g.tz) };
@@ -312,4 +314,4 @@ function buildCascades(group, waterLevel) {
   return { rocks: places.length, wall: wall.length };
 }
 
-export { buildCascades, carveCascades, inCascades, pondDraw, chuteNear, CASCADE_ENTRY, CASCADE_START, cascadeGaps, cascadeLevel, cascadeDepth, cascadeCurrent, nearDrop, onWeirRocks, DROPS as CASCADE_DROPS, CASCADE_WAVES };
+export { buildCascades, carveCascades, inCascades, pondDraw, chuteNear, CASCADE_ENTRY, CASCADE_START, CASCADE_FOOT, cascadeGaps, cascadeLevel, cascadeDepth, cascadeCurrent, nearDrop, onWeirRocks, DROPS as CASCADE_DROPS, CASCADE_WAVES };

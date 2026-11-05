@@ -941,7 +941,7 @@ body[data-mode='helicopter'] .dial-alt {
   transition: opacity 0.3s ease;
 }
 
-body[data-mode='car'] .dial-gear {
+body[data-geared='1'] .dial-gear {
   opacity: 1;
 }
 

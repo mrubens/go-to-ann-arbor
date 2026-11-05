@@ -254,6 +254,8 @@ LANDMARKS.push({ id: 'graffiti', name: 'Graffiti Alley', short: 'Graffiti Alley'
 LANDMARKS.push({ id: 'huron', name: 'Huron High School', short: 'Huron High', x: 3746, z: -205, district: districtLabel(districtAt(3746, -205)) });
 // The Argo Cascades beside Argo Dam: the middle of their channel (cascades.js)
 LANDMARKS.push({ id: 'cascades', name: 'Argo Cascades', short: 'Argo Cascades', x: 419, z: -1228, district: districtLabel(districtAt(419, -1228)) });
+// The Cube (Tony Rosenthal's "Endover") on Regents Plaza, by OpenStreetMap's point for it (the-cube.js)
+LANDMARKS.push({ id: 'cube', name: 'The Cube', short: 'The Cube', x: 535.3, z: 416.2, district: districtLabel(districtAt(535.3, 416.2)) });
 
 // Authored arrivals: [x, z] where you land, the heading facing the landmark (heading 0 faces south, +z), and how far
 // the camera looks up (each checked by eye for a clear view of its model)
@@ -281,6 +283,9 @@ const TELEPORT_LOCATIONS = {
   yost: view(648, 1256, 607, 1320, 1.5), // Yost Ice Arena
   market: view(206, -500, 155, -478, 0.5), // the Farmers Market sheds
   towerplaza: view(548, 203, 496, 182, 7), // Tower Plaza, looking up
+  cube: { ...view(536.5, 424.5, 535.3, 416.2, 1.5), foot: true }, // the Cube on foot, from the Union's side, to push it
+  skatepark: { ...view(-2566, -536, -2546, -570, 0), foot: true }, // on the plaza at Veterans Memorial Park's skate park, looking at the bowl
+  westparkdiamond: { ...view(-532.4, -492.8, -553.6, -458.9, 0), foot: true }, // behind home plate at West Park's ball field
   // the outer neighborhoods (places, not modelled landmarks: their buildings are the city's survey)
   briarwood: view(97, 4508, 140, 4365, 2), // Briarwood Mall from its south lot
   pioneer: view(-686, 2059, -583, 2132, 2), // Pioneer High from its lot on Seventh St

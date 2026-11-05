@@ -244,7 +244,8 @@ function buildRiverPeople(group) {
   }
 
   console.log(`[river] ${KAYAKS} kayakers and ${TUBES} tubers on a ${Math.round(Math.min(length, RUN))} m run from the cascades`);
-  return { update, count: people.length, length };
+  // where each one is, for the river's birds to keep clear of (animals.js)
+  return { update, count: people.length, length, people };
 }
 
 export { buildRiverPeople, kayakGeometry, paddleGeometry };

@@ -10,8 +10,14 @@ const smooth = (param, value, now, time = 0.035, immediate = false) => {
   else param.setTargetAtTime(value, now, time);
 };
 
+// [ref distance, range] (m) of each animal's call
+// the Cube's clang when a car hits it (the-cube.js), heard across Regents Plaza
+const STEEL_REACH = { clang: [5, 140] };
+const ANIMAL_REACH = { chatter: [1.5, 30], quack: [3, 70], honk: [6, 150], hiss: [1.2, 18], wingbeat: [2, 40], hawk: [40, 420] };
+
 // Direct sound is muffled behind buildings; the shared reflection path keeps some diffuse sound around corners.
 // All voices share one short convolution and the existing collision grid, with no mesh traversal or per-voice reverb.
+
 class SpatialEmitter {
   constructor(context, dry, reflections, acoustics, refDistance, height = 0, directional = false) {
     this.height = height;
@@ -306,8 +312,11 @@ class CityAudioSystem {
     const now = this.context.currentTime;
     const crash = kind === 'crash';
     const severity = clamp(options.severity ?? options.intensity ?? 1, 0, 1);
-    const ref = crash ? 4 + severity * 8 : kind === 'trainhorn' ? 60 : kind === 'horn' ? 8 : kind === 'talk' || kind === 'shout' ? 2 : 1.8;
-    const range = crash ? 50 + severity * 110 : kind === 'trainhorn' ? 1200 : kind === 'horn' ? 140 : kind === 'talk' ? 30 : kind === 'shout' ? 55 : kind === 'footstep' ? 22 : 35;
+    const ref0 = crash ? 4 + severity * 8 : kind === 'trainhorn' ? 60 : kind === 'horn' ? 8 : kind === 'talk' || kind === 'shout' ? 2 : 1.8;
+    const range0 = crash ? 50 + severity * 110 : kind === 'trainhorn' ? 1200 : kind === 'horn' ? 140 : kind === 'talk' ? 30 : kind === 'shout' ? 55 : kind === 'footstep' ? 22 : 35;
+    // the animals (animals.js): a hawk is heard across the Arb, a goose across the pond, a squirrel only near
+    const animal = ANIMAL_REACH[kind] || STEEL_REACH[kind];
+    const ref = animal ? animal[0] : ref0, range = animal ? animal[1] : range0;
     if (Math.hypot(source.x - this.listener.x, source.y - this.listener.y, source.z - this.listener.z) > range) return false;
     if (crash || options.priority) {
       // Impacts are immediate, between the 10 Hz ambience updates. Reclaim finished events first, then let
@@ -482,6 +491,47 @@ class CityAudioSystem {
       }
     }
     while (this.gushVoices.length && !this.gushVoices[this.gushVoices.length - 1]) this.gushVoices.pop();
+  }
+
+  // The Cube turning on its pivot (the-cube.js): a low grinding rumble from its bearing, louder and a little higher the
+  // faster it turns, with the scrape catching once a turn or so. `spin` is its turn rate in radians a second.
+  cubeGrind(spin, at) {
+    if (!this.ready || !this.context) return;
+    const ctx = this.context, now = ctx.currentTime;
+    let v = this.grindVoice;
+    const rate = Math.abs(spin);
+    if (!v) {
+      if (rate < 0.04) return;
+      const noise = ctx.createBufferSource();
+      noise.buffer = this.resources.noise;
+      noise.loop = true;
+      noise.playbackRate.value = 0.6;
+      const low = ctx.createBiquadFilter();
+      low.type = 'lowpass'; low.frequency.value = 110; low.Q.value = 1.6;
+      const scrape = ctx.createBiquadFilter();
+      scrape.type = 'bandpass'; scrape.frequency.value = 380; scrape.Q.value = 4;
+      const scrapeGain = ctx.createGain(); scrapeGain.gain.value = 0.18;
+      // the bearing's grit: a slow, uneven swell in the rumble
+      const lfo = ctx.createOscillator(); lfo.type = 'triangle'; lfo.frequency.value = 0.5;
+      const lfoDepth = ctx.createGain(); lfoDepth.gain.value = 0.35;
+      const swell = ctx.createGain(); swell.gain.value = 0.65;
+      lfo.connect(lfoDepth).connect(swell.gain);
+      const gain = ctx.createGain(); gain.gain.value = 0;
+      const panner = ctx.createPanner();
+      panner.panningModel = 'HRTF'; panner.distanceModel = 'inverse';
+      panner.refDistance = 3; panner.rolloffFactor = 1.4; panner.maxDistance = 120;
+      noise.connect(low).connect(swell);
+      noise.connect(scrape).connect(scrapeGain).connect(swell);
+      swell.connect(gain).connect(panner).connect(this.mix);
+      noise.start(now); lfo.start(now);
+      v = this.grindVoice = { noise, lfo, low, scrape, gain, panner, nodes: [noise, low, scrape, scrapeGain, lfo, lfoDepth, swell, gain, panner] };
+    }
+    const on = this.enabled && ctx.state === 'running' && !document.hidden ? Math.min(1, rate / 1.6) : 0;
+    smooth(v.panner.positionX, at.x, now, 0.05); smooth(v.panner.positionY, at.y, now, 0.05); smooth(v.panner.positionZ, at.z, now, 0.05);
+    smooth(v.gain.gain, on > 0.02 ? 0.9 * Math.sqrt(on) : 0, now, 0.2);
+    smooth(v.low.frequency, 80 + on * 90, now, 0.2);
+    smooth(v.scrape.frequency, 300 + on * 260, now, 0.2);
+    smooth(v.lfo.frequency, 0.3 + rate * 0.5, now, 0.2);
   }
 
   update(dt, elapsed, camera, night = false) {

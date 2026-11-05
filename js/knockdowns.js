@@ -12,13 +12,16 @@ import { random } from '../lamp-game.js';
 
 const G = 9.8;
 // The speed (m/s) at which a 1500 kg car fells each kind head on; a tree's grows with its trunk
-const GIVE = { sign: 3.5, lamp: 9, signal: 12, hydrant: 2.2, trash: 1.2, bench: 2.6 };
+const GIVE = { sign: 3.5, lamp: 9, signal: 12, hydrant: 2.2, trash: 1.2, bench: 2.6, chair: 0.8, table: 1.4, picnic: 3, parasol: 2 };
 // What's thrown rather than tipped: its centre of mass above its foot, how far that stays off the ground lying down,
 // how fast it tumbles for its speed and how much of the car's speed it takes
 const THROWN = {
   hydrant: { lift: 0.4, rest: 0.22, spin: 1, take: 0.5 },
   trash: { lift: 0.45, rest: 0.3, spin: 1.1, take: 0.15 },
-  bench: { lift: 0.4, rest: 0.25, spin: 0.55, take: 0.45 }
+  bench: { lift: 0.4, rest: 0.25, spin: 0.55, take: 0.45 },
+  chair: { lift: 0.45, rest: 0.25, spin: 1.2, take: 0.08 },
+  table: { lift: 0.4, rest: 0.3, spin: 0.8, take: 0.2 },
+  picnic: { lift: 0.4, rest: 0.35, spin: 0.45, take: 0.5 }
 };
 const treeGive = (trunk) => 8.5 * Math.pow(Math.max(0.06, trunk) / 0.2, 1.5);
 

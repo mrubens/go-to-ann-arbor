@@ -179,28 +179,43 @@ class CameraSystem {
 
   // A real jump in the car cuts to a camera set down low beside where it will come down, which turns to follow it
   // through the air and holds a moment after it lands, then the chase or action view glides back. Only from those two
-  // views, and only once the car has been up long enough that it isn't a curb or a bump.
+  // views, and only once the car has been up long enough that it isn't a curb or a bump. The same for the player
+  // flung hard off a bike or a motorbike, or out of a moving car: a big wipeout, followed by the body until it settles.
   updateJumpCam(entity, dt) {
     const followView = this.activePresetId === 'chase' || this.activePresetId === 'action';
     let jc = this.jumpCam;
     if (jc && (entity !== jc.entity || !followView)) return this.endJumpCam(), false;
+    const rag = entity.type === 'person' && entity.fallen && entity.rig?.ragdolling ? entity.rig.rag : null;
+    // where to watch: the car, or the thrown body's pelvis (the player's own position stays on the ground meanwhile)
+    const at = (out) => (rag ? out.set(rag.p[0], rag.p[1] - 0.4, rag.p[2]) : out.copy(entity.position));
     if (!jc) {
-      if (entity.type !== 'car' || !entity.airborne) { this._jumpLooked = false; return false; }
-      if (!followView || this._jumpLooked || (entity.flightTime || 0) < 0.3) return false;
-      this._jumpLooked = true;
+      const launch = rag && entity.fallen.launch;
+      if (!launch && (entity.type !== 'car' || !entity.airborne)) { this._jumpLooked = false; return false; }
+      if (launch ? launch.looked || rag.time > 0.2 : this._jumpLooked || (entity.flightTime || 0) < 0.3) return false;
+      if (!followView) return false;
+      if (launch) launch.looked = true; else this._jumpLooked = true;
       // the ground a car lands on there (the stadium's stands and field included)
       const surface = (x, z) => this.controllerManager.getGroundHeight?.(x, z, 'car') ?? groundHeight(x, z);
-      const p = entity.position, vy = entity.vy || 0;
+      const p = at(this._jumpAt || (this._jumpAt = new THREE.Vector3()));
+      let vx, vy, vz;
+      if (launch) ({ vx, vy, vz } = launch);
+      else {
+        const sn = Math.sin(entity.heading), cs = Math.cos(entity.heading);
+        vy = entity.vy || 0;
+        vx = sn * entity.speed + (entity.vx || 0);
+        vz = cs * entity.speed + (entity.vz || 0);
+      }
       const h = Math.max(0, p.y - surface(p.x, p.z));
       const tLeft = (vy + Math.sqrt(vy * vy + 19.6 * h)) / 9.8;
-      const sn = Math.sin(entity.heading), cs = Math.cos(entity.heading);
-      const vx = sn * entity.speed + (entity.vx || 0), vz = cs * entity.speed + (entity.vz || 0);
-      // only the big ones: well over a second still to fly
-      if (tLeft < 1.1 || Math.hypot(vx, vz) < 8) return false;
+      // only the big ones: well over a second still to fly, or a body flung fast and far (it tumbles on past where it
+      // first comes down, so the camera's mark is a little farther along)
+      const hv = Math.hypot(vx, vz);
+      if (launch ? hv < 9 || hv * tLeft < 6 : tLeft < 1.1 || hv < 8) return false;
+      const reach = launch ? tLeft * 0.75 + 0.35 : tLeft * 0.62;
       // beside the arc, a little past its middle, on whichever side has open ground
-      const ax = p.x + vx * tLeft * 0.62, az = p.z + vz * tLeft * 0.62;
-      const hv = Math.hypot(vx, vz), sx = vz / hv, sz = -vx / hv;
-      const side = Math.min(16, 8 + hv * 0.25);
+      const ax = p.x + vx * reach, az = p.z + vz * reach;
+      const sx = vz / hv, sz = -vx / hv;
+      const side = launch ? Math.min(11, 6 + hv * 0.2) : Math.min(16, 8 + hv * 0.25);
       // what stands in the way: a building the camera would be inside, or a pole, tree or sign between it and the arc
       const blocked = (x, z) => {
         let n = 0;
@@ -232,17 +247,18 @@ class CameraSystem {
       const above = (x, z) => (riverDepth(x, z) > 0 ? Math.max(surface(x, z), waterLevel(x, z) ?? -Infinity) : surface(x, z));
       const camY = Math.max(above(cx, cz) + (best.n >= 1 ? 3.2 : 1.1),
         Math.min(p.y, Math.max(landY, above(p.x + vx * tLeft, p.z + vz * tLeft))) + 1.4);
-      jc = this.jumpCam = { entity, after: 0, pos: new THREE.Vector3(cx, camY, cz) };
+      jc = this.jumpCam = { entity, after: 0, pos: new THREE.Vector3(cx, camY, cz), flight: launch ? tLeft : 0 };
       this.currentPos.copy(jc.pos);
       this.currentLookAt.set(p.x, p.y + 0.6, p.z);
       this.camera.fov = 40;
       this.camera.updateProjectionMatrix();
-      log(`[jump cam] cut to the side for about ${tLeft.toFixed(1)} s in the air`);
+      log(launch ? `[jump cam] cut to the side of a wipeout at ${Math.round(hv * 2.237)} mph` : `[jump cam] cut to the side for about ${tLeft.toFixed(1)} s in the air`);
     }
-    if (!entity.airborne) jc.after += dt;
+    // a body is down once it lies still (or has tumbled a good while), a car once it lands
+    if (jc.flight ? !rag || rag.still > 0.25 || rag.time > jc.flight + 2.5 : !entity.airborne) jc.after += dt;
     if (jc.after > 0.8) return this.endJumpCam(), false;
     // the camera stays put and pans with the car, a little lazily so it feels hand-held
-    const p = entity.position;
+    const p = at(this._jumpAt);
     this.currentPos.copy(jc.pos);
     this._desiredLook.set(p.x, p.y + 0.6, p.z);
     this.currentLookAt.lerp(this._desiredLook, 1 - Math.exp(-dt * 9));
@@ -469,6 +485,18 @@ class CameraSystem {
       this.currentPos.set(entity.position.x, this.followBaseY, entity.position.z).add(this.followOffset);
       this.currentLookAt.set(entity.position.x, this.followBaseY, entity.position.z).add(this.followLookOffset);
       this.currentPos.y = Math.max(groundHeight(this.currentPos.x, this.currentPos.z) + 0.55, this.currentPos.y);
+      // inside a parking structure: kept between the deck the player is on and the one over them, wherever the
+      // camera is, so it never looks down through a deck from the floor above or up from the one below
+      const parking = this.controllerManager.parking;
+      if (parking && entity.type !== 'helicopter' && (parking.inside(entity.position.x, entity.position.z) || parking.inside(this.currentPos.x, this.currentPos.z))) {
+        const ey = entity.position.y;
+        const roof = Math.min(parking.ceiling(entity.position.x, entity.position.z, ey), parking.ceiling(this.currentPos.x, this.currentPos.z, ey));
+        if (roof < Infinity) {
+          const floor = Math.max(ey, parking.top(this.currentPos.x, this.currentPos.z, ey + 0.4));
+          this.currentPos.y = Math.max(floor + 0.6, Math.min(this.currentPos.y, roof - 0.35));
+          this.currentLookAt.y = Math.min(this.currentLookAt.y, roof - 0.4);
+        }
+      }
       // a car or bike driven into the river: once its roof is under, the camera goes under with it
       const level = entity.type === 'kayak' || entity.type === 'helicopter' ? null : waterLevel(entity.position.x, entity.position.z);
       if (level != null && riverDepth(entity.position.x, entity.position.z) > 0.2 && entity.position.y + 1.3 < level) {

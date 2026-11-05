@@ -16,18 +16,18 @@ function randomSource(seed) {
   };
 }
 
-function makeBuffer(ctx, duration, synthesize, peak = 0.6) {
-  const buffer = ctx.createBuffer(1, Math.ceil(duration * ctx.sampleRate), ctx.sampleRate);
+function makeBuffer(ctx, duration, synthesize, peak = 0.6, rate = ctx.sampleRate) {
+  const buffer = ctx.createBuffer(1, Math.ceil(duration * rate), rate);
   const samples = buffer.getChannelData(0);
   let maximum = 0, mean = 0;
   for (let i = 0; i < samples.length; i++) {
-    samples[i] = synthesize(i / ctx.sampleRate, i);
+    samples[i] = synthesize(i / rate, i);
     mean += samples[i];
   }
   mean /= samples.length;
   for (let i = 0; i < samples.length; i++) {
     // A short endpoint fade removes clicks even when a pitched component ends between zero crossings.
-    const fade = Math.min(1, i / (ctx.sampleRate * 0.002), (samples.length - 1 - i) / (ctx.sampleRate * 0.012));
+    const fade = Math.min(1, i / (rate * 0.002), (samples.length - 1 - i) / (rate * 0.012));
     samples[i] = (samples[i] - mean) * fade;
     maximum = Math.max(maximum, Math.abs(samples[i]));
   }
@@ -345,6 +345,142 @@ function door(ctx) {
   }, 0.6);
 }
 
+// --- the animals (animals.js), made at a lower rate since nothing in them is above 10 kHz -------------------------
+const ANIMAL_RATE = 24000;
+
+// A voiced call: harmonics of f0 shaped by two formants, so it sounds like a throat and a bill rather than a whistle
+function voiced(phase, f0, f1, f2, width, harmonics = 18) {
+  let v = 0;
+  for (let n = 1; n <= harmonics; n++) {
+    const f = n * f0;
+    if (f > 10000) break;
+    const a = Math.exp(-(((f - f1) / width) ** 2)) + 0.6 * Math.exp(-(((f - f2) / (width * 1.4)) ** 2)) + 0.04;
+    v += Math.sin(phase * n) * a;
+  }
+  return v;
+}
+
+// A squirrel scolding: a run of quick, harsh "chuk"s ending in a buzzy trill
+function chatter(ctx, seed) {
+  const random = randomSource(seed);
+  const chucks = [];
+  let at = 0.005;
+  const count = 5 + Math.floor(random() * 4);
+  for (let i = 0; i < count; i++) { chucks.push({ at, len: 0.022 + random() * 0.012, f: 2900 + random() * 700 }); at += 0.042 + random() * 0.02; }
+  const trill = at + 0.01;
+  return makeBuffer(ctx, trill + 0.2, (t) => {
+    const noise = random() * 2 - 1;
+    let v = 0;
+    for (const c of chucks) {
+      const u = t - c.at;
+      if (u < 0 || u > c.len + 0.02) continue;
+      const f = c.f * (1 - u * 9);
+      const env = (1 - Math.exp(-u * 3000)) * Math.exp(-u * 120);
+      v += (Math.sin(TAU * f * u) + 0.4 * Math.sin(TAU * f * 2.02 * u) + noise * 0.35) * env;
+    }
+    const u = t - trill;
+    if (u > 0) {
+      const env = (1 - Math.exp(-u * 600)) * Math.exp(-u * 14) * (0.5 + 0.5 * Math.sin(TAU * 38 * u));
+      v += (Math.sin(TAU * 2300 * u) + noise * 0.5) * env * 0.6;
+    }
+    return v;
+  }, 0.55, ANIMAL_RATE);
+}
+
+// A mallard's nasal "quack", falling as it goes
+function quack(ctx, seed) {
+  const random = randomSource(seed);
+  const f0 = 230 + random() * 50, len = 0.2 + random() * 0.06;
+  let phase = 0;
+  return makeBuffer(ctx, len + 0.03, (t) => {
+    const u = t / len;
+    phase += TAU * f0 * (1.08 - 0.25 * u) / ANIMAL_RATE;
+    const env = (1 - Math.exp(-t * 180)) * (u < 0.55 ? 1 : Math.exp(-(u - 0.55) * 7)) * (0.85 + 0.15 * Math.sin(TAU * 31 * t));
+    return (voiced(phase, f0, 1150, 2400, 380) + (random() * 2 - 1) * 0.25) * env;
+  }, 0.55, ANIMAL_RATE);
+}
+
+// A Canada goose's "ah-HONK": a low start breaking up into the loud, nasal note
+function honk(ctx, seed) {
+  const random = randomSource(seed);
+  const low = 290 + random() * 40, high = 470 + random() * 70, br = 0.07 + random() * 0.03, len = br + 0.24 + random() * 0.08;
+  let phase = 0;
+  return makeBuffer(ctx, len + 0.04, (t) => {
+    const f = t < br ? low : high * (1 - 0.06 * (t - br) / (len - br));
+    phase += TAU * f / ANIMAL_RATE;
+    const env = (1 - Math.exp(-t * 120)) * (t < br ? 0.45 : 1) * (t > len - 0.06 ? Math.max(0, (len - t) / 0.06) : 1);
+    return (voiced(phase, f, 950, 1900, 420, 20) + (random() * 2 - 1) * 0.3) * env;
+  }, 0.6, ANIMAL_RATE);
+}
+
+// A goose hissing with its neck out
+function hiss(ctx) {
+  const random = randomSource(911);
+  const lo = 1 - Math.exp(-TAU * 1800 / ANIMAL_RATE), hi = 1 - Math.exp(-TAU * 6500 / ANIMAL_RATE);
+  let a = 0, b = 0;
+  return makeBuffer(ctx, 0.75, (t) => {
+    const noise = random() * 2 - 1;
+    a += (noise - a) * lo; b += (noise - b) * hi;
+    const env = (1 - Math.exp(-t * 40)) * Math.exp(-t * 2.2) * (0.8 + 0.2 * Math.sin(TAU * 23 * t));
+    return (b - a) * env + Math.sin(TAU * 180 * t) * 0.08 * Math.exp(-t * 12);
+  }, 0.5, ANIMAL_RATE);
+}
+
+// Wings beating as a bird lifts off: soft whumps that quicken
+function wingbeat(ctx, seed) {
+  const random = randomSource(seed);
+  const co = 1 - Math.exp(-TAU * 700 / ANIMAL_RATE);
+  let low = 0;
+  const flaps = [];
+  for (let at = 0.01, p = 0.13; at < 0.85; at += p, p = Math.max(0.085, p * 0.93)) flaps.push({ at, k: 0.7 + random() * 0.3 });
+  return makeBuffer(ctx, 0.95, (t) => {
+    const noise = random() * 2 - 1;
+    low += (noise - low) * co;
+    let v = 0;
+    for (const f of flaps) {
+      const u = t - f.at;
+      if (u < 0 || u > 0.09) continue;
+      v += (low * 2.4 + noise * 0.25 * Math.exp(-u * 160)) * (1 - Math.exp(-u * 400)) * Math.exp(-u * 38) * f.k;
+    }
+    return v * Math.max(0, 1 - t * 0.6);
+  }, 0.55, ANIMAL_RATE);
+}
+
+// A red-tailed hawk's raspy, falling scream: "kee-eee-arr"
+function hawkCry(ctx) {
+  const random = randomSource(1201);
+  const len = 1.35, co = 1 - Math.exp(-TAU * 260 / ANIMAL_RATE);
+  let phase = 0, rasp = 0;
+  return makeBuffer(ctx, len, (t) => {
+    const noise = random() * 2 - 1;
+    rasp += (noise - rasp) * co;
+    const u = t / len;
+    const f = u < 0.15 ? 2500 + u / 0.15 * 450 : 2950 - (u - 0.15) / 0.85 * 1050;
+    phase += TAU * f * (1 + rasp * 0.05) / ANIMAL_RATE;
+    const env = (1 - Math.exp(-t * 30)) * (u > 0.7 ? Math.max(0, (1 - u) / 0.3) ** 1.5 : 1);
+    return (Math.sin(phase) + 0.45 * Math.sin(phase * 2) + 0.15 * Math.sin(phase * 3)) * (0.55 + rasp * 2.2) * env + noise * 0.12 * env;
+  }, 0.5, ANIMAL_RATE);
+}
+
+// A car into the Cube (the-cube.js): a deep metallic clang, a big hollow steel box struck, its low modes ringing on
+function clang(ctx, seed) {
+  const random = randomSource(seed);
+  const modes = [[58, 1.9, 1], [61.5, 1.7, 0.6], [94, 1.4, 0.8], [139, 1.1, 0.6], [207, 0.85, 0.42], [329, 0.6, 0.3],
+    [503, 0.38, 0.2], [788, 0.22, 0.12], [1240, 0.12, 0.07]].map(([f, d, g]) => ({
+    w: TAU * f * (0.97 + random() * 0.06), d: d * (0.9 + random() * 0.2), g, p: random() * TAU }));
+  const co = 1 - Math.exp(-TAU * 220 / ANIMAL_RATE);
+  let thump = 0;
+  return makeBuffer(ctx, 2.2, (t) => {
+    const noise = random() * 2 - 1;
+    thump += (noise - thump) * co;
+    let ring = 0;
+    for (const m of modes) ring += Math.sin(m.w * t + m.p) * Math.exp(-t / m.d) * m.g;
+    // the strike: a dull thump in the first moments, before the ring takes over
+    const hit = Math.exp(-t / 0.03);
+    return ring * (1 - Math.exp(-t * 900)) + thump * hit * 5 + noise * hit * 0.25;
+  }, 0.6, ANIMAL_RATE);
+}
+
 export function createEventResources(ctx, resources) {
   const speakers = [
     { pitch: 99, formants: 0.88, breath: 0.06 }, { pitch: 119, formants: 0.94, breath: 0.10 },
@@ -366,7 +502,16 @@ export function createEventResources(ctx, resources) {
     signalTick: signal(ctx, false),
     signalWalk: signal(ctx, true),
     splashes: Array.from({ length: 4 }, (_, i) => splash(ctx, i + 701)),
-    door: door(ctx)
+    door: door(ctx),
+    clang: [clang(ctx, 1701), clang(ctx, 1702)],
+    animals: {
+      chatter: [chatter(ctx, 1301), chatter(ctx, 1302)],
+      quack: [quack(ctx, 1401), quack(ctx, 1402)],
+      honk: [honk(ctx, 1501), honk(ctx, 1502)],
+      hiss: hiss(ctx),
+      wingbeat: wingbeat(ctx, 1601),
+      hawk: hawkCry(ctx)
+    }
   };
 }
 
@@ -374,7 +519,8 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   const random = randomSource(options.seed);
   const start = Math.max(ctx.currentTime, finite(options.when, ctx.currentTime));
   const intensity = clamp(finite(options.intensity, 1));
-  const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, plunge: 0.9, door: 0.45, thud: 0.5 };
+  const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, plunge: 0.9, door: 0.45, thud: 0.5,
+    chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55 };
   if (!Object.hasOwn(levels, kind) || intensity === 0) return { endTime: start, dispose() {} };
   const gain = ctx.createGain();
   gain.gain.value = intensity * levels[kind];
@@ -478,6 +624,24 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
     play(resources.crashes.body[variant], start, 0.62 + random() * 0.1, 1);
   } else if (kind === 'door') {
     play(resources.door, start, 0.95 + random() * 0.1);
+  } else if (kind === 'chatter' || kind === 'quack' || kind === 'honk') {
+    const set = resources.animals[kind], buffer = set[Math.floor(random() * set.length)];
+    const pitch = 0.92 + random() * 0.16;
+    const end = play(buffer, start, pitch);
+    // ducks and geese call in runs: a second (and third) quack or honk, a little lower
+    if (kind !== 'chatter' && random() < 0.7) {
+      const next = play(set[(set.indexOf(buffer) + 1) % set.length], end + 0.06 + random() * 0.12, pitch * 0.96, 0.85);
+      if (random() < 0.45) play(buffer, next + 0.07 + random() * 0.12, pitch * 0.92, 0.7);
+    }
+  } else if (kind === 'clang') {
+    // harder hits ring a little lower and longer
+    play(resources.clang[Math.floor(random() * 2)], start, 1.06 - intensity * 0.12 + random() * 0.05);
+  } else if (kind === 'hiss') {
+    play(resources.animals.hiss, start, 0.92 + random() * 0.16);
+  } else if (kind === 'wingbeat') {
+    play(resources.animals.wingbeat, start, 0.85 + random() * 0.3 + intensity * 0.1, 0.7 + intensity * 0.3);
+  } else if (kind === 'hawk') {
+    play(resources.animals.hawk, start, 0.95 + random() * 0.08);
   } else {
     play(options.walk ? resources.signalWalk : resources.signalTick, start);
   }

@@ -119,10 +119,12 @@ function streetCars(out) {
   }
 }
 
-function buildParkedCars(group, nearTrack = null) {
+function buildParkedCars(group, nearTrack = null, decks = []) {
   let spots = [];
   lotCars(spots);
   streetCars(spots);
+  // and the stalls up in the parking structures (parking-structures.js), level on their decks
+  for (const s of decks) spots.push(s);
   // none parked across a railroad track (its middle and both ends of the car kept 3 m clear of the rails' middle)
   if (nearTrack) spots = spots.filter((s) => {
     const sn = Math.sin(s.yaw), cs = Math.cos(s.yaw);
@@ -149,7 +151,7 @@ function buildParkedCars(group, nearTrack = null) {
         c.spins ??= [];
         c.spins[i] ??= hash(x, z, 9) * 6;
         const m = fresh ? new THREE.Matrix4() : out[i];
-        m.compose(wpos.set(x, groundHeight(x, z) + c.y + r, z), quat.setFromEuler(euler.set(c.spins[i], c.yaw, -c.roll, 'YXZ')),
+        m.compose(wpos.set(x, (c.deck ? c.g : groundHeight(x, z)) + c.y + r, z), quat.setFromEuler(euler.set(c.spins[i], c.yaw, -c.roll, 'YXZ')),
           wscale.set(sc, sc, sc));
         if (fresh) out.push(m);
         i++;
@@ -161,8 +163,10 @@ function buildParkedCars(group, nearTrack = null) {
   const record = (s, kind, hex, style) => {
     const col = new THREE.Color(hex);
     const g = groundHeight(s.x, s.z);
-    const [pitch, roll] = groundTilt(s.x, s.z, s.yaw);
-    const car = { x: s.x, z: s.z, yaw: s.yaw, y: s.y || 0, street: s.street, kind, hex, paint: [col.r, col.g, col.b], style, g, pitch, roll };
+    // one up on a parking structure's deck stands level on it, however the ground under it slopes
+    const deck = s.deck || (s.y || 0) > 2;
+    const [pitch, roll] = deck ? [0, 0] : groundTilt(s.x, s.z, s.yaw);
+    const car = { x: s.x, z: s.z, yaw: s.yaw, y: s.y || 0, street: s.street, kind, hex, paint: [col.r, col.g, col.b], style, g, pitch, roll, deck };
     const spec = BODY_SPECS[kind];
     const hz = (spec.zFront - spec.zRear) / 2, hx = 0.95, mid = (spec.zFront + spec.zRear) / 2;
     const cs = Math.cos(s.yaw), sn = Math.sin(s.yaw);
@@ -424,8 +428,14 @@ function buildParkedCars(group, nearTrack = null) {
       const c = col.parked;
       if (!c.dirty) continue;
       c.dirty = false;
-      c.g = groundHeight(c.x, c.z);
-      [c.pitch, c.roll] = groundTilt(c.x, c.z, c.yaw);
+      if (c.deck) {
+        const at = c.g + c.y;
+        c.g = groundHeight(c.x, c.z);
+        c.y = at - c.g;
+      } else {
+        c.g = groundHeight(c.x, c.z);
+        [c.pitch, c.roll] = groundTilt(c.x, c.z, c.yaw);
+      }
       col.minY = c.g + c.y; col.maxY = c.g + c.y + 1.6;
       if (!c.set) continue;
       matrixOf(c, c.mat);

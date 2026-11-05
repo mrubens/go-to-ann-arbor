@@ -38,10 +38,12 @@ import { createWaterSplash } from './water-splash.js';
 import { createSkidEffects } from './skid-effects.js';
 import { CityMapSystem } from './city-map.js';
 import { setupSceneCulling, updateSceneCulling, cullAlso, showShadowStandIns } from './scene-culling.js';
-import { loadTerrain, setOnTerrain, groundHeight, waterLevel, riverDepth, streamGround, updateGroundStreaming, streamNear } from './terrain.js';
+import { loadTerrain, setPools, setOnTerrain, groundHeight, waterLevel, riverDepth, streamGround, updateGroundStreaming, streamNear } from './terrain.js';
 import { loadYardData, allYards } from './yards.js';
 import { buildCascades, CASCADE_START } from './cascades.js';
 import { buildRiverPeople } from './river-people.js';
+import { buildAnimals } from './animals.js';
+import { buildCube, CUBE_FOOTPRINT } from './the-cube.js';
 import { CityAudioSystem } from './audio-system.js';
 import { fetchWeather, createPrecipitation } from './weather.js';
 import { fetchRiverFlow } from './river-gauge.js';
@@ -50,6 +52,14 @@ import { createPlanes } from './planes.js';
 import { createAirport } from './airport.js';
 import { createScooters } from './scooters.js';
 import { buildBikeRacks } from './bike-racks.js';
+import { buildPools } from './pools.js';
+import { buildOutdoorSeating } from './outdoor-seating.js';
+import { buildBallDiamonds } from './ball-diamonds.js';
+import { buildBleachers } from './bleachers.js';
+import { buildBoatDocks } from './boat-docks.js';
+import { buildSkatePark } from './skate-park.js';
+import { buildParkingStructures } from './parking-structures.js';
+import { buildMtbTrails } from './mtb-trails.js';
 import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
 import { waterDisturb } from './tsl-materials.js';
@@ -229,13 +239,28 @@ async function initApp() {
   // Lamp: the Argo Cascades' rocks and white water, on the steps of their water (cascades.js)
   const cascadesPart = live.keep('cascades', () => cityPart((g) => buildCascades(g, waterLevel)), { inputs: [heights, grid] });
   // Lamp: kayakers and tubers on their way down the river from the cascades (river-people.js)
-  const riverPeoplePart = live.keep('riverPeople', () => cityPart((g) => buildRiverPeople(g)), { inputs: [heights, grid] });
+  const riverPeoplePart = live.keep('riverPeople', () => cityPart((g) => buildRiverPeople(g)), { inputs: [heights, grid], from: ['js/river-people.js'] });
   // the real aircraft overhead (planes.js)
   const planesPart = live.keep('planes', () => cityPart((g) => createPlanes(g)), { from: ['js/planes.js', 'js/live-feeds.js'] });
   // the rental scooters where they really stand (scooters.js)
   const scootersPart = live.keep('scooters', () => cityPart((g) => createScooters(g)), { inputs: [heights], from: ['js/scooters.js', 'js/live-feeds.js', 'data/scooters-sample.json'] });
   // the bike racks round town with bicycles locked to them, and the e-bike docks by the Diag, to borrow from (bike-racks.js)
   const racksPart = await live.keep('bikeRacks', () => cityPart((g) => buildBikeRacks(g)), { inputs: [heights], from: ['js/bike-racks.js', 'data/bike-racks.json'] });
+  // the town's outdoor swimming pools, to swim in, and to sink a car in (pools.js); their water is the river's kind
+  const poolsPart = await live.keep('pools', () => cityPart((g) => buildPools(g)), { inputs: [heights], from: ['js/pools.js', 'data/pools.json'] });
+  setPools(poolsPart.made);
+  // the tables and chairs out on the patios and the sidewalks in front of the cafes, restaurants and bars (outdoor-seating.js)
+  const seatingPart = await live.keep('outdoorSeating', () => cityPart((g) => buildOutdoorSeating(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/outdoor-seating.js', 'data/outdoor-seating.json'] });
+  // the baseball and softball diamonds in the parks and at the schools (ball-diamonds.js)
+  const diamondsPart = await live.keep('ballDiamonds', () => cityPart((g) => buildBallDiamonds(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/ball-diamonds.js', 'data/ball-diamonds.json'] });
+  // the bleachers by the fields and tracks (bleachers.js)
+  const bleachersPart = await live.keep('bleachers', () => cityPart((g) => buildBleachers(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/bleachers.js', 'data/bleachers.json'] });
+  // the docks and boat launches on the river and its ponds, with boats tied up (boat-docks.js)
+  const docksPart = await live.keep('boatDocks', () => cityPart((g) => buildBoatDocks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/boat-docks.js', 'data/boat-docks.json'] });
+  // the Ann Arbor Skatepark in Veterans Memorial Park (skate-park.js)
+  const skatePart = await live.keep('skatePark', () => cityPart((g) => buildSkatePark(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/skate-park.js', 'data/skate-park.json'] });
+  // what's on the mountain bike trails: rocks, roots, logs, berms, tabletops and trail posts (mtb-trails.js)
+  const mtbPart = await live.keep('mtbTrails', () => cityPart((g) => buildMtbTrails(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/mtb-trails.js', 'data/mtb-trails.json'] });
   // Ann Arbor Municipal Airport south of town, with helicopters parked by the FBO to fly (airport.js)
   const airportPart = live.keep('airport', () => cityPart((g) => createAirport(g)), { inputs: [heights], from: ['js/airport.js', 'js/airport-data.js'] });
   // Lamp: the moon in its real phase (moon.js)
@@ -247,7 +272,10 @@ async function initApp() {
   markInit('outskirts');
   await showLoadingStage('Building the Big House...');
   const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/stadium-geodata.js', 'js/campus-landmarks.js'] });
-  const landmarkColliders = landmarks.made.colliders;
+  // the parking structures, to drive up floor by floor; they stand in for the survey's blocks (parking-structures.js)
+  const parkingPart = await live.keep('parkingStructures', () => cityPart((g) => buildParkingStructures(g), { cull: setupSceneCulling, still: true }),
+    { inputs: [heights], from: ['js/parking-structures.js', 'data/parking-structures.json'] });
+  const landmarkColliders = [...landmarks.made.colliders, ...parkingPart.made.colliders];
   markInit('landmarks');
   await showLoadingStage('Generating building footprints and facades...');
   // house numbers by the front doors (build-addresses.py, the city's Address Points)
@@ -264,8 +292,8 @@ async function initApp() {
   // how houses and shopfronts really look: the assessor's records and street photos (build-building-looks.py)
   const looksBytes = await asset('data/building-looks.json');
   setBuildingLooks(looksBytes ? JSON.parse(new TextDecoder().decode(looksBytes)) : null);
-  const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarks.made.colliders, addresses, gasStations), { cull: setupSceneCulling, still: true }),
-    { inputs: [heights, landmarks], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json'] });
+  const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarkColliders, addresses, gasStations), { cull: setupSceneCulling, still: true }),
+    { inputs: [heights, landmarks, parkingPart], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json'] });
   const cityBlocks = blocks.made;
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...outskirts.colliders, ...(cityGrid.colliders || [])];
@@ -277,10 +305,10 @@ async function initApp() {
   const furnitureBytes = await asset('data/street-furniture.json');
   const streetFurniture = furnitureBytes ? JSON.parse(new TextDecoder().decode(furnitureBytes)) : null;
   const details = await live.keep('streetDetails', () => cityPart(async (g) => {
-    const made = buildStreetDetails(g, allColliders, streetFurniture);
+    const made = buildStreetDetails(g, allColliders, streetFurniture, parkingPart.made.inside);
     await setOnTerrain(g.getObjectByName('StreetDetails'));
     return made;
-  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js'] });
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, parkingPart], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js'] });
   const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
@@ -292,6 +320,8 @@ async function initApp() {
   const traffic = live.keep('traffic', () => cityPart((g) => createTrafficSystem(g, grid.made.sidewalks, [
     ...grid.made.footprints,
     ...details.made.footprints,
+    CUBE_FOOTPRINT,
+    ...parkingPart.made.footprints,
     ...allColliders.filter((c) => !c.obb
       && (c.minY ?? 0) - groundHeight((c.minX + c.maxX) * 0.5, (c.minZ + c.maxZ) * 0.5) < 3.5)
   ], details.made.signalIntersections, cityClosures)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details], from: [CITY_MAP, 'data/city-closures.json', 'js/pedestrian-system.js'] });
@@ -328,7 +358,7 @@ async function initApp() {
   const railPart = live.keep('railways', () => cityPart((g) => buildRailways(g, railCrossings, wolverine), { still: true }), { inputs: [heights], from: ['data/rail-crossings.json', 'data/wolverine.json'] });
   const railways = railPart.made;
   // Cars parked in the lots and along the main streets downtown, solid to the player (parked-cars.js)
-  const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack)), { inputs: [heights], from: ['js/parked-cars.js', 'js/railways.js', 'data/curb-cuts.bin.gz'] });
+  const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack, parkingPart.made.stalls)), { inputs: [heights, parkingPart], from: ['js/parked-cars.js', 'js/railways.js', 'data/curb-cuts.bin.gz'] });
   const parkedCars = parkedPart.made;
   // Kayaks pulled up on the river's banks at the parks, to get into there (kayak-launches.js)
   const launchesPart = live.keep('kayakLaunches', () => cityPart((g) => buildKayakLaunches(g)), { inputs: [heights], from: ['js/kayak-launches.js'] });
@@ -358,6 +388,7 @@ async function initApp() {
   log(`[potholes] ${potholes.count} on the streets`);
   allColliders.push(...roadWork.colliders);
   allColliders.push(...airportPart.made.colliders);
+  allColliders.push(...bleachersPart.made.colliders);
   // Tree trunks, lamp posts, signal poles and sign posts: thin and solid, so the car crashes into them and the bike
   // throws its rider (`thin`: the helicopter flies through them)
   // and each goes over when a car hits it hard enough (knockdowns.js)
@@ -366,7 +397,7 @@ async function initApp() {
     const knock = o.kind && (o.pose || o.parts?.length) ? { ...o, g, down: false } : null;
     return { minX: o.x - o.r, maxX: o.x + o.r, minZ: o.z - o.r, maxZ: o.z + o.r, minY: g - 1, maxY: g + 6, thin: true, knock };
   };
-  for (const o of [...(details.made.obstacles || []), ...(controlsPart.made.obstacles || [])]) allColliders.push(obstacleBox(o));
+  for (const o of [...(details.made.obstacles || []), ...(controlsPart.made.obstacles || []), ...(seatingPart.made.obstacles || [])]) allColliders.push(obstacleBox(o));
   // streamed, the trees near the camera come and go, and their trunks with them (trees.js)
   const treeField = details.made.treeField;
   if (TIER.stream && treeField?.obstacles) {
@@ -399,7 +430,12 @@ async function initApp() {
     onLand: (it, spin) => audioSystem?.cue(it.kind === 'tree' ? 'thud' : 'crash',
       { x: it.x + it.dx * it.height * 0.6, y: it.g, z: it.z + it.dz * it.height * 0.6 }, Math.min(1, 0.4 + spin * 0.2))
   });
-  const parts = [grid, cascadesPart, riverPeoplePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, airportPart, moonPart];
+  // Lamp: Ann Arbor's animals, near the player only; never anyone's obstacle (animals.js)
+  const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js'] });
+  // Lamp: the Cube on Regents Plaza, which turns when it's pushed or hit (the-cube.js)
+  const cubePart = live.keep('cube', () => cityPart((g) => buildCube(g)), { inputs: [heights], from: ['js/the-cube.js'] });
+  allColliders.push(cubePart.made.collider);
+  const parts = [grid, cascadesPart, riverPeoplePart, animalsPart, cubePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart, moonPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -412,7 +448,7 @@ async function initApp() {
   // river and the sky stay as they are
   // (only once there is snow: on a bare day the materials keep their shaders as they are)
   loadSnowCover().then((cover) => {
-    if (cover > 0) for (const part of [grid, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, airportPart]) dressForSnow(part.group);
+    if (cover > 0) for (const part of [grid, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
   });
   const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
   scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
@@ -425,7 +461,12 @@ async function initApp() {
   controllerManager.parkedCars = parkedCars;
   controllerManager.kayakLaunches = kayakLaunches;
   controllerManager.livery = liveryPart.made;
+  controllerManager.docks = docksPart.made;
+  controllerManager.skatePark = skatePart.made;
+  controllerManager.mtbTrails = mtbPart.made;
+  controllerManager.parking = parkingPart.made;
   controllerManager.bikeRacks = racksPart.made;
+  controllerManager.pools = poolsPart.made;
   controllerManager.scooters = scootersPart.made;
   controllerManager.airport = airportPart.made;
   // the player's flying machine is a helicopter or the plane they took last (airport.js dress)
@@ -497,6 +538,7 @@ async function initApp() {
       // a boat taken from the Gallup Park livery is still the player's, and its spot there still empty
       controllerManager.dressBoat(saved.boat);
       if (saved.liveryTaken >= 0) liveryPart.made.take(saved.liveryTaken, true);
+      if (saved.docksTaken >= 0) docksPart.made.take(saved.docksTaken);
     }
   } catch { /* Missing or unavailable storage does not prevent playing. */ }
 
@@ -507,7 +549,7 @@ async function initApp() {
       }]));
       const leftEmpty = Object.keys(controllerManager.entities).filter((mode) => controllerManager.entities[mode].leftEmpty);
       save('player', { version: 2, activeMode: controllerManager.activeMode, entities, carLook: controllerManager.carLook, leftEmpty,
-        boat: controllerManager.entities.kayak.boat, liveryTaken: liveryPart.made.taken });
+        boat: controllerManager.entities.kayak.boat, liveryTaken: liveryPart.made.taken, docksTaken: docksPart.made.taken });
       save('parkedSwaps', parkedCars.history);
     } catch { /* Storage may be disabled or full. */ }
   }
@@ -802,10 +844,11 @@ async function initApp() {
   // The speedometer: a 270-degree analog dial whose scale fits the mode (a car's to 100, a walker's to 20)
   const DIAL_SWEEP = 135;
   const dialScale = { max: 0 };
-  function buildDial(mode) {
+  function buildDial(mode, drive = null) {
     const g = document.getElementById('dial-ticks');
     if (!g) return;
-    const top = topSpeedMph[mode] || 80;
+    // a car whose top speed is past the usual scale (the sports car, the performance EV) gets a dial that reaches it
+    const top = Math.max(topSpeedMph[mode] || 80, mode === 'car' && drive?.speed ? drive.speed * 2.237 : 0);
     const major = top <= 20 ? 5 : top <= 50 ? 10 : 20;
     const max = Math.ceil(top / major) * major;
     if (dialScale.max === max && g.childNodes.length) return;
@@ -889,7 +932,7 @@ async function initApp() {
     if (modeIcon) document.querySelector('#cb-mode use')?.setAttribute('href', modeIcon);
     document.querySelectorAll('.pop-mode').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
     const ent = controllerManager.getActiveEntity();
-    if (elMode) elMode.textContent = ent.label;
+    if (elMode) setDialName(ent.label);
     jumpOut = false;
     renderControlHints(mode);
 
@@ -926,6 +969,7 @@ async function initApp() {
     roadWork.home();
     cm.dressBoat('kayak');
     liveryPart.made.release();
+    docksPart.made.release();
     cm._colliderCells = null;
     for (const [mode, s] of Object.entries(SCENIC_STARTS)) {
       const e = cm.entities[mode];
@@ -1037,7 +1081,7 @@ async function initApp() {
     if (choice.parked || choice.moving || choice.machine || choice.rack || choice.stairs) {
       // the car the player had is left parked where it is (a machine from the road work, back on the ground there)
       drop = { ...cm.carLook, x: car.position.x, z: car.position.z, yaw: car.heading,
-        y: Math.max(0, car.position.y - cm.getGroundHeight(car.position.x, car.position.z, 'car')) };
+        y: Math.max(0, car.position.y - cm.getGroundHeight(car.position.x, car.position.z, 'car', -Infinity)) };
       if (car.machine === 'stairtruck') { airportPart.made.leaveStairs(drop.x, drop.z, drop.yaw); drop = null; }
       else if (car.machine) { roadWork.leave(drop.x, drop.z, drop.yaw); cm._colliderCells = null; drop = null; }
       if (choice.stairs) {
@@ -1093,7 +1137,7 @@ async function initApp() {
       const at = choice.moving ? taken : choice.parked;
       cm.restyleCar(look);
       cm.stopCar(car);
-      car.position.set(at.x, cm.getGroundHeight(at.x, at.z, 'car') + (choice.parked?.y || 0), at.z);
+      car.position.set(at.x, cm.getGroundHeight(at.x, at.z, 'car', choice.parked ? -Infinity : undefined) + (choice.parked?.y || 0), at.z);
       car.heading = choice.moving ? taken.yaw : choice.parked.yaw;
       car.prevX = car.position.x;
       car.prevZ = car.position.z;
@@ -1107,6 +1151,7 @@ async function initApp() {
       const k = cm.entities.kayak, put = kayakLaunches.take(choice.beach.i);
       cm.dressBoat('kayak');
       liveryPart.made.release();
+      docksPart.made.release();
       k.position.set(put.x, put.y ?? k.position.y, put.z);
       k.heading = cm.downstreamHeading(put.x, put.z, k.heading);
       k.speed = k.driftX = k.driftZ = k.turnVel = 0;
@@ -1118,12 +1163,25 @@ async function initApp() {
       // a kayak or pedal boat from the Gallup Park livery: the player's boat becomes it, there (gallup-livery.js)
       const k = cm.entities.kayak, put = liveryPart.made.take(choice.boat.i);
       cm.dressBoat(put.kind);
+      docksPart.made.release();
       k.position.set(put.x, put.y, put.z);
       k.heading = put.heading ?? cm.downstreamHeading(put.x, put.z, k.heading);
       k.speed = k.driftX = k.driftZ = k.turnVel = 0;
       k.mesh.position.copy(k.position);
       k.mesh.rotation.y = k.heading;
       log(`[livery] took a ${put.kind === 'paddleboat' ? 'pedal boat' : 'kayak'}`);
+    }
+    if (choice.tied) {
+      // a boat tied up at a dock: the player's boat becomes it, there, and its spot stands empty (boat-docks.js)
+      const k = cm.entities.kayak, put = docksPart.made.take(choice.tied.i);
+      cm.dressBoat('kayak');
+      liveryPart.made.release();
+      k.position.set(put.x, put.y, put.z);
+      k.heading = put.heading;
+      k.speed = k.driftX = k.driftZ = k.turnVel = 0;
+      k.mesh.position.copy(k.position);
+      k.mesh.rotation.y = k.heading;
+      log(`[docks] took a ${put.kind} off a dock`);
     }
     if (choice.pad) {
       // a helicopter or plane off the airport's apron (airport.js): it's the player's now, and its spot stands empty
@@ -1347,6 +1405,29 @@ async function initApp() {
     elLocation.replaceChildren(...nodes);
   }
 
+  // The vehicle's name on the dial, on two lines when it's too wide to sit between the dial's numbers
+  function setDialName(label) {
+    elMode.dataset.label = label;
+    const words = String(label || '').split(' ');
+    const lines = [];
+    if (label.length <= 12 || words.length < 2) lines.push(label);
+    else {
+      let best = 1, worst = Infinity;
+      for (let i = 1; i < words.length; i++) {
+        const a = words.slice(0, i).join(' ').length, b = words.slice(i).join(' ').length, w = Math.max(a, b);
+        if (w < worst) { worst = w; best = i; }
+      }
+      lines.push(words.slice(0, best).join(' '), words.slice(best).join(' '));
+    }
+    const top = lines.length > 1 ? 64 : 72;
+    elMode.replaceChildren(...lines.map((line, i) => {
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+      t.setAttribute('x', '100'); t.setAttribute('y', String(top + i * 11));
+      t.textContent = line;
+      return t;
+    }));
+  }
+
   function teleportTo(x, z, heading = Math.PI, lookUp) {
     const destination = controllerManager.teleportActiveTo(x, z, heading);
     log(`[teleport] asked ${x.toFixed(1)}, ${z.toFixed(1)} → landed ${destination.x.toFixed(1)}, ${destination.z.toFixed(1)} as ${controllerManager.activeMode}`);
@@ -1388,6 +1469,8 @@ async function initApp() {
       const key = btn.getAttribute('data-teleport');
       const loc = TELEPORT_LOCATIONS[key];
       if (loc) {
+        // a place to arrive at on foot (the Cube, to push it)
+        if (loc.foot && controllerManager.activeMode !== 'person') selectMode('person');
         teleportTo(loc.x, loc.z, loc.heading, loc.lookUp);
       }
       closePopovers();
@@ -1596,6 +1679,8 @@ async function initApp() {
   let fpsTimer = 0;
   let nextPlayerSave = 0;
   let heardStrokes = 0;
+  const cubeCtx = { keys: controllerManager.keys, player: null, heading: 0, cue: (k, at, i) => audioSystem?.cue(k, at, i), grind: (w, at) => audioSystem?.cubeGrind(w, at) };
+  const animalCtx = { camera: cameraSystem.camera, player: null, mode: 'car', look: 'midday', cars: trafficSystem.cars, buses: trafficSystem.buses, paddlers: riverPeoplePart.made.people || [], colliders: allColliders, cue: (k, at, i) => audioSystem?.cue(k, at, i) };
   let warmedUp = false; // see the first frame below
 
   if (elFps) elFps.textContent = '60';
@@ -1694,6 +1779,18 @@ async function initApp() {
     }
     moonPart.made.update(cameraSystem.camera);
     mark('trains & parked');
+    animalCtx.player = controllerManager.getActiveEntity();
+    animalCtx.mode = controllerManager.activeMode;
+    animalCtx.look = lightingSystem.lookId;
+    animalCtx.paddlers = riverPeoplePart.made.people || animalCtx.paddlers;
+    animalsPart.made.update(dt, elapsed, animalCtx);
+    mark('animals');
+    cubeCtx.player = animalCtx.player.position;
+    cubeCtx.heading = animalCtx.player.heading;
+    cubePart.made.update(dt, cubeCtx);
+    // the dial's name follows whatever the player is in, however they got into it
+    const dialLabel = controllerManager.getActiveEntity()?.label;
+    if (elMode && dialLabel && dialLabel !== elMode.dataset.label) setDialName(dialLabel);
     const kayak = controllerManager.entities.kayak;
     if (kayak.strokes !== heardStrokes) {
       heardStrokes = kayak.strokes;
@@ -1805,6 +1902,10 @@ async function initApp() {
     {
       const ent = controllerManager.getActiveEntity();
       const dialMode = controllerManager.activeMode;
+      // the gear and revs only for an engine that turns wheels (not the helicopter, the kayak, a hoverboard or a bicycle)
+      const geared = dialMode === 'car' && ent.gears !== false ? '1' : '';
+      if (document.body.dataset.geared !== geared) document.body.dataset.geared = geared;
+      if (document.body.dataset.mode !== dialMode) document.body.dataset.mode = dialMode;
       const mphExact = (dialMode === 'kayak' ? ent.groundSpeed || 0 : Math.abs(ent.speed)) * 2.237;
       const mph = Math.round(mphExact);
       if (elSpeed && mph !== hud.shownMph) { hud.shownMph = mph; elSpeed.textContent = String(mph); }
@@ -1812,7 +1913,7 @@ async function initApp() {
         elSpeedMeter.style.transform = `rotate(${-DIAL_SWEEP + Math.min(1, mphExact / dialScale.max) * DIAL_SWEEP * 2}deg)`;
       }
       // the gear and revs are worked out ten times a second, which is the rate the engine sound reads them at
-      if (dialMode === 'car' && elGear && hud.clock - hud.lastClock >= 0.1) {
+      if (geared && elGear && hud.clock - hud.lastClock >= 0.1) {
         const read = gearReadout(Math.abs(ent.speed), ent.speed >= 0);
         if (read.gear !== hud.shownGear) { hud.shownGear = read.gear; elGear.textContent = read.gear; }
         if (elRpm && read.rpm !== hud.shownRpm) { hud.shownRpm = read.rpm; elRpm.textContent = String(read.rpm); }
@@ -1838,7 +1939,7 @@ async function initApp() {
         renderControlHints(mode);
         touchControls.setGetOutWords(mode === 'person' ? 'Get in' : jumping ? 'Jump out' : 'Get out');
       }
-      buildDial(mode);
+      buildDial(mode, activeEnt.drive);
       if (elAltitude) elAltitude.textContent = altFt.toLocaleString('en-US');
       // The street corner of the player on the follow cameras, of the camera itself on the scenic ones
       const where = cameraSystem.getActivePreset().category === 'follow' ? activeEnt.position : cameraSystem.currentPos;

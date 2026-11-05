@@ -360,9 +360,10 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
   // Keep the authored landmark models; the survey supplies the surrounding buildings.
   // (a landmark on the survey's own outline names the block it replaces, and its colliders keep off the rest)
   const replaced = new Set(landmarkColliders.map((c) => c.replaces).filter(Boolean));
-  // (and one it runs into, as the parking structure down Graffiti Alley, gives the block cut back to its own face)
+  // (and one it runs into, as the parking structure down Graffiti Alley, gives the block cut back to its own face; a
+  // block that's replaced is left out before it's reshaped)
   const reshaped = new Map(landmarkColliders.filter((c) => c.reshapes).map((c) => [c.reshapes.from, c.reshapes.to]));
-  const surveyedBuildings = REAL_BUILDINGS.map((b) => reshaped.get(b) || b).filter((b) => !replaced.has(b) && !LANDMARK_RESERVE.some((h) =>
+  const surveyedBuildings = REAL_BUILDINGS.filter((b) => !replaced.has(b)).map((b) => reshaped.get(b) || b).filter((b) => !LANDMARK_RESERVE.some((h) =>
     b.polygons.some((p) => polygonContains({ outer: p.outer, holes: [] }, h.x, h.z)))
     && !landmarkColliders.some((c) => !c.keepsSurvey && b.minX < c.maxX && b.maxX > c.minX && b.minZ < c.maxZ && b.maxZ > c.minZ
       && b.polygons.some((p) => polygonBoxOverlaps(p, (c.minX + c.maxX) / 2, (c.minZ + c.maxZ) / 2,
