@@ -861,95 +861,96 @@ body.hud-minimized .icon-show {
    Bottom right: speed cluster & camera switcher
    ------------------------------------------------------------------------------------------------------------------ */
 .cluster {
-  width: 272px;
+  width: 284px;
   overflow: hidden;
 }
 
 .gauge {
-  padding: 13px 16px 15px;
+  padding: 12px 14px 8px;
 }
 
-.gauge-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+.dial {
+  display: block;
+  width: 200px;
+  max-width: 100%;
+  margin: 0 auto;
+  height: auto;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.55));
 }
 
-.gauge-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.1em;
+.dial text {
+  font-family: var(--font-sign);
+  fill: #f2f0ea;
+}
+
+.dial-num {
+  font-size: 11px;
+  font-weight: 600;
+  fill: rgba(242, 240, 234, 0.9);
+  font-variant-numeric: tabular-nums;
+}
+
+.dial-num.red {
+  fill: #ff6a58;
+}
+
+.dial-mode {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--text-3);
+  fill: rgba(242, 240, 234, 0.45) !important;
 }
 
-.gauge-alt {
-  flex: none;
-  font-size: 12px;
+#hud-speed {
+  font-size: 38px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--text-2);
+}
+
+.dial-unit {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  fill: rgba(242, 240, 234, 0.5) !important;
+}
+
+.dial-alt {
+  font-size: 9px;
+  font-weight: 600;
+  fill: #ffb08c !important;
+  font-variant-numeric: tabular-nums;
   opacity: 0;
   transition: opacity 0.3s ease;
 }
 
-body[data-mode='helicopter'] .gauge-alt {
+.dial-alt-label {
+  letter-spacing: 0.14em;
+  fill: rgba(242, 240, 234, 0.5) !important;
+}
+
+body[data-mode='helicopter'] .dial-alt {
   opacity: 1;
 }
 
-.gauge-alt-label {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-3);
+.dial-gear {
+  font-size: 10px;
+  font-weight: 700;
+  fill: #ffb08c !important;
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
-.gauge-speed {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin-top: 5px;
+body[data-mode='car'] .dial-gear {
+  opacity: 1;
 }
 
-#hud-speed {
-  font-size: 42px;
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.035em;
-  font-variant-numeric: tabular-nums;
-}
-
-.gauge-unit {
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-3);
-}
-
-.gauge-meter {
-  position: relative;
-  height: 4px;
-  margin-top: 12px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.1);
-  overflow: hidden;
-}
-
-/* Speed as a share of the mode's top speed */
-#hud-speed-meter {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: var(--text);
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 0.25s linear;
+.dial-needle {
+  transform-box: view-box;
+  transform-origin: 100px 100px;
+  transform: rotate(-135deg);
+  transition: transform 0.06s linear;
+  filter: drop-shadow(1px 2px 1.5px rgba(0, 0, 0, 0.6));
 }
 
 .camera-switch {
@@ -1315,8 +1316,7 @@ body[data-mode='helicopter'] .gauge-alt {
   .brand { height: 44px; padding: 0 12px; }
   .repo-link { display: flex; align-items: center; gap: 4px; min-height: 44px; font-size: 12px; }
   .radar { width: 220px; height: 148px; }
-  .cluster { width: 220px; }
-  #hud-speed { font-size: 34px; }
+  .cluster { width: 200px; }
   .fullmap-title > div { display: none; }
   .fullmap-title { padding: 9px; }
   .fullmap-footer { max-width: calc(100% - 2 * var(--edge)); bottom: calc(var(--edge) + 34px); }
@@ -1330,6 +1330,51 @@ body[data-mode='helicopter'] .gauge-alt {
   .hud-bottom-right { bottom: calc(var(--edge) + 64px); }
   .gauge { display: none; }
   .camera-switch { border-top: 0; }
+}
+
+/* Touch screens: one bar of three choosers in place of the mode switch and the camera and radio rows */
+.compact-bar { display: none; gap: 4px; padding: 5px; }
+.compact-btn {
+  height: 44px;
+  min-width: 48px;
+  max-width: 132px;
+  padding: 0 12px;
+  border-radius: var(--r-ctl);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  transition: background-color 0.15s ease;
+}
+.compact-btn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-btn .icon { width: 20px; height: 20px; }
+.compact-btn[hidden] { display: none; }
+.compact-btn.is-open { background: var(--hover); }
+.compact-btn.is-off { color: var(--text-2); }
+#cb-mode { color: var(--taxi-ink); background: var(--taxi); }
+.pop-mode { justify-content: flex-start; gap: 12px; min-height: 44px; }
+.pop-radio { flex-direction: column; align-items: flex-start; gap: 1px; min-height: 44px; justify-content: center; }
+.pop-radio .pop-sub { opacity: 0.7; }
+#mode-popover, #radio-popover { min-width: 220px; }
+body.touch-enabled .compact-bar { display: flex; }
+body.touch-enabled #mode-switch,
+body.touch-enabled .hud-bottom-right { display: none; }
+/* a narrow window on the Mac gets the same bar; the speedometer stays while there's room for it */
+@media (max-width: 820px) {
+  .compact-bar { display: flex; }
+  #mode-switch, #camera-switch, #car-radio { display: none; }
+  /* the speedometer mirrors the map: the same height, pinned in the other bottom corner, the bar layered over both */
+  .hud-bottom-center { z-index: 11; }
+  .hud-bottom-right { bottom: var(--edge); }
+  .cluster { width: auto; }
+  .gauge { padding: 6px; }
+  .dial { width: 136px; }
+}
+@media (max-width: 620px) {
+  .hud-bottom-right { display: none; }
 }
 
 /* Touch controls reserve the bottom corners; mode and camera selection remain within reach. */
@@ -1389,21 +1434,6 @@ body[data-mode='helicopter'] .gauge-alt {
 
 #touch-stick.is-pressed #touch-stick-knob { background: var(--taxi); border-color: var(--taxi); }
 
-.touch-caption,
-.touch-look-hint {
-  color: var(--text-2);
-  font-size: 11px;
-  font-weight: 550;
-  text-shadow: 0 1px 5px #000;
-}
-.touch-caption { display: block; margin-top: 8px; }
-.touch-look-hint {
-  position: fixed;
-  top: calc(max(var(--edge), env(safe-area-inset-top)) + 120px);
-  right: max(var(--edge), env(safe-area-inset-right));
-  padding: 4px;
-}
-
 .touch-actions {
   display: flex;
   gap: 10px;
@@ -1426,7 +1456,7 @@ body[data-mode='helicopter'] .gauge-alt {
   pointer-events: auto;
   touch-action: none;
 }
-.touch-action > [aria-hidden] { font-size: 23px; line-height: 1; }
+.touch-action > .icon { width: 28px; height: 28px; stroke-width: 2; }
 .touch-action.is-pressed { color: var(--taxi-ink); background: var(--taxi); border-color: var(--taxi); }
 
 /* With a controller (body[data-input], from main.js), a key's badge shows the button that does the same, drawn by
@@ -1451,8 +1481,8 @@ body.touch-enabled .time-btn.active { height: 44px; min-width: 44px; padding: 0 
 body.touch-enabled .tool-btn { min-width: 44px; min-height: 44px; }
 body.touch-enabled .tool-label { display: none; }
 body.touch-enabled .hud-bottom-center { bottom: max(var(--edge), env(safe-area-inset-bottom)); }
-body.touch-enabled .mode-label { display: block; font-size: 10px; }
-body.touch-enabled .mode-btn { width: 62px; height: 48px; padding: 0; flex-direction: column; justify-content: center; gap: 3px; }
+body.touch-enabled .mode-label { display: none; }
+body.touch-enabled .mode-btn { width: 48px; height: 48px; padding: 0; justify-content: center; }
 body.touch-enabled .hud-bottom-right { top: calc(max(var(--edge), env(safe-area-inset-top)) + 62px); right: max(var(--edge), env(safe-area-inset-right)); bottom: auto; }
 body.touch-enabled .cluster { width: 230px; }
 body.touch-enabled .camera-switch { border: 0; }
@@ -1465,7 +1495,6 @@ body.touch-enabled .pop-item { min-height: 44px; }
 @media (max-width: 360px) {
   body.touch-enabled .toolbar { width: 194px; height: auto; flex-wrap: wrap; justify-content: center; }
   body.touch-enabled .hud-bottom-right { top: calc(max(var(--edge), env(safe-area-inset-top)) + 114px); }
-  .touch-look-hint { top: calc(max(var(--edge), env(safe-area-inset-top)) + 172px); }
 }
 
 @media (max-height: 500px) {

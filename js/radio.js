@@ -41,6 +41,30 @@ class CarRadio {
     document.getElementById('radio-prev')?.addEventListener('click', () => this.tune(-1));
     document.getElementById('radio-next')?.addEventListener('click', () => this.tune(1));
     document.getElementById('radio-current')?.addEventListener('click', () => this.tune(1));
+    // on a touch screen, the bar's music button opens every station (and Off) to pick from
+    this.pop = document.getElementById('radio-popover');
+    if (this.pop) {
+      const item = (i, name, sub) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pop-item pop-radio';
+        b.dataset.station = String(i);
+        const n = document.createElement('span'); n.className = 'pop-name'; n.textContent = name;
+        const d = document.createElement('span'); d.className = 'pop-sub'; d.textContent = sub;
+        b.append(n, d);
+        b.addEventListener('click', () => { this.tuneTo(i); this.pop.hidePopover?.(); });
+        return b;
+      };
+      this.popTitle = document.createElement('div');
+      this.popTitle.className = 'pop-title';
+      this.pop.replaceChildren(this.popTitle, item(OFF, 'Off', 'No music'),
+        ...STATIONS.map((st, i) => item(i, `${st.dial} ${st.call}`, st.about)));
+    }
+  }
+
+  tuneTo(station) {
+    if (!this.carKey) return;
+    this.tune(station - this.station);
   }
 
   get native() { return window.LampNative?.available ? window.LampNative : null; }
@@ -123,7 +147,17 @@ class CarRadio {
   draw() {
     if (!this.el) return;
     this.el.hidden = !this.carKey;
+    const cb = document.getElementById('cb-radio');
+    if (cb) cb.hidden = !this.carKey;
     if (!this.carKey) return;
+    if (cb) {
+      const st = STATIONS[this.station];
+      cb.querySelector('use')?.setAttribute('href', this.carKey === 'phones' ? '#i-earbuds' : '#i-radio');
+      cb.querySelector('#cb-radio-name').textContent = st ? st.dial : 'Off';
+      cb.classList.toggle('is-off', !st);
+    }
+    if (this.popTitle) this.popTitle.textContent = this.carKey === 'phones' ? 'Earbuds' : 'Car radio';
+    this.pop?.querySelectorAll('.pop-radio').forEach((b) => b.classList.toggle('active', Number(b.dataset.station) === this.station));
     const s = STATIONS[this.station];
     const phones = this.carKey === 'phones';
     this.nameEl.textContent = s ? `${s.dial} ${s.call}` : phones ? 'Earbuds off' : 'Radio off';

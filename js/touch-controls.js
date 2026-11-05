@@ -4,6 +4,12 @@ import { input } from '../lamp-game.js';
 const DEAD_ZONE = 0.15;
 const MAX_RADIUS = 44;
 
+// Each action button shows a picture only; its words stay as the button's spoken name.
+const TOUCH_ICONS = {
+  Jump: 'i-jump', Handbrake: 'i-handbrake', Ascend: 'i-ascend', Descend: 'i-descend',
+  'Get in': 'i-get-in', 'Get out': 'i-get-out', 'Jump out': 'i-jump-out',
+};
+
 class TouchControls {
   constructor(controllerManager) {
     this.controller = controllerManager;
@@ -101,8 +107,12 @@ class TouchControls {
   setGetOutWords(words) {
     if (!this.getInOut || !this.root) return;
     this.getInOut.setAttribute('aria-label', words);
-    const label = this.root.querySelector('[data-touch-label="getinout"]');
-    if (label) label.textContent = words;
+    this.setIcon('getinout', TOUCH_ICONS[words] || 'i-get-in');
+  }
+
+  setIcon(action, id) {
+    const use = this.root?.querySelector(`[data-touch-icon="${action}"] use`);
+    if (use && use.getAttribute('href') !== `#${id}`) use.setAttribute('href', `#${id}`);
   }
 
   setMode(mode) {
@@ -118,8 +128,7 @@ class TouchControls {
       const action = button.getAttribute('data-touch-action');
       button.hidden = (action === 'up' && mode !== 'person' && mode !== 'helicopter' && mode !== 'car') || (action === 'down' && mode !== 'helicopter');
       button.setAttribute('aria-label', labels[action]);
-      const label = this.root.querySelector(`[data-touch-label="${action}"]`);
-      if (label) label.textContent = labels[action];
+      this.setIcon(action, TOUCH_ICONS[labels[action]]);
     }
   }
 

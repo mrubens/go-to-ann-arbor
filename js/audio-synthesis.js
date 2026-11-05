@@ -1,3 +1,4 @@
+import { CAR_RATIOS, BUS_RATIOS, newGearState, shiftGear, engineRPM } from './gearbox.js';
 // Shared procedural audio and continuously running, mono vehicle voices. Spatial placement and overall mixing
 // belong to the caller; every source and processing node created by a voice is released by dispose().
 
@@ -349,8 +350,9 @@ export function createMotorVoice(context, resources, kind, output) {
     const sound = resources.combustion[kind];
     const bankRatio = sound.highExhaust.duration / sound.exhaust.duration;
     const idle = bus ? 620 : suv ? 710 : kind === 'moto' ? 1050 : 780;
-    const ratios = bus ? [320, 205, 145, 108, 82] : [500, 325, 230, 170, 130];
-    let gear = 0, rpm = idle, throttle = 0, previousTime = -1, gearLock = 0, shiftUntil = 0;
+    const ratios = bus ? BUS_RATIOS : CAR_RATIOS;
+    const box = newGearState();
+    let rpm = idle, throttle = 0, previousTime = -1;
     const exhaust = loop(sound.exhaust);
     const highExhaust = loop(sound.highExhaust);
     highExhaust.playbackRate.value = bankRatio;
@@ -386,30 +388,8 @@ export function createMotorVoice(context, resources, kind, output) {
       const dt = first ? 0.1 : clamp(now - previousTime, 0, 0.5);
       previousTime = now;
       throttle = first ? load : throttle + (load - throttle) * (1 - Math.exp(-dt / (load > throttle ? 0.14 : 0.32)));
-      const shiftRPM = (bus ? 1700 : 2700) + throttle * (bus ? 950 : 2900);
-      let upshift = false;
-      if (speed < 0.6) {
-        // A fresh launch starts in first immediately, even after a hard stop from top gear.
-        gear = 0;
-        gearLock = shiftUntil = 0;
-      } else if (first) {
-        while (gear < ratios.length - 1 && speed * ratios[gear] > shiftRPM) gear++;
-      } else if (now >= gearLock) {
-        const oldGear = gear;
-        const wheelRPM = speed * ratios[gear];
-        if (gear < ratios.length - 1 && wheelRPM > shiftRPM) gear++;
-        else if (gear > 0 && speed * ratios[gear - 1] < shiftRPM * 0.82
-          && (wheelRPM < (bus ? 1000 : 1600) || (throttle > 0.65 && wheelRPM < shiftRPM * 0.55))) gear--;
-        if (gear !== oldGear) {
-          gearLock = now + 0.65;
-          upshift = gear > oldGear;
-          if (upshift) shiftUntil = now + 0.16;
-        }
-      }
-      // Wheel-coupled RPM, with torque-converter slip at low speed. Coasting retains engine braking rather than
-      // dropping straight to idle; hysteresis and a minimum gear dwell prevent hunting around a shift boundary.
-      const slip = throttle * (bus ? 600 : 1500) * Math.max(0.12, 1 - speed / 16);
-      const targetRPM = clamp(Math.max(idle, speed * ratios[gear]) + slip, idle, bus ? 2900 : 6200);
+      const upshift = shiftGear(box, speed, throttle, now, first, ratios, bus);
+      const targetRPM = engineRPM(box, speed, throttle, ratios, idle, bus);
       // The playback-rate ramps provide the short RPM fall on an upshift; do not soften it twice.
       rpm = first || upshift ? targetRPM : rpm + (targetRPM - rpm) * (1 - Math.exp(-dt / (targetRPM > rpm ? 0.12 : 0.075)));
       const pitch = (0.97 + variation * 0.06) * doppler;
@@ -435,8 +415,8 @@ export function createMotorVoice(context, resources, kind, output) {
       }
       // Schedule unloading and recovery on the audio clock. Updates during the shift can revise
       // the recovery target without cancelling the cut, even though controls run at only 10 Hz.
-      const loadTime = Math.max(now, shiftUntil);
-      const recovery = now < shiftUntil ? 0.045 : undefined;
+      const loadTime = Math.max(now, box.shiftUntil);
+      const recovery = now < box.shiftUntil ? 0.045 : undefined;
       exhaustCutoff(cutoff + effort * (bus ? 1400 : 1800), loadTime, recovery);
       exhaustLevel(exhaustIdle + effort * (bus ? 0.22 : 0.26), loadTime, recovery);
       mechanicalFrequency(((bus ? 1050 : 1250) + rpm * 0.12) * doppler, now);

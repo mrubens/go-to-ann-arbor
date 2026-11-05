@@ -405,6 +405,40 @@ class CityAudioSystem {
     if (this.emit('horn', { id: entity, ...entity.position, heading: entity.heading, seed: 4 }, { intensity: 0.7 })) this.lastHorn = now;
   }
 
+  // The player's tires sliding (handbrake, hard braking, a drifting tail): a rubbery squeal that rises with how hard
+  // they slide and brightens with speed. `level` is the car's skid 0 to 1, `speed` its road speed in m/s.
+  tireSkid(level, speed) {
+    if (!this.ready || !this.context) return;
+    const ctx = this.context, now = ctx.currentTime;
+    let v = this.skidVoice;
+    if (!v) {
+      if (level < 0.05) return;
+      const noise = ctx.createBufferSource();
+      noise.buffer = this.resources.noise;
+      noise.loop = true;
+      const squeal = ctx.createBiquadFilter();
+      squeal.type = 'bandpass'; squeal.frequency.value = 1100; squeal.Q.value = 9;
+      const body = ctx.createBiquadFilter();
+      body.type = 'bandpass'; body.frequency.value = 2300; body.Q.value = 5;
+      const bodyGain = ctx.createGain(); bodyGain.gain.value = 0.5;
+      // a slow wobble on the squeal's pitch, as rubber grips and lets go
+      const lfo = ctx.createOscillator(); lfo.frequency.value = 11;
+      const lfoDepth = ctx.createGain(); lfoDepth.gain.value = 90;
+      lfo.connect(lfoDepth).connect(squeal.frequency);
+      const gain = ctx.createGain(); gain.gain.value = 0;
+      noise.connect(squeal).connect(gain);
+      noise.connect(body).connect(bodyGain).connect(gain);
+      gain.connect(this.mix);
+      noise.start(now); lfo.start(now);
+      v = this.skidVoice = { noise, lfo, squeal, body, gain, nodes: [noise, lfo, squeal, body, bodyGain, lfoDepth, gain] };
+    }
+    const on = this.enabled && this.context.state === 'running' ? level : 0;
+    const loud = Math.min(1, speed / 10);
+    smooth(v.gain.gain, on > 0.02 ? 0.55 * Math.min(1, on * 1.4) * (0.35 + 0.65 * loud) : 0, now, on > 0.02 ? 0.05 : 0.12);
+    smooth(v.squeal.frequency, 850 + Math.min(speed, 35) * 28 + on * 250, now, 0.08);
+    smooth(v.body.frequency, 1800 + Math.min(speed, 35) * 40, now, 0.08);
+  }
+
   // The roar of water from broken hydrants (hydrant-spray.js): one voice each where it gushes, at its pressure
   gush(list) {
     if (!this.ready || !this.context) return;
