@@ -887,7 +887,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     furnMatrices[kind].push(dummy.matrix.clone());
-    furnSites[kind]?.push({ x, z });
+    furnSites[kind]?.push({ x, z, yaw });
     const c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw));
     addFootprint(x, z, w * c + d * s, w * s + d * c, true);
   };
@@ -1465,7 +1465,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   if (hydrantMesh) hydrantSites.forEach((h, i) => obstacles.push({ x: h.x, z: h.z, r: 0.2, kind: 'hydrant', height: 0.8, parts: [hydrantMesh, i] }));
   // and trash cans and park benches are thrown, tumbling, by a car that hits them
   if (furnMeshes.trash) furnSites.trash.forEach((t, i) => obstacles.push({ x: t.x, z: t.z, r: 0.3, kind: 'trash', height: 0.9, parts: [furnMeshes.trash, i] }));
-  if (furnMeshes.bench) furnSites.bench.forEach((b, i) => obstacles.push({ x: b.x, z: b.z, r: 0.6, kind: 'bench', height: 0.8, parts: [furnMeshes.bench, i] }));
+  if (furnMeshes.bench) furnSites.bench.forEach((b, i) => obstacles.push({ x: b.x, z: b.z, yaw: b.yaw, r: 0.6, kind: 'bench', height: 0.8, parts: [furnMeshes.bench, i] }));
   return { group, footprints, signalClock, signalIntersections, audioSignals, treeField, obstacles, update };
 }
 

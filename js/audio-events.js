@@ -400,6 +400,21 @@ function quack(ctx, seed) {
   }, 0.55, ANIMAL_RATE);
 }
 
+// A white-tailed deer's alarm snort: one hard blow of air through the nose, breathy and hollow, falling away
+function snort(ctx, seed) {
+  const random = randomSource(seed);
+  const len = 0.26 + random() * 0.08, f = 520 + random() * 120;
+  const lo = 1 - Math.exp(-TAU * 2200 / ANIMAL_RATE), hi = 1 - Math.exp(-TAU * 450 / ANIMAL_RATE);
+  let a = 0, b = 0, phase = 0;
+  return makeBuffer(ctx, len + 0.05, (t) => {
+    const noise = random() * 2 - 1;
+    a += (noise - a) * lo; b += (a - b) * hi;
+    phase += TAU * f * (1 - 0.3 * t / len) / ANIMAL_RATE;
+    const env = (1 - Math.exp(-t * 900)) * Math.exp(-t * 9) * (t > len - 0.05 ? Math.max(0, (len - t) / 0.05) : 1);
+    return ((a - b) * 2.6 + Math.sin(phase) * 0.12 * Math.exp(-t * 20)) * env;
+  }, 0.6, ANIMAL_RATE);
+}
+
 // A Canada goose's "ah-HONK": a low start breaking up into the loud, nasal note
 function honk(ctx, seed) {
   const random = randomSource(seed);
@@ -510,7 +525,8 @@ export function createEventResources(ctx, resources) {
       honk: [honk(ctx, 1501), honk(ctx, 1502)],
       hiss: hiss(ctx),
       wingbeat: wingbeat(ctx, 1601),
-      hawk: hawkCry(ctx)
+      hawk: hawkCry(ctx),
+      snort: [snort(ctx, 1801), snort(ctx, 1802)]
     }
   };
 }
@@ -520,7 +536,7 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   const start = Math.max(ctx.currentTime, finite(options.when, ctx.currentTime));
   const intensity = clamp(finite(options.intensity, 1));
   const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, plunge: 0.9, door: 0.45, thud: 0.5,
-    chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55 };
+    chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55, snort: 0.4 };
   if (!Object.hasOwn(levels, kind) || intensity === 0) return { endTime: start, dispose() {} };
   const gain = ctx.createGain();
   gain.gain.value = intensity * levels[kind];
@@ -636,6 +652,11 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   } else if (kind === 'clang') {
     // harder hits ring a little lower and longer
     play(resources.clang[Math.floor(random() * 2)], start, 1.06 - intensity * 0.12 + random() * 0.05);
+  } else if (kind === 'snort') {
+    // a snort, sometimes two, as the deer goes
+    const set = resources.animals.snort, pitch = 0.9 + random() * 0.2;
+    const end = play(set[Math.floor(random() * set.length)], start, pitch);
+    if (random() < 0.4) play(set[Math.floor(random() * set.length)], end + 0.15 + random() * 0.2, pitch * 0.97, 0.8);
   } else if (kind === 'hiss') {
     play(resources.animals.hiss, start, 0.92 + random() * 0.16);
   } else if (kind === 'wingbeat') {

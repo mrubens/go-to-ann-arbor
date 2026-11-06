@@ -44,6 +44,9 @@ import { buildCascades, CASCADE_START } from './cascades.js';
 import { buildRiverPeople } from './river-people.js';
 import { buildAnimals } from './animals.js';
 import { buildCube, CUBE_FOOTPRINT } from './the-cube.js';
+import { buildBandShell } from './band-shell.js';
+import { buildRestrooms } from './restrooms.js';
+import { createSeats } from './seats.js';
 import { CityAudioSystem } from './audio-system.js';
 import { fetchWeather, createPrecipitation } from './weather.js';
 import { fetchRiverFlow } from './river-gauge.js';
@@ -275,7 +278,11 @@ async function initApp() {
   // the parking structures, to drive up floor by floor; they stand in for the survey's blocks (parking-structures.js)
   const parkingPart = await live.keep('parkingStructures', () => cityPart((g) => buildParkingStructures(g), { cull: setupSceneCulling, still: true }),
     { inputs: [heights], from: ['js/parking-structures.js', 'data/parking-structures.json'] });
-  const landmarkColliders = [...landmarks.made.colliders, ...parkingPart.made.colliders];
+  // the West Park Band Shell, closed and fenced in, in place of the survey's block (band-shell.js)
+  const bandShellPart = live.keep('bandShell', () => cityPart((g) => buildBandShell(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/band-shell.js'] });
+  // the town's public restrooms and portable toilets, where the map has them (restrooms.js)
+  const restroomsPart = await live.keep('restrooms', () => cityPart((g) => buildRestrooms(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/restrooms.js', 'data/restrooms.json'] });
+  const landmarkColliders = [...landmarks.made.colliders, ...parkingPart.made.colliders, ...bandShellPart.made.colliders, ...restroomsPart.made.colliders];
   markInit('landmarks');
   await showLoadingStage('Generating building footprints and facades...');
   // house numbers by the front doors (build-addresses.py, the city's Address Points)
@@ -293,7 +300,7 @@ async function initApp() {
   const looksBytes = await asset('data/building-looks.json');
   setBuildingLooks(looksBytes ? JSON.parse(new TextDecoder().decode(looksBytes)) : null);
   const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarkColliders, addresses, gasStations), { cull: setupSceneCulling, still: true }),
-    { inputs: [heights, landmarks, parkingPart], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json'] });
+    { inputs: [heights, landmarks, parkingPart, bandShellPart, restroomsPart], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json'] });
   const cityBlocks = blocks.made;
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...outskirts.colliders, ...(cityGrid.colliders || [])];
@@ -322,6 +329,8 @@ async function initApp() {
     ...details.made.footprints,
     CUBE_FOOTPRINT,
     ...parkingPart.made.footprints,
+    bandShellPart.made.footprint,
+    ...restroomsPart.made.footprints,
     ...allColliders.filter((c) => !c.obb
       && (c.minY ?? 0) - groundHeight((c.minX + c.maxX) * 0.5, (c.minZ + c.maxZ) * 0.5) < 3.5)
   ], details.made.signalIntersections, cityClosures)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details], from: [CITY_MAP, 'data/city-closures.json', 'js/pedestrian-system.js'] });
@@ -397,7 +406,21 @@ async function initApp() {
     const knock = o.kind && (o.pose || o.parts?.length) ? { ...o, g, down: false } : null;
     return { minX: o.x - o.r, maxX: o.x + o.r, minZ: o.z - o.r, maxZ: o.z + o.r, minY: g - 1, maxY: g + 6, thin: true, knock };
   };
-  for (const o of [...(details.made.obstacles || []), ...(controlsPart.made.obstacles || []), ...(seatingPart.made.obstacles || [])]) allColliders.push(obstacleBox(o));
+  const knockBoxOf = new Map();
+  for (const o of [...(details.made.obstacles || []), ...(controlsPart.made.obstacles || []), ...(seatingPart.made.obstacles || [])]) {
+    const b = obstacleBox(o);
+    knockBoxOf.set(o, b);
+    allColliders.push(b);
+  }
+  // where the player can sit (seats.js): the benches, cafe chairs, picnic benches and bleachers, each with what knocks it over
+  const seatObstacles = seatingPart.made.obstacles || [];
+  const seatSpots = createSeats({
+    benches: (details.made.obstacles || []).filter((o) => o.kind === 'bench' && o.yaw != null),
+    seats: seatingPart.made.seats || [],
+    bleachers: bleachersPart.made.seats || [],
+    boxOf: (s) => knockBoxOf.get(s.of != null ? seatObstacles[s.of] : s) || null
+  });
+  log(`[seats] ${seatSpots.count} places to sit`);
   // streamed, the trees near the camera come and go, and their trunks with them (trees.js)
   const treeField = details.made.treeField;
   if (TIER.stream && treeField?.obstacles) {
@@ -431,11 +454,11 @@ async function initApp() {
       { x: it.x + it.dx * it.height * 0.6, y: it.g, z: it.z + it.dz * it.height * 0.6 }, Math.min(1, 0.4 + spin * 0.2))
   });
   // Lamp: Ann Arbor's animals, near the player only; never anyone's obstacle (animals.js)
-  const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js'] });
+  const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/deer.js'] });
   // Lamp: the Cube on Regents Plaza, which turns when it's pushed or hit (the-cube.js)
   const cubePart = live.keep('cube', () => cityPart((g) => buildCube(g)), { inputs: [heights], from: ['js/the-cube.js'] });
   allColliders.push(cubePart.made.collider);
-  const parts = [grid, cascadesPart, riverPeoplePart, animalsPart, cubePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart, moonPart];
+  const parts = [grid, bandShellPart, restroomsPart, cascadesPart, riverPeoplePart, animalsPart, cubePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart, moonPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -448,7 +471,7 @@ async function initApp() {
   // river and the sky stay as they are
   // (only once there is snow: on a bare day the materials keep their shaders as they are)
   loadSnowCover().then((cover) => {
-    if (cover > 0) for (const part of [grid, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
+    if (cover > 0) for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
   });
   const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
   scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
@@ -462,6 +485,7 @@ async function initApp() {
   controllerManager.kayakLaunches = kayakLaunches;
   controllerManager.livery = liveryPart.made;
   controllerManager.docks = docksPart.made;
+  controllerManager.seats = seatSpots;
   controllerManager.skatePark = skatePart.made;
   controllerManager.mtbTrails = mtbPart.made;
   controllerManager.parking = parkingPart.made;
@@ -544,7 +568,10 @@ async function initApp() {
 
   function savePlayerState() {
     try {
-      const entities = Object.fromEntries(Object.entries(controllerManager.entities).map(([mode, entity]) => [mode, {
+      // one sitting down is kept where they stood to sit
+      const entities = Object.fromEntries(Object.entries(controllerManager.entities).map(([mode, entity]) => [mode, entity.sitting ? {
+        ...entity.sitting.from, heading: entity.heading
+      } : {
         x: entity.position.x, y: entity.position.y, z: entity.position.z, heading: entity.heading
       }]));
       const leftEmpty = Object.keys(controllerManager.entities).filter((mode) => controllerManager.entities[mode].leftEmpty);
@@ -815,7 +842,7 @@ async function initApp() {
   };
   // Getting in and out, in every mode
   for (const [mode, hints] of Object.entries(controlHints)) {
-    hints.push({ keys: ['KeyF'], pad: [BUTTON.X], does: mode === 'person' ? 'Get in' : 'Get out', getOut: mode !== 'person' });
+    hints.push({ keys: ['KeyF'], pad: [BUTTON.X], does: mode === 'person' ? 'Get in / Sit' : 'Get out', getOut: mode !== 'person' });
   }
   // Getting out of a car on the move or the helicopter in the air is a jump, and its hint says so
   let jumpOut = false;
@@ -841,35 +868,11 @@ async function initApp() {
     return { gear, rpm: Math.round(rpm / 50) * 50 };
   }
 
-  // The speedometer: a 270-degree analog dial whose scale fits the mode (a car's to 100, a walker's to 20)
-  const DIAL_SWEEP = 135;
+  // The speedometer: the speed in large digits over a bar filled to its share of the mode's top speed
   const dialScale = { max: 0 };
   function buildDial(mode, drive = null) {
-    const g = document.getElementById('dial-ticks');
-    if (!g) return;
-    // a car whose top speed is past the usual scale (the sports car, the performance EV) gets a dial that reaches it
-    const top = Math.max(topSpeedMph[mode] || 80, mode === 'car' && drive?.speed ? drive.speed * 2.237 : 0);
-    const major = top <= 20 ? 5 : top <= 50 ? 10 : 20;
-    const max = Math.ceil(top / major) * major;
-    if (dialScale.max === max && g.childNodes.length) return;
-    dialScale.max = max;
-    const minor = major / 5;
-    const at = (deg, r) => [100 + r * Math.sin(deg * Math.PI / 180), 100 - r * Math.cos(deg * Math.PI / 180)];
-    let svg = '';
-    const redFrom = mode === 'car' || mode === 'helicopter' ? max * 0.85 : Infinity;
-    for (let v = 0; v <= max + 1e-6; v += minor) {
-      const isMajor = Math.abs(v / major - Math.round(v / major)) < 1e-6;
-      const deg = -DIAL_SWEEP + (v / max) * DIAL_SWEEP * 2;
-      const [x1, y1] = at(deg, 88);
-      const [x2, y2] = at(deg, isMajor ? 77 : 83);
-      const red = v >= redFrom;
-      svg += `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="${red ? '#ff4b3a' : isMajor ? '#f2f0ea' : 'rgba(242,240,234,0.5)'}" stroke-width="${isMajor ? 2.2 : 1}" stroke-linecap="round"/>`;
-      if (isMajor) {
-        const [tx, ty] = at(deg, 63);
-        svg += `<text x="${tx.toFixed(2)}" y="${(ty + 4).toFixed(2)}" text-anchor="middle" class="dial-num${red ? ' red' : ''}">${Math.round(v)}</text>`;
-      }
-    }
-    g.innerHTML = svg;
+    // a car whose top speed is past the usual scale (the sports car, the performance EV) gets a bar that reaches it
+    dialScale.max = Math.max(topSpeedMph[mode] || 80, mode === 'car' && drive?.speed ? drive.speed * 2.237 : 0);
   }
 
   // Keys in the city's own keycaps; a controller's buttons as the runtime draws them for that controller.
@@ -1055,6 +1058,8 @@ async function initApp() {
     cm.traffic = trafficSystem;
     // a bus: on at a stop, where its driver waits for the player, and off at the next one
     const p = cm.entities.person;
+    // on a bench, a chair or the bleachers: up again
+    if (was === 'person' && p.sitting) { cm.standUp(); return; }
     if (was === 'person' && p.onBus) {
       const ride = trafficSystem.busRide();
       if (ride && !ride.stopped && !ride.gone) { showNotice('The bus will stop at the next stop'); return; }
@@ -1076,6 +1081,7 @@ async function initApp() {
     }
     const choice = cm.enterOrExit(parkedCars, trafficSystem);
     if (!choice) return;
+    if (choice.sit) { cm.sitDown(choice.sit); return; }
     const car = cm.entities.car;
     let drop = null;
     if (choice.parked || choice.moving || choice.machine || choice.rack || choice.stairs) {
@@ -1405,27 +1411,11 @@ async function initApp() {
     elLocation.replaceChildren(...nodes);
   }
 
-  // The vehicle's name on the dial, on two lines when it's too wide to sit between the dial's numbers
+  // The vehicle's name over the speed
   function setDialName(label) {
     elMode.dataset.label = label;
-    const words = String(label || '').split(' ');
-    const lines = [];
-    if (label.length <= 12 || words.length < 2) lines.push(label);
-    else {
-      let best = 1, worst = Infinity;
-      for (let i = 1; i < words.length; i++) {
-        const a = words.slice(0, i).join(' ').length, b = words.slice(i).join(' ').length, w = Math.max(a, b);
-        if (w < worst) { worst = w; best = i; }
-      }
-      lines.push(words.slice(0, best).join(' '), words.slice(best).join(' '));
-    }
-    const top = lines.length > 1 ? 64 : 72;
-    elMode.replaceChildren(...lines.map((line, i) => {
-      const t = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-      t.setAttribute('x', '100'); t.setAttribute('y', String(top + i * 11));
-      t.textContent = line;
-      return t;
-    }));
+    elMode.textContent = String(label || '');
+    elMode.title = elMode.textContent;
   }
 
   function teleportTo(x, z, heading = Math.PI, lookUp) {
@@ -1910,7 +1900,7 @@ async function initApp() {
       const mph = Math.round(mphExact);
       if (elSpeed && mph !== hud.shownMph) { hud.shownMph = mph; elSpeed.textContent = String(mph); }
       if (elSpeedMeter && dialScale.max) {
-        elSpeedMeter.style.transform = `rotate(${-DIAL_SWEEP + Math.min(1, mphExact / dialScale.max) * DIAL_SWEEP * 2}deg)`;
+        elSpeedMeter.style.transform = `scaleX(${Math.min(1, mphExact / dialScale.max)})`;
       }
       // the gear and revs are worked out ten times a second, which is the rate the engine sound reads them at
       if (geared && elGear && hud.clock - hud.lastClock >= 0.1) {

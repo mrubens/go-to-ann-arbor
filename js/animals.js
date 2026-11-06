@@ -1,5 +1,5 @@
 // Ann Arbor's animals, near the player only: squirrels on the Diag, the campus lawns, the parks and the
-// neighborhoods' street and yard trees.
+// neighborhoods' street and yard trees; the river's birds (river-birds.js) and the Arb's deer at dawn and dusk (deer.js).
 //
 // THE RULE ABOVE EVERYTHING: animals are never struck, hurt or knocked down by anything (a car, a bike, the
 // helicopter, the kayak, the player falling). They are no one's obstacle: never in the colliders, the knock-downs or
@@ -17,6 +17,7 @@ import { TIER } from './device-tier.js';
 import { log } from '../lamp-game.js';
 import { createSquirrelKit, poseSquirrel } from './animal-models.js';
 import { createRiverBirds } from './river-birds.js';
+import { createDeer } from './deer.js';
 
 const POPULATE = 62, RELEASE = 85; // alive within this far of the view (m); let go beyond this
 const MAX = TIER.stream ? 10 : 16; // alive at once
@@ -92,6 +93,7 @@ function buildAnimals(group) {
   for (const m of Object.values(kit.far)) group.add(m);
   const habitat = makeHabitat();
   const riverBirds = createRiverBirds(group, { parkAt: habitat.parkAt });
+  const deer = createDeer(group, { parkAt: habitat.parkAt });
 
   // --- trees, in cells -------------------------------------------------------------------------------------------
   let cells = new Map(), treeCount = 0, seenLength = -1, treesAt = -10;
@@ -686,6 +688,7 @@ function buildAnimals(group) {
     for (let i = 0; i < order.length; i++) draw(order[i], elapsed, order[i].d2, i < NEAR && order[i].d2 < NEAR_DIST * NEAR_DIST);
     for (const m of Object.values(kit.far)) m.instanceMatrix.needsUpdate = m.count > 0;
     riverBirds.update(dt, elapsed, ctx, threats);
+    deer.update(dt, elapsed, ctx, threats);
 
     if (!reported && treeCount > 0) {
       reported = true;
@@ -705,7 +708,8 @@ function buildAnimals(group) {
     stats: kit.stats,
     get count() { return alive.size; },
     riverBirds,
-    dispose() { kit.dispose(); riverBirds.dispose(); }
+    deer,
+    dispose() { kit.dispose(); riverBirds.dispose(); deer.dispose(); }
   };
 }
 

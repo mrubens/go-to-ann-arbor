@@ -275,14 +275,14 @@ function createOutdoorSeating(group, data) {
       // both benches, three places along each
       for (const side of [-1, 1]) for (const a of [-0.6, 0, 0.6]) {
         const ox = Math.cos(s.yaw) * a + Math.sin(s.yaw) * side * 0.63, oz = -Math.sin(s.yaw) * a + Math.cos(s.yaw) * side * 0.63;
-        seats.push({ x: s.x + ox, z: s.z + oz, y: g + 0.47, yaw: s.yaw + (side > 0 ? Math.PI : 0), kind: 'bench' });
+        seats.push({ x: s.x + ox, z: s.z + oz, y: g + 0.47, yaw: s.yaw + (side > 0 ? Math.PI : 0), kind: 'bench', of: obstacles.length - 1 });
       }
     }
     for (const [dx, dz, yaw] of s.chairs) {
       const x = s.x + dx, z = s.z + dz, cg = floorAt(x, z);
       const ci = put(chairs, x, cg, z, yaw);
       obstacles.push({ x, z, r: 0.26, kind: 'chair', height: 0.86, parts: [chairs, ci] });
-      seats.push({ x, z, y: cg + 0.47, yaw, kind: 'chair' });
+      seats.push({ x, z, y: cg + 0.47, yaw, kind: 'chair', of: obstacles.length - 1 });
     }
   }
   for (const r of rails) put(railing, r.x, floorAt(r.x, r.z), r.z, r.yaw);

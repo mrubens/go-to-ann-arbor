@@ -861,96 +861,95 @@ body.hud-minimized .icon-show {
    Bottom right: speed cluster & camera switcher
    ------------------------------------------------------------------------------------------------------------------ */
 .cluster {
-  width: 284px;
+  width: 272px;
   overflow: hidden;
 }
 
 .gauge {
-  padding: 12px 14px 8px;
+  padding: 13px 16px 15px;
 }
 
-.dial {
-  display: block;
-  width: 200px;
-  max-width: 100%;
-  margin: 0 auto;
-  height: auto;
-  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.55));
+.gauge-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.dial text {
-  font-family: var(--font-sign);
-  fill: #f2f0ea;
-}
-
-.dial-num {
-  font-size: 11px;
-  font-weight: 600;
-  fill: rgba(242, 240, 234, 0.9);
-  font-variant-numeric: tabular-nums;
-}
-
-.dial-num.red {
-  fill: #ff6a58;
-}
-
-.dial-mode {
-  font-size: 8.5px;
-  font-weight: 700;
-  letter-spacing: 0.22em;
+.gauge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  fill: rgba(242, 240, 234, 0.45) !important;
+  color: var(--text-3);
+}
+
+.gauge-alt {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+body[data-mode='helicopter'] .gauge-alt {
+  opacity: 1;
+}
+
+.gauge-alt-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.gauge-speed {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 5px;
 }
 
 #hud-speed {
-  font-size: 38px;
+  font-size: 42px;
   font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.035em;
   font-variant-numeric: tabular-nums;
 }
 
-.dial-unit {
-  font-size: 8.5px;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  fill: rgba(242, 240, 234, 0.5) !important;
+.gauge-unit {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
 }
 
-.dial-alt {
-  font-size: 9px;
-  font-weight: 600;
-  fill: #ffb08c !important;
-  font-variant-numeric: tabular-nums;
-  opacity: 0;
-  transition: opacity 0.3s ease;
+.gauge-meter {
+  position: relative;
+  height: 4px;
+  margin-top: 12px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
 }
 
-.dial-alt-label {
-  letter-spacing: 0.14em;
-  fill: rgba(242, 240, 234, 0.5) !important;
-}
-
-body[data-mode='helicopter'] .dial-alt {
-  opacity: 1;
-}
-
-.dial-gear {
-  font-size: 10px;
-  font-weight: 700;
-  fill: #ffb08c !important;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-body[data-geared='1'] .dial-gear {
-  opacity: 1;
-}
-
-.dial-needle {
-  transform-box: view-box;
-  transform-origin: 100px 100px;
-  transform: rotate(-135deg);
-  transition: transform 0.06s linear;
-  filter: drop-shadow(1px 2px 1.5px rgba(0, 0, 0, 0.6));
+/* Speed as a share of the mode's top speed */
+#hud-speed-meter {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--text);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 0.25s linear;
 }
 
 .camera-switch {
@@ -1316,7 +1315,8 @@ body[data-geared='1'] .dial-gear {
   .brand { height: 44px; padding: 0 12px; }
   .repo-link { display: flex; align-items: center; gap: 4px; min-height: 44px; font-size: 12px; }
   .radar { width: 220px; height: 148px; }
-  .cluster { width: 200px; }
+  .cluster { width: 220px; }
+  #hud-speed { font-size: 34px; }
   .fullmap-title > div { display: none; }
   .fullmap-title { padding: 9px; }
   .fullmap-footer { max-width: calc(100% - 2 * var(--edge)); bottom: calc(var(--edge) + 34px); }

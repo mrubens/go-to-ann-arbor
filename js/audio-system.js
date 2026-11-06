@@ -13,7 +13,7 @@ const smooth = (param, value, now, time = 0.035, immediate = false) => {
 // [ref distance, range] (m) of each animal's call
 // the Cube's clang when a car hits it (the-cube.js), heard across Regents Plaza
 const STEEL_REACH = { clang: [5, 140] };
-const ANIMAL_REACH = { chatter: [1.5, 30], quack: [3, 70], honk: [6, 150], hiss: [1.2, 18], wingbeat: [2, 40], hawk: [40, 420] };
+const ANIMAL_REACH = { chatter: [1.5, 30], quack: [3, 70], honk: [6, 150], hiss: [1.2, 18], wingbeat: [2, 40], hawk: [40, 420], snort: [4, 90] };
 
 // Direct sound is muffled behind buildings; the shared reflection path keeps some diffuse sound around corners.
 // All voices share one short convolution and the existing collision grid, with no mesh traversal or per-voice reverb.

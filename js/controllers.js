@@ -1521,6 +1521,9 @@ class ThirdPersonControllerManager {
     // a car going by in traffic (traffic.js), within reach
     const passing = traffic?.nearestCar(p.position.x, p.position.z, 5);
     if (passing != null && passing / 5 < Math.min(1, score)) { score = passing / 5; best = { mode: 'car', moving: true }; }
+    // a bench, a chair or a place on the bleachers (seats.js), sat on from beside it; nearer than anything else in reach
+    const chair = !p.swimming && (p.grounded ?? true) ? this.seats?.nearest(p.position.x, p.position.z, 1.5, p.position.y, facing) : null;
+    if (chair && chair.d / 1.5 * facing(chair.seat.x, chair.seat.z) * 0.8 < score) return { mode: 'person', sit: chair.seat };
     if (best) {
       p.riding = best.mode;
       this.entities[best.mode].leftEmpty = false;
@@ -1881,7 +1884,8 @@ class ThirdPersonControllerManager {
         p._charHidden = false;
         if (p.mesh) p.mesh.visible = true;
         const air = p.position.y - this.getGroundHeight(p.position.x, p.position.z, 'person');
-        if (p.chute) p.rig.skydive(dt, p.position.x, p.position.y + 0.5 + 0.45 * p.chute.open, p.position.z, p.heading, p.chute.flat || 0, p.chute.bank || 0, p.chute.track || 0, p.chute.open);
+        if (p.sitting) p.rig.perch(this._sitRoot(p), this._sitPose(p.sitting));
+        else if (p.chute) p.rig.skydive(dt, p.position.x, p.position.y + 0.5 + 0.45 * p.chute.open, p.position.z, p.heading, p.chute.flat || 0, p.chute.bank || 0, p.chute.track || 0, p.chute.open);
         else if (p.fallen?.getUp >= 0) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, 0, true, DIVE_GET_UP + p.fallen.getUp);
         else if (p.swimming) p.rig.swim(dt, p.position.x, (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1) + Math.min(0, p.position.y + 1 - (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1)), p.position.z, p.heading, Math.min(1, Math.abs(p.speed) / 1.8));
         else if (!p.fallen) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, air > 0.02 ? air : 0);
@@ -2362,8 +2366,62 @@ class ThirdPersonControllerManager {
     p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
   }
 
+  // Sitting on a bench, a chair or the bleachers (seats.js, from enterOrExit): the hips on the seat and the feet on the
+  // ground or the footboard before it, facing the way it faces; up again (standUp) with the same press, a step on the
+  // stick or a jump, back where they stood
+  sitDown(seat) {
+    const p = this.entities.person;
+    const footY = seat.y == null ? p.position.y : seat.y - 0.44;
+    const hipY = seat.y == null ? 0.47 : seat.y - footY;
+    p.sitting = { seat, hipY, from: { x: p.position.x, y: p.position.y, z: p.position.z }, settle: 0 };
+    p.position.set(seat.x, footY, seat.z);
+    p.heading = seat.yaw;
+    p.speed = p.verticalVel = 0;
+    p.grounded = true;
+    log(`[seats] sat down on a ${seat.kind === 'bleacher' ? 'bleacher' : seat.kind}`);
+  }
+  standUp() {
+    const p = this.entities.person;
+    if (!p.sitting) return;
+    const { from } = p.sitting;
+    p.sitting = null;
+    p.position.set(from.x, from.y, from.z);
+    p.speed = p.verticalVel = 0;
+    p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
+    log('[seats] stood up');
+  }
+
+  _sitRoot(p) {
+    const r = this._sitRootObj || (this._sitRootObj = new THREE.Object3D());
+    r.position.copy(p.position);
+    r.rotation.set(0, p.heading, 0);
+    return r;
+  }
+  // perch's pose (pedestrians.js) for sitting: hips on the seat, sitting back a little, hands on the thighs, feet
+  // flat a shin's length ahead
+  _sitPose(st) {
+    const h = st.hipY, o = this._sitPoseObj || (this._sitPoseObj = { hip: [0, 0, 0], shoulder: [0, 0, 0], hand: [0, 0, 0], foot: [0, 0, 0], standing: false });
+    o.hip[1] = h; o.hip[2] = -0.04;
+    o.shoulder[1] = h + 0.52; o.shoulder[2] = -0.1;
+    o.hand[0] = 0.16; o.hand[1] = h + 0.13; o.hand[2] = 0.3;
+    o.foot[0] = 0.13; o.foot[1] = 0.07; o.foot[2] = Math.min(0.5, 0.2 + h * 0.62);
+    return o;
+  }
+
   updatePerson(dt) {
     const p = this.entities.person;
+    if (p.sitting) {
+      const st = p.sitting, seat = st.seat;
+      // moved off it some other way (a teleport, a reset), or the seat knocked over under them: no longer sitting
+      if (seat.box?.knock?.down || Math.hypot(p.position.x - seat.x, p.position.z - seat.z) > 0.3 || this.activeMode !== 'person') { p.sitting = null; p.rig.placed = false; }
+      else {
+        st.settle = Math.min(1, st.settle + dt * 1.2);
+        p.speed = p.verticalVel = 0;
+        const k = this.keys;
+        if (st.settle > 0.35 && (k.up || Math.max(k.forward || 0, k.backward || 0, k.left || 0, k.right || 0) > 0.5)) this.standUp();
+        else return;
+      }
+    }
     if (p.onBus) {
       const ride = this.traffic?.busRide();
       if (ride && !ride.gone) { this.rideAlong(ride); p.speed = 0; return; }
