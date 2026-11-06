@@ -199,6 +199,12 @@
       "license" : "CC-BY-SA-4.0",
       "name" : "Mapillary street-level imagery (decides house and shopfront looks; no photos ship)",
       "url" : "https://www.mapillary.com"
+    },
+    {
+      "author" : "City of Ann Arbor",
+      "license" : "None",
+      "name" : "Parcels with assessor's year built and storeys",
+      "url" : "https://a2maps.a2gov.org/a2arcgis/rest/services/WaterServiceLeadMaterialAll/MapServer/3"
     }
   ]
 }

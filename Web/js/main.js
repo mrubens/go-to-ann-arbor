@@ -862,6 +862,9 @@ async function initApp() {
   const elAltitude = document.getElementById('hud-altitude');
   const elGear = document.getElementById('hud-gear');
   const elRpm = document.getElementById('hud-rpm');
+  const elRpmMeter = document.getElementById('hud-rpm-meter');
+  const elRaceRpm = document.getElementById('race-rpm');
+  const elRevFill = document.getElementById('race-rev-fill');
   const elLocation = document.getElementById('hud-location');
   const elControlsHint = document.getElementById('hud-controls-hint');
   const gamepadControls = new GamepadControls(controllerManager, cameraSystem, {
@@ -925,17 +928,59 @@ async function initApp() {
     shiftGear(hudBox, speedMps, hud.load, hud.clock, hud.first, CAR_RATIOS);
     hud.first = false;
     const rpm = engineRPM(hudBox, speedMps, hud.load, CAR_RATIOS, 780);
-    const gear = speedMps < 0.5 ? 'N' : !forward ? 'R' : 'D' + (hudBox.gear + 1);
+    const gear = speedMps < 0.5 ? 'N' : !forward ? 'R' : String(hudBox.gear + 1);
     return { gear, rpm: Math.round(rpm / 50) * 50 };
   }
 
-  // The speedometer: the speed in large digits over a bar filled to its share of the mode's top speed
+  // The speedometer: a 270-degree analog dial whose scale fits the mode (a car's to 100, a walker's to 20)
+  const DIAL_SWEEP = 135;
   const dialScale = { max: 0 };
   function buildDial(mode, drive = null) {
-    // a car whose top speed is past the usual scale (the sports car, the performance EV) gets a bar that reaches it
-    dialScale.max = Math.max(topSpeedMph[mode] || 80, mode === 'car' && drive?.speed ? drive.speed * 2.237 : 0);
+    const g = document.getElementById('dial-ticks');
+    if (!g) return;
+    const top = Math.max(topSpeedMph[mode] || 80, mode === 'car' && drive?.speed ? drive.speed * 2.237 : 0);
+    const major = top <= 20 ? 5 : top <= 50 ? 10 : 20;
+    const max = Math.ceil(top / major) * major;
+    if (dialScale.max === max && g.childNodes.length) return;
+    dialScale.max = max;
+    const minor = major / 5;
+    const at = (deg, r) => [100 + r * Math.sin(deg * Math.PI / 180), 100 - r * Math.cos(deg * Math.PI / 180)];
+    let svg = '';
+    const redFrom = mode === 'car' || mode === 'helicopter' ? max * 0.85 : Infinity;
+    for (let v = 0; v <= max + 1e-6; v += minor) {
+      const isMajor = Math.abs(v / major - Math.round(v / major)) < 1e-6;
+      const deg = -DIAL_SWEEP + (v / max) * DIAL_SWEEP * 2;
+      const [x1, y1] = at(deg, 88);
+      const [x2, y2] = at(deg, isMajor ? 77 : 83);
+      const red = v >= redFrom;
+      svg += `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="${red ? '#ff4b3a' : isMajor ? '#f2f0ea' : 'rgba(242,240,234,0.5)'}" stroke-width="${isMajor ? 2.2 : 1}" stroke-linecap="round"/>`;
+      if (isMajor) {
+        const [tx, ty] = at(deg, 63);
+        svg += `<text x="${tx.toFixed(2)}" y="${(ty + 4).toFixed(2)}" text-anchor="middle" class="dial-num${red ? ' red' : ''}">${Math.round(v)}</text>`;
+      }
+    }
+    g.innerHTML = svg;
   }
 
+  // The tachometer's scale, drawn once: 0 to 8 thousand rpm, the last 1.5 in red
+  (function buildTach() {
+    const g = document.getElementById('tach-ticks');
+    if (!g) return;
+    const at = (deg, r) => [100 + r * Math.sin(deg * Math.PI / 180), 100 - r * Math.cos(deg * Math.PI / 180)];
+    let svg = '';
+    for (let v = 0; v <= 8.001; v += 0.5) {
+      const major = Math.abs(v - Math.round(v)) < 1e-6;
+      const deg = -DIAL_SWEEP + (v / 8) * DIAL_SWEEP * 2;
+      const red = v >= 6.5;
+      const [x1, y1] = at(deg, 88), [x2, y2] = at(deg, major ? 77 : 83);
+      svg += `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="${red ? '#ff4b3a' : major ? '#f2f0ea' : 'rgba(242,240,234,0.5)'}" stroke-width="${major ? 2.2 : 1}" stroke-linecap="round"/>`;
+      if (major) {
+        const [tx, ty] = at(deg, 63);
+        svg += `<text x="${tx.toFixed(2)}" y="${(ty + 4).toFixed(2)}" text-anchor="middle" class="dial-num${red ? ' red' : ''}">${Math.round(v)}</text>`;
+      }
+    }
+    g.innerHTML = svg;
+  })();
   // Keys in the city's own keycaps; a controller's buttons as the runtime draws them for that controller.
   function renderControlHints(mode, on = input()) {
     if (!elControlsHint) return;
@@ -961,6 +1006,8 @@ async function initApp() {
       return item;
     });
     elControlsHint.replaceChildren(...items);
+    const helpMode = document.getElementById('help-mode');
+    if (helpMode) helpMode.textContent = controllerManager.getActiveEntity().label;
   }
 
   // The keys named on the HUD's buttons (data-key, a key's code) and, with a controller, the button that does the same
@@ -1583,6 +1630,9 @@ async function initApp() {
       case 'KeyV':
         cycleCamera(e.shiftKey ? -1 : 1);
         break;
+      case 'Slash':
+        document.getElementById('help-popover')?.togglePopover();
+        break;
       case 'KeyH':
         if (hudToggleBtn) hudToggleBtn.click();
         break;
@@ -2143,14 +2193,19 @@ async function initApp() {
       const mph = Math.round(mphExact);
       if (elSpeed && mph !== hud.shownMph) { hud.shownMph = mph; elSpeed.textContent = String(mph); }
       if (elSpeedMeter && dialScale.max) {
-        elSpeedMeter.style.transform = `scaleX(${Math.min(1, mphExact / dialScale.max)})`;
+        elSpeedMeter.style.transform = `rotate(${-DIAL_SWEEP + Math.min(1, mphExact / dialScale.max) * DIAL_SWEEP * 2}deg)`;
       }
       if (split.drawn) split.second.drawHud(topSpeedMph[split.second.cm.activeMode]);
       // the gear and revs are worked out ten times a second, which is the rate the engine sound reads them at
-      if (geared && elGear && hud.clock - hud.lastClock >= 0.1) {
+      if (dialMode === 'car' && elGear && hud.clock - hud.lastClock >= 0.1) {
         const read = gearReadout(Math.abs(ent.speed), ent.speed >= 0);
         if (read.gear !== hud.shownGear) { hud.shownGear = read.gear; elGear.textContent = read.gear; }
-        if (elRpm && read.rpm !== hud.shownRpm) { hud.shownRpm = read.rpm; elRpm.textContent = String(read.rpm); }
+        if (elRpm && read.rpm !== hud.shownRpm) {
+          hud.shownRpm = read.rpm; elRpm.textContent = (read.rpm / 1000).toFixed(1);
+          if (elRaceRpm) elRaceRpm.textContent = String(read.rpm);
+          if (elRevFill) elRevFill.style.transform = `scaleX(${Math.min(1, read.rpm / 8000)})`;
+          if (elRpmMeter) elRpmMeter.style.transform = `rotate(${-DIAL_SWEEP + Math.min(1, read.rpm / 8000) * DIAL_SWEEP * 2}deg)`;
+        }
       }
     }
     if (fpsTimer >= 0.25) {
