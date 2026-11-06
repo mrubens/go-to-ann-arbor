@@ -1636,10 +1636,16 @@ function carPlateTexture() {
  * Every mask is built once and shared by the colour, roughness, metalness & emissive graphs (TSL turns nodes used
  * more than once into temporaries), so the fragment shader evaluates each SDF a single time.
  */
-function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false } = {}) {
-  const cacheKey = `${spec.name}_${fixedColorHex ?? 'instanced'}`;
+// One car's paint (`fixedColorHex`) is a uniform, so cars of one kind in any colour make the same shader, which the GPU
+// compiles once. With a `slot` (a player's car: controllers.js) there's one material per kind for that player, its paint
+// set again each time they take another car of that kind, so getting into a car whose kind has been driven (or made
+// ready in advance: main.js) builds and compiles nothing.
+function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false, slot = null } = {}) {
+  const cacheKey = slot !== null && fixedColorHex !== null ? `${spec.name}_slot${slot}` : `${spec.name}_${fixedColorHex ?? 'instanced'}`;
   if (_carMaterialCache.has(cacheKey)) {
-    return _carMaterialCache.get(cacheKey);
+    const made = _carMaterialCache.get(cacheKey);
+    if (fixedColorHex !== null) made.userData.paint?.value.setHex(fixedColorHex);
+    return made;
   }
 
   const L = carLayout(spec);
@@ -1647,7 +1653,8 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false } 
   const fixed = fixedColorHex !== null;
   const stateUniform = fixed ? uniform(new THREE.Vector4(0, 0, 0, 0)) : null;
   const state = fixed ? stateUniform : attribute('carState', 'vec4');
-  const paint = fixed ? color(fixedColorHex) : attribute('paintColor', 'vec3');
+  const paintUniform = fixed ? uniform(new THREE.Color(fixedColorHex)) : null;
+  const paint = fixed ? paintUniform : attribute('paintColor', 'vec3');
 
   // Decode per-instance style code (livery 0..7, metallic 0..1, trim 0..3, wheel 0..3) in the vertex stage
   const wCode = fixed ? float(0.0) : state.w;
@@ -2175,7 +2182,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false } 
 
   const mat = new THREE.MeshStandardNodeMaterial();
   mat.envMapIntensity = 1.35;
-  if (fixed) mat.userData.carState = stateUniform;
+  if (fixed) { mat.userData.carState = stateUniform; mat.userData.paint = paintUniform; }
   mat.colorNode = colorFn();
   mat.roughnessNode = roughFn();
   mat.metalnessNode = metalFn();

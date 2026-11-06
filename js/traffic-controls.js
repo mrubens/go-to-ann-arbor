@@ -299,6 +299,9 @@ function buildTrafficControls(group, network) {
       dummy.scale.set(0.12, 0.12, reach);
       dummy.rotation.set(0, Math.atan2(e.rx, e.rz), 0);
       put('arm');
+      // its arm's far end and its top over the ground, what birds perch along (city-birds.js)
+      const [ex, ez] = at(e, s, po - reach);
+      standing.arm = { x: ex, z: ez, y: ARM_Y + 0.06 };
       const lanes = e.lanes.slice().sort((a, b) => a - b).slice(-4);
       for (const o of lanes) {
         if (po - o > reach) continue;

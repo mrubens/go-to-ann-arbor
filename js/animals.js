@@ -1,5 +1,6 @@
 // Ann Arbor's animals, near the player only: squirrels on the Diag, the campus lawns, the parks and the
-// neighborhoods' street and yard trees; the river's birds (river-birds.js) and the Arb's deer at dawn and dusk (deer.js).
+// neighborhoods' street and yard trees; the river's birds (river-birds.js), the town's pigeons, sparrows, robins and
+// crows (city-birds.js) and the Arb's deer at dawn and dusk (deer.js).
 //
 // THE RULE ABOVE EVERYTHING: animals are never struck, hurt or knocked down by anything (a car, a bike, the
 // helicopter, the kayak, the player falling). They are no one's obstacle: never in the colliders, the knock-downs or
@@ -18,6 +19,7 @@ import { log } from '../lamp-game.js';
 import { createSquirrelKit, poseSquirrel } from './animal-models.js';
 import { createRiverBirds } from './river-birds.js';
 import { createDeer } from './deer.js';
+import { createCityBirds } from './city-birds.js';
 
 const POPULATE = 62, RELEASE = 85; // alive within this far of the view (m); let go beyond this
 const MAX = TIER.stream ? 10 : 16; // alive at once
@@ -94,6 +96,7 @@ function buildAnimals(group) {
   const habitat = makeHabitat();
   const riverBirds = createRiverBirds(group, { parkAt: habitat.parkAt });
   const deer = createDeer(group, { parkAt: habitat.parkAt });
+  const cityBirds = createCityBirds(group, { parkAt: habitat.parkAt, treesNear: (x, z, r, out) => treesNear(x, z, r, out) });
 
   // --- trees, in cells -------------------------------------------------------------------------------------------
   let cells = new Map(), treeCount = 0, seenLength = -1, treesAt = -10;
@@ -689,6 +692,7 @@ function buildAnimals(group) {
     for (const m of Object.values(kit.far)) m.instanceMatrix.needsUpdate = m.count > 0;
     riverBirds.update(dt, elapsed, ctx, threats);
     deer.update(dt, elapsed, ctx, threats);
+    cityBirds.update(dt, elapsed, ctx, threats, player);
 
     if (!reported && treeCount > 0) {
       reported = true;
@@ -709,7 +713,8 @@ function buildAnimals(group) {
     get count() { return alive.size; },
     riverBirds,
     deer,
-    dispose() { kit.dispose(); riverBirds.dispose(); deer.dispose(); }
+    cityBirds,
+    dispose() { kit.dispose(); riverBirds.dispose(); deer.dispose(); cityBirds.dispose(); }
   };
 }
 

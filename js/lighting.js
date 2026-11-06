@@ -26,6 +26,7 @@ import { SunLightNode } from 'three/addons/lights/SunLightNode.js';
 import { cityUniforms } from './tsl-materials.js';
 import { groundHeight } from './terrain.js';
 import { hot } from '../lamp-game.js';
+import { TIER } from './device-tier.js';
 import { weatherPreset } from './weather.js';
 
 // Lamp: the lighting systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so
@@ -273,7 +274,7 @@ class LightingSystem {
     this.sunLight.position.copy(TIME_PRESETS.golden.sunDir);
     this.sunLight.castShadow = true;
     // Two cascades share an atlas: use 1536px tiles for fast shadow passes without pegging the GPU.
-    const tile = 1536;
+    const tile = TIER.shadowTile || 1536;
     this.sunLight.shadow.mapSize.set(tile, tile);
     this.sunLight.shadow.camera.near = 0.5;
     this.sunLight.shadow.camera.far = 200;
@@ -392,7 +393,8 @@ class LightingSystem {
     // stays sharp with 1536px tiles, and expand it with altitude (helicopter / observatory) so shadows reach down to street level.
     // Lamp: altitude above the ground under the camera (terrain.js)
     const altitude = focusPos && Number.isFinite(focusPos.y) ? Math.max(0, focusPos.y - groundHeight(focusPos.x, focusPos.z)) : 0;
-    this.sunLight.shadow.camera.far = Math.max(200, Math.min(560, 180 + altitude * 1.5));
+    const near = TIER.shadowFar || 200; // (an Xbox: 140 m, device-tier.js)
+    this.sunLight.shadow.camera.far = Math.max(near, Math.min(560, near - 20 + altitude * 1.5));
   }
 }
 

@@ -4,6 +4,7 @@ import { TOWN_BOUNDS, inTown } from './city-config.js';
 import { groundHeight, cityGround } from './terrain.js';
 import { coreTriangles, coreHeightAt } from './ground-core.js';
 import { log } from '../lamp-game.js';
+import { TIER } from './device-tier.js';
 
 // Washtenaw County around the detailed city: the real hills and the Huron valley (terrain.js) as farm fields, woodlots
 // and the suburbs' tree cover, out to the fogged horizon. Nothing here is driven on; the city's edge is a lawn border.
@@ -142,6 +143,8 @@ function finishOutskirts(scene, group, pos, nx, nz, x0, x1, z0, z1, mat) {
 }
 
 // The city's mesh, coarsely cut, 0.9 m under it, over the city's bounds
+// how far the coarse ground is kept under the fine: on an Xbox the fine ground strays further (TIER.ground, terrain.js)
+const UNDER_DROP = TIER.ground ? 3 : 0.9;
 function undergroundOf({ core, under }, B, mat) {
   const tri = coreTriangles(core, under), size = core.size;
   const index = new Map(), pos = [], idx = [];
@@ -150,7 +153,7 @@ function undergroundOf({ core, under }, B, mat) {
     let i = index.get(k);
     if (i === undefined) {
       index.set(k, (i = pos.length / 3));
-      pos.push(core.x0 + cx * core.step, coreHeightAt(core, k) - 0.9, core.z0 + cz * core.step);
+      pos.push(core.x0 + cx * core.step, coreHeightAt(core, k) - UNDER_DROP, core.z0 + cz * core.step);
     }
     return i;
   };

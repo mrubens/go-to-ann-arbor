@@ -26,10 +26,12 @@ import { buildTrafficControls } from './traffic-controls.js';
 import { buildShopSigns } from './shop-signs.js';
 import { ThirdPersonControllerManager } from './controllers.js';
 import { TouchControls } from './touch-controls.js';
+import { reportTriangles, showTriangles } from './triangle-report.js';
 import { reportMemory, memoryCheckpoint, MEASURE_MEMORY } from './memory-report.js';
 import { gpuOnly, releaseUploaded, useRenderer } from './gpu-only.js';
-import { TIER } from './device-tier.js';
+import { TIER, XBOX } from './device-tier.js';
 import { GamepadControls } from './gamepad-controls.js';
+import { createSecondPlayer, createSplitView } from './split-screen.js';
 import { CameraSystem, CAMERA_PRESETS } from './cameras.js';
 import { LightingSystem, sunTimes } from './lighting.js';
 import { createKnockdowns } from './knockdowns.js';
@@ -38,7 +40,7 @@ import { createWaterSplash } from './water-splash.js';
 import { createSkidEffects } from './skid-effects.js';
 import { CityMapSystem } from './city-map.js';
 import { setupSceneCulling, updateSceneCulling, cullAlso, showShadowStandIns } from './scene-culling.js';
-import { loadTerrain, setPools, setOnTerrain, groundHeight, waterLevel, riverDepth, streamGround, updateGroundStreaming, streamNear } from './terrain.js';
+import { loadTerrain, setPools, setOnTerrain, groundHeight, waterLevel, riverDepth, streamGround, updateGroundStreaming, streamNear, groundStreamCenter } from './terrain.js';
 import { loadYardData, allYards } from './yards.js';
 import { buildCascades, CASCADE_START } from './cascades.js';
 import { buildRiverPeople } from './river-people.js';
@@ -55,6 +57,7 @@ import { createPlanes } from './planes.js';
 import { createAirport } from './airport.js';
 import { createScooters } from './scooters.js';
 import { buildBikeRacks } from './bike-racks.js';
+import { probe, gpuTimer } from './gpu-probe.js';
 import { buildPools } from './pools.js';
 import { buildOutdoorSeating } from './outdoor-seating.js';
 import { buildBallDiamonds } from './ball-diamonds.js';
@@ -69,6 +72,7 @@ import { waterDisturb } from './tsl-materials.js';
 import { buildRoadWork } from './road-work.js';
 import { buildPotholes } from './potholes.js';
 import { VideoRecorder } from './recorder.js';
+import { createGroundShade } from './ground-shade.js';
 
 // In its own window on the Mac the top strip is the title bar, which takes the clicks: the top panels sit below it
 if (window.webkit?.messageHandlers?.lampNative && /Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) document.documentElement.classList.add('mac-window');
@@ -102,6 +106,17 @@ async function initApp() {
     if (loadingTrack) loadingTrack.classList.remove('is-indeterminate');
     loadingFill.style.transform = `scaleX(${Math.min(1, Math.max(0, p))})`;
   };
+
+  // The words over everything once the graphics are gone (see the renderer below)
+  function graphicsGone(why) {
+    log(`[device] graphics lost (${why})`);
+    if (document.getElementById('graphics-gone')) return;
+    const d = document.createElement('div');
+    d.id = 'graphics-gone';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:#0d1117;color:#fff;font:600 44px system-ui,sans-serif;text-align:center;padding:60px';
+    d.innerHTML = '<div>The graphics stopped</div><div style="font-weight:400;font-size:30px;opacity:.75;max-width:1100px">Close Go To Ann Arbor and open it again. You\'ll be back where you were.</div>';
+    document.body.appendChild(d);
+  }
 
   // Lamp: a start with the renderer kept (see the top of this file) shows no loading screen and doesn't wait for it
   let warmStart = false;
@@ -139,10 +154,25 @@ async function initApp() {
   // Kept through a change: a new one would compile every shader again.
   const renderer = await live.keep('renderer', async () => {
     const made = new THREE.WebGPURenderer({ antialias: QUALITY.antialias, powerPreference: 'high-performance', reversedDepthBuffer: true, forceWebGL: true });
-    await made.init();
+    try {
+      await made.init();
+    } catch (e) {
+      // no WebGL at all: the browser shuts the page out of 3D after its graphics were lost, until the app opens again
+      graphicsGone('no WebGL: ' + e.message);
+      throw e;
+    }
     return made;
   });
+  // The graphics lost (the Xbox drops the page's GPU context when it runs short, e.g. while a change builds most of
+  // the city again beside the old one): three.js then draws nothing for good, a black screen at 60 fps. Opening the
+  // page again doesn't help (its browser then refuses WebGL to the page until the app itself is opened again), so it
+  // says so on screen.
+  renderer.onDeviceLost = (info) => { renderer._isDeviceLost = true; graphicsGone(info?.message || 'no reason given'); };
+  if (renderer._isDeviceLost) graphicsGone('lost before this change');
   useRenderer(renderer);
+  // once a page: which GPU WebGL draws with and how fast its JavaScript runs (gpu-probe.js)
+  probe(renderer);
+  const gpuTime = gpuTimer(renderer);
   // Lamp's runtime draws it at 1920x1080 and fits that to the window (game() below).
   renderer.shadowMap.enabled = QUALITY.shadows;
   if (QUALITY.streetLights) renderer.lighting = new ClusteredLighting(256, 32, 28, 48);
@@ -274,7 +304,7 @@ async function initApp() {
   const outskirts = outskirtsPart.made;
   markInit('outskirts');
   await showLoadingStage('Building the Big House...');
-  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/stadium-geodata.js', 'js/campus-landmarks.js'] });
+  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/stadium-geodata.js', 'js/campus-landmarks.js', 'js/merge-static.js'] });
   // the parking structures, to drive up floor by floor; they stand in for the survey's blocks (parking-structures.js)
   const parkingPart = await live.keep('parkingStructures', () => cityPart((g) => buildParkingStructures(g), { cull: setupSceneCulling, still: true }),
     { inputs: [heights], from: ['js/parking-structures.js', 'data/parking-structures.json'] });
@@ -439,6 +469,10 @@ async function initApp() {
       controllerManager._colliderCells = null;
     };
   }
+  // where the sun's shadows aren't drawn (an Xbox, split screen), soft shade on the ground under what stands there
+  // and along the foot of the buildings (ground-shade.js)
+  const groundShade = createGroundShade(new THREE.Group(), { colliders: allColliders, peds: trafficSystem.peds });
+  scene.add(groundShade.group);
   // a hydrant knocked off its main gushes water (hydrant-spray.js)
   const hydrantSpray = createHydrantSpray(scene);
   const skidEffects = createSkidEffects(scene);
@@ -454,7 +488,7 @@ async function initApp() {
       { x: it.x + it.dx * it.height * 0.6, y: it.g, z: it.z + it.dz * it.height * 0.6 }, Math.min(1, 0.4 + spin * 0.2))
   });
   // Lamp: Ann Arbor's animals, near the player only; never anyone's obstacle (animals.js)
-  const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/deer.js'] });
+  const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
   // Lamp: the Cube on Regents Plaza, which turns when it's pushed or hit (the-cube.js)
   const cubePart = live.keep('cube', () => cityPart((g) => buildCube(g)), { inputs: [heights], from: ['js/the-cube.js'] });
   allColliders.push(cubePart.made.collider);
@@ -462,6 +496,17 @@ async function initApp() {
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
+  }
+  // On an Xbox the shadow passes draw the city's casters again for each cascade, on a CPU that pays far more for each
+  // draw: only what's a person's height or more casts (houses, trees, cars, walls), not the bike racks, posts and signs
+  if (XBOX && QUALITY.shadows) {
+    let small = 0;
+    for (const part of parts) part.group.traverse((o) => {
+      if (!o.isMesh || !o.castShadow || o.userData.shadowProxy || !o.geometry) return;
+      if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+      if ((o.geometry.boundingSphere?.radius ?? Infinity) < 0.9) { o.castShadow = false; small++; }
+    });
+    log(`[xbox] ${small} small kinds of thing no longer cast shadows`);
   }
   // What a part hooks on its scene's renders is on its group, which three.js never calls (the trees follow the view
   // camera for their level of detail, trees.js): the scene calls it for each part.
@@ -487,6 +532,7 @@ async function initApp() {
   controllerManager.docks = docksPart.made;
   controllerManager.seats = seatSpots;
   controllerManager.skatePark = skatePart.made;
+  controllerManager.bleachers = bleachersPart.made;
   controllerManager.mtbTrails = mtbPart.made;
   controllerManager.parking = parkingPart.made;
   controllerManager.bikeRacks = racksPart.made;
@@ -586,6 +632,8 @@ async function initApp() {
   if (![keptCamera.position.x, keptCamera.position.y, keptCamera.position.z, keptCamera.quaternion.w].every(Number.isFinite)) {
     keptCamera.position.set(0, 50, 100); keptCamera.quaternion.identity(); keptCamera.updateMatrixWorld(true);
   }
+  // a camera kept from an earlier run takes this tier's reach (the Xbox's is shorter: device-tier.js)
+  if (keptCamera.far !== (TIER.far || 60000)) { keptCamera.far = TIER.far || 60000; keptCamera.updateProjectionMatrix(); }
   const cameraSystem = new CameraSystem(renderer.domElement, controllerManager, keptCamera);
   cameraSystem.onResize(1920, 1080);
   const touchControls = new TouchControls(controllerManager);
@@ -598,6 +646,8 @@ async function initApp() {
     audioSystem.cue(it.kind === 'cone' ? 'thud' : 'crash', { x: it.x, y: it.g, z: it.z }, Math.min(1, (it.kind === 'cone' ? 0.25 : 0.4) + speed * 0.02));
     if (who === 'player' && speed > 8 && it.kind !== 'cone') log(`[road work] hit a ${it.kind} at ${Math.round(speed * 2.237)} mph`);
   };
+  // a parked bike the player runs into: a clatter as it goes, a thud where it lands (bike-racks.js)
+  const rackCue = (kind, at, k) => audioSystem.cue(kind, at, k);
   function updateSoundButton() {
     if (!soundButton) return;
     soundButton.disabled = !audioSystem.supported;
@@ -796,6 +846,14 @@ async function initApp() {
   };
   touchControls.onGetInOut = () => getInOrOut();
 
+  // the frame rate, between the name and the GitHub link (made here too, for a page opened before it was in index.html)
+  if (!document.getElementById('hud-fps')) {
+    const fps = document.createElement('span');
+    fps.className = 'brand-fps';
+    fps.setAttribute('aria-label', 'Frames a second');
+    fps.innerHTML = '<span id="hud-fps">--</span> fps';
+    document.querySelector('.brand-heading .repo-link')?.before(fps);
+  }
   const elFps = document.getElementById('hud-fps');
   const elMode = document.getElementById('hud-active-mode');
   const elCamera = document.getElementById('hud-active-camera');
@@ -815,9 +873,12 @@ async function initApp() {
     onGetInOut: getInOrOut,
     onToggleMap: () => mapSystem.toggleFullMap(!mapSystem.isFullMapOpen),
     onCloseMap: () => mapSystem.toggleFullMap(false),
+    onMapInput: (input, dt) => mapSystem.gamepad(input, dt),
     onRadio: (dir) => carRadio.tune(dir)
   });
   const carRadio = new CarRadio();
+  // split screen's state (see showSplit), here before anything that reads it
+  const split = { on: false, second: null, view: null, offered: false, kept: null, drawn: false };
 
   // The guide to each mode's controls, written once: the keys the city reads (by their codes, as controllers.js and the
   // keydown handler below have them) and the controller's buttons, sticks and triggers (as gamepad-controls.js reads
@@ -1252,6 +1313,7 @@ async function initApp() {
     // rain or snow falls only under the real sky
     precipitation.set(timeId === 'now' ? lightingSystem.weather : null);
     colorGrade.applyPreset(lightingSystem.lookId);
+    split.view?.grade.applyPreset(lightingSystem.lookId);
     timeButtons.forEach((btn) => {
       btn.classList.toggle('active', btn.getAttribute('data-time') === timeId);
     });
@@ -1625,6 +1687,23 @@ async function initApp() {
       job.push(o);
     });
 
+    // On an Xbox, or without shadows (a phone), and with no warm-up frame there, only what's within
+    // LATER_BEYOND of where the player starts is compiled behind the loading screen; the rest compiles while they play,
+    // a few at a time, well before they get there. ANGLE on the Xbox makes each shader slowly, and most are far off.
+    const later = [];
+    if (!QUALITY.shadows || XBOX) {
+      const { x, z } = groundStreamCenter();
+      const near = (o) => {
+        if (!o.geometry) return true;
+        let sphere = o.isInstancedMesh ? (o.boundingSphere ?? (o.computeBoundingSphere?.(), o.boundingSphere)) : null;
+        if (!sphere) { if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere(); sphere = o.geometry.boundingSphere; }
+        if (!sphere) return true;
+        compileSphere.copy(sphere).applyMatrix4(o.matrixWorld);
+        return Math.hypot(compileSphere.center.x - x, compileSphere.center.z - z) - compileSphere.radius < LATER_BEYOND;
+      };
+      for (let i = jobs.length - 1; i >= 0; i--) if (!jobs[i].some(near)) later.push(...jobs.splice(i, 1));
+    }
+
     await showLoadingStage(`Compiling scene shaders... 0 / ${jobs.length} batches`);
     setLoadingProgress(0);
     renderer.setRenderTarget(scenePass.renderTarget);
@@ -1656,6 +1735,87 @@ async function initApp() {
     renderer.setMRT(null);
     renderer.setRenderTarget(null);
     for (const o of culled) o.frustumCulled = true;
+    if (later.length) compileLater(later);
+  }
+  const LATER_BEYOND = 450, compileSphere = new THREE.Sphere();
+  // The shaders left for later, one at a time between frames: each takes the scene pass's target and every object
+  // drawn unculled only while it's taken (compileAsync reads them at once, then waits for the GPU's compile)
+  // (`detached`: objects made only to compile, in no scene: the cars a player might take, controllers.js)
+  async function compileLater(jobs, { detached = false, what = 'far parts' } = {}) {
+    const began = performance.now();
+    let count = 0;
+    for (const job of jobs) for (const object of job) {
+      await nextTask();
+      if (!object.parent && !detached) continue;
+      const wasCulled = [];
+      object.traverse((o) => { if (o.frustumCulled) { wasCulled.push(o); o.frustumCulled = false; } });
+      renderer.setRenderTarget(scenePass.renderTarget);
+      renderer.setMRT(sceneMRT);
+      let done;
+      try { done = renderer.compileAsync(object, cameraSystem.camera, scene); } catch (e) { console.warn('[compile]', e); }
+      renderer.setMRT(null);
+      renderer.setRenderTarget(null);
+      for (const o of wasCulled) o.frustumCulled = true;
+      await Promise.resolve(done).catch(() => {});
+      if (detached) object.traverse((o) => o.geometry?.dispose());
+      count++;
+    }
+    log(`[compile] ${count} shaders of ${what} compiled during play, in ${Math.round((performance.now() - began) / 1000)} s`);
+  }
+
+  // Lamp: on the Xbox, where ANGLE makes each shader slowly, the shaders of what's within `warmReach` of the player are
+  // made ahead of them, nearest first, one between frames: the hidden too (a tree cell, a street square, a house just
+  // streamed in), which would otherwise be made on the frame each first shows (arriving somewhere new stuttered for
+  // ~10 s). One of each material and geometry layout is enough; the scene's looked over every two seconds.
+  const warmSeen = new Set(), warmChecked = new WeakSet(), warmQueue = [], warmSphere = new THREE.Sphere();
+  let warmScanAt = 3, warming = false;
+  const warmKey = (o) => `${[o.material].flat().map((m) => m.id).join(',')}|${Object.keys(o.geometry.attributes).sort().join(',')}|${o.geometry.index ? 'i' : 'p'}|${o.isInstancedMesh ? 'n' : ''}${o.isBatchedMesh ? 'b' : ''}${o.castShadow ? 's' : ''}`;
+  const warmDistance = (o, x, z) => {
+    const s = (o.isInstancedMesh && o.boundingSphere) || o.geometry.boundingSphere;
+    if (!s) return 0;
+    warmSphere.copy(s).applyMatrix4(o.matrixWorld);
+    return Math.max(0, Math.hypot(warmSphere.center.x - x, warmSphere.center.z - z) - warmSphere.radius);
+  };
+  function warmAhead(now) {
+    if (now < warmScanAt) return;
+    warmScanAt = now + 2;
+    const { x, z } = cameraSystem.camera.position;
+    scene.traverse((o) => {
+      if (warmChecked.has(o) || !o.isMesh || !o.geometry?.attributes.position || o.userData.shadowProxy || !o.layers.test(cameraSystem.camera.layers)) return;
+      const key = o.userData.warmKey ??= warmKey(o);
+      if (warmSeen.has(key)) { warmChecked.add(o); return; }
+      if (warmDistance(o, x, z) > TIER.warmReach) return;
+      warmSeen.add(key);
+      warmChecked.add(o);
+      warmQueue.push(o);
+    });
+    if (!warming && warmQueue.length) warmQueued();
+  }
+  async function warmQueued() {
+    warming = true;
+    let count = 0;
+    while (warmQueue.length) {
+      await nextTask();
+      // the nearest to where the player is now
+      const { x, z } = cameraSystem.camera.position;
+      let best = 0;
+      for (let i = 1; i < warmQueue.length; i++) if (warmDistance(warmQueue[i], x, z) < warmDistance(warmQueue[best], x, z)) best = i;
+      const object = warmQueue.splice(best, 1)[0];
+      if (!object.parent) { warmSeen.delete(object.userData.warmKey); continue; }
+      const wasVisible = object.visible, wasCulled = object.frustumCulled;
+      object.visible = true; object.frustumCulled = false;
+      renderer.setRenderTarget(scenePass.renderTarget);
+      renderer.setMRT(sceneMRT);
+      let done;
+      try { done = renderer.compileAsync(object, cameraSystem.camera, scene); } catch (e) { console.warn('[compile]', e); }
+      renderer.setMRT(null);
+      renderer.setRenderTarget(null);
+      object.visible = wasVisible; object.frustumCulled = wasCulled;
+      await Promise.resolve(done).catch(() => {});
+      count++;
+    }
+    warming = false;
+    if (count > 2) log(`[compile] ${count} shaders of what's near made ahead of the player`);
   }
 
   // Lamp's preview plays out of sight, frame by frame, with no screen to wait for: the warm-up frame compiles there.
@@ -1666,6 +1826,8 @@ async function initApp() {
   // 6. The frame, which Lamp's runtime calls about 60 times a second (and its preview at exactly 1/60 s)
   let elapsed = 0;
   let frameCount = 0;
+  let checkTick = 0, wasSplit = false;
+  const lastChecked = new THREE.Vector3(1e9, 0, 1e9);
   let fpsTimer = 0;
   let nextPlayerSave = 0;
   let heardStrokes = 0;
@@ -1685,6 +1847,39 @@ async function initApp() {
     profAt = t;
   };
   renderer.info.autoReset = false;
+
+  // Split screen (split-screen.js): with a second controller connected, View on either controller puts that player in
+  // the right half and the first in the left, and back to one view again. It steps aside while only one controller is
+  // connected and comes back with the second. Kept through a change of the code (snapshot below).
+  const asController = () => { const on = input(); return on.kind === 'controller' ? on : { ...on, kind: 'controller' }; };
+  function splitNotice(lead) {
+    const key = label(BUTTON.VIEW, asController());
+    if (key) showNotice(`${lead}: press ${key} for split screen`, 3.5);
+  }
+  function joinSecondPlayer() {
+    if (split.second) return;
+    const cm = controllerManager;
+    split.second = createSecondPlayer({ scene, colliders: allColliders, beside: cm, map: mapSystem, kept: split.kept,
+      share: { knockdowns: cm.knockdowns, parkedCars: cm.parkedCars, railways: cm.railways, potholes: cm.potholes, parking: cm.parking,
+        playTop: cm.playTop, skatePark: cm.skatePark, bleachers: cm.bleachers, mtbTrails: cm.mtbTrails, pools: cm.pools, riverScale: cm.riverScale } });
+    split.kept = null;
+    dynamicRoots.push(...Object.values(split.second.cm.entities).flatMap((e) => [e.mesh, e.helmet]).filter(Boolean));
+  }
+  // Each half's camera as wide as its half; one view again, the first camera as wide as the screen
+  function showSplit(on) {
+    if (on === split.drawn) return;
+    split.drawn = on;
+    if (on) {
+      joinSecondPlayer();
+      split.view ??= createSplitView(renderer, { samples: QUALITY.antialias ? 4 : 0 });
+      split.view.grade.applyPreset(lightingSystem.lookId);
+    }
+    cameraSystem.onResize(on ? 960 : 1920, 1080);
+    // each half draws everything again: no sun shadows while there are two (soft shade on the ground instead)
+    renderer.shadowMap.enabled = QUALITY.shadows && !on;
+    document.body.classList.toggle('split', on);
+    log(`[split] ${on ? 'two views side by side' : 'one view'}`);
+  }
 
   const frame = (f) => {
     profAt = performance.now();
@@ -1724,6 +1919,17 @@ async function initApp() {
       waterSplash.update(dt, cameraSystem.camera);
     }
     cameraSystem.update(dt, elapsed);
+    {
+      // a second controller: offered split screen once, and View on either controller turns it on and off
+      const two = Boolean(f.pads[1]?.connected);
+      if (two && !split.offered && !split.on) { split.offered = true; splitNotice('Second controller'); }
+      if (two && ((f.pads[0].pressed | f.pads[1].pressed) & BUTTON.VIEW)) {
+        split.on = !split.on;
+        if (!split.on) splitNotice('One view');
+      }
+      showSplit(split.on && two);
+      if (split.drawn) split.second.update(dt, elapsed, f.pads[1], !mapSystem.isFullMapOpen);
+    }
     tickRecording(dt);
     // the camera under the river's surface: murky green fog and a tint over the view
     {
@@ -1758,7 +1964,7 @@ async function initApp() {
       controllerManager.activeMode === 'person' ? controllerManager.entities.person.position : null);
     planesPart.made.update(dt);
     scootersPart.made.update(dt, cameraSystem.currentPos);
-    racksPart.made.update(dt, cameraSystem.currentPos);
+    racksPart.made.update(dt, cameraSystem.currentPos, controllerManager.getActiveEntity(), controllerManager.activeMode, rackCue);
     airportPart.made.update?.(dt, cameraSystem.currentPos);
     {
       // the truck the player drove the airstairs as is hidden while the airstairs it left stand in its place
@@ -1796,6 +2002,7 @@ async function initApp() {
     if (cityBlocks.updateLights) cityBlocks.updateLights(cameraSystem.camera);
     mark('blocks');
     if (streetDetails.update) streetDetails.update(cameraSystem.camera);
+    groundShade.update(cameraSystem.camera, !renderer.shadowMap.enabled, split.drawn ? split.second.camera : null);
     mark('street details');
     lightingSystem.update(cameraSystem.currentPos);
     mapSystem.update();
@@ -1812,11 +2019,22 @@ async function initApp() {
       audioSystem.tireSkid(driving ? car.skid || 0 : 0, driving ? Math.abs(car.speed) : 0);
     }
     mark('light, map, weather, sound');
-    if (warmedUp) updateSceneCulling(cameraSystem.camera.position); // the warm-up frame draws every chunk
-    if (TIER.stream) {
+    // on the Xbox, short of processor, the culling runs every third frame and the ground's streaming every fourth (each
+    // at once after a jump of the camera, and the culling every frame of a split screen, which culls twice a frame)
+    const camAt = cameraSystem.camera.position;
+    const leapt = Math.abs(camAt.x - lastChecked.x) + Math.abs(camAt.z - lastChecked.z) > 40;
+    checkTick++;
+    if (warmedUp && (!XBOX || split.drawn || wasSplit || leapt || checkTick % 3 === 0)) { // the warm-up frame draws every chunk
+      updateSceneCulling(camAt);
+      lastChecked.copy(camAt);
+    }
+    wasSplit = split.drawn;
+    if (warmedUp && TIER.warmReach) warmAhead(elapsed);
+    if (TIER.stream && (!XBOX || split.drawn || leapt || checkTick % 4 === 1)) {
       const { x, z } = cameraSystem.camera.position;
-      updateGroundStreaming(x, z);
-      houseStream?.update(x, z);
+      const two = split.drawn ? split.second.camera.position : null;
+      updateGroundStreaming(x, z, two?.x, two?.z);
+      houseStream?.update(x, z, two?.x, two?.z);
     }
     // the still parts' script copies let go once uploaded; the memory logged again once they've mostly gone
     if (warmedUp && (++releaseFrame & 31) === 0) {
@@ -1831,7 +2049,7 @@ async function initApp() {
     mark('culling');
 
     // Render frame via TSL RenderPipeline (SSR + Bloom)
-    if (!warmedUp && !warmStart) {
+    if (!warmedUp && !warmStart && QUALITY.shadows && !XBOX) {
       // First frame = pipeline warm-up behind the loading screen, for what precompileShaders() can't reach (the shadow
       // map passes): with frustum culling off, every visible material's pipelines compile now instead of stalling the
       // first time the camera turns towards it (one chunk / shadow stand-in per shared pipeline is enough)
@@ -1850,7 +2068,21 @@ async function initApp() {
       for (const o of culled) o.frustumCulled = true;
       markInit('warmup');
     }
-    renderPipeline.render();
+    // the far shaders compiled during play (compileLater) leave the renderer drawing into the scene pass's target
+    // between their steps, which would keep every frame off the screen: each frame starts from the screen
+    renderer.setMRT(null);
+    renderer.setRenderTarget(null);
+    gpuTime.begin();
+    if (split.drawn && warmedUp) {
+      // each half with what's near its own camera shown, the far chunks hidden from it (scene-culling.js)
+      const cam2 = split.second.camera;
+      split.view.render([
+        { scene, camera: cameraSystem.camera },
+        { scene, camera: cam2, before: () => { updateSceneCulling(cam2.position); moonPart.made.update(cam2); } }
+      ]);
+      moonPart.made.update(cameraSystem.camera);
+    } else renderPipeline.render();
+    gpuTime.end();
     mark('render');
     prof.n++;
     prof.draws += renderer.info.render.drawCalls;
@@ -1858,8 +2090,17 @@ async function initApp() {
     if (elapsed >= prof.next && warmedUp) {
       prof.next = elapsed + 10;
       const parts = [...prof.parts].map(([k, v]) => `${k} ${(v / prof.n).toFixed(1)}`).join(', ');
-      log(`[frame] ms a frame: ${parts}; ${Math.round(prof.draws / prof.n)} draws, ${(prof.tris / prof.n / 1e6).toFixed(2)}M triangles`);
+      let logic = 0;
+      for (const [k, v] of prof.parts) if (k !== 'render') logic += v / prof.n;
+      const gpu = gpuTime.take();
+      log(`[frame] ms a frame: ${parts}; logic ${logic.toFixed(1)}, render ${((prof.parts.get('render') || 0) / prof.n).toFixed(1)}, GPU ${gpu == null ? 'n/a' : gpu.toFixed(1)}; ${Math.round(prof.draws / prof.n)} draws, ${(prof.tris / prof.n / 1e6).toFixed(2)}M triangles`);
       prof.parts.clear(); prof.n = prof.draws = prof.tris = 0;
+      // once a run, what the camera has in front of it, part by part (triangle-report.js)
+      if (!prof.measured) {
+        prof.measured = true;
+        showTriangles.frame = `${parts}; ${renderer.info.render.drawCalls} draws`;
+        showTriangles(reportTriangles(scene, cameraSystem.camera, lightingSystem.sunLight.shadow));
+      }
     }
     if (!warmedUp) {
       warmedUp = true;
@@ -1876,6 +2117,8 @@ async function initApp() {
         if (loadingOverlay && window.lampPreview) loadingOverlay.style.transition = 'none';
         if (loadingOverlay) loadingOverlay.classList.add('hidden');
         warm.compiled = true;
+        // every kind of car ready to get into, compiled a few seconds into play (compileLater)
+        compileLater([controllerManager.carsToPrepare()], { detached: true, what: 'cars to get into' });
         audioSystem.ready = true;
         // Lamp: the Mac app lets the page play sound unasked, so the city is heard as it appears, not at the first key
         audioSystem.unlock();
@@ -1902,6 +2145,7 @@ async function initApp() {
       if (elSpeedMeter && dialScale.max) {
         elSpeedMeter.style.transform = `scaleX(${Math.min(1, mphExact / dialScale.max)})`;
       }
+      if (split.drawn) split.second.drawHud(topSpeedMph[split.second.cm.activeMode]);
       // the gear and revs are worked out ten times a second, which is the rate the engine sound reads them at
       if (geared && elGear && hud.clock - hud.lastClock >= 0.1) {
         const read = gearReadout(Math.abs(ent.speed), ent.speed >= 0);
@@ -1950,7 +2194,8 @@ async function initApp() {
     }]));
     return { version: 2, activeMode: controllerManager.activeMode, entities, camera: cameraSystem.activePresetId,
              zoom: cameraSystem.zoomMultiplier, time: lightingSystem.activePresetId,
-             map: mapSystem.isFullMapOpen, hudHidden: document.body.classList.contains('hud-minimized') };
+             map: mapSystem.isFullMapOpen, hudHidden: document.body.classList.contains('hud-minimized'),
+             split: { on: split.on, offered: split.offered, second: split.second?.snapshot() ?? null } };
   }
   function startFrom(state) {
     if (state?.version !== 2) return;
@@ -1968,6 +2213,8 @@ async function initApp() {
     if (typeof state.hudHidden === 'boolean') hudChosen = true;
     if (typeof state.hudHidden === 'boolean' && hudToggleBtn && state.hudHidden !== document.body.classList.contains('hud-minimized')) hudToggleBtn.click();
     if (state.map === true) mapSystem.toggleFullMap(true);
+    // split screen as it was: the second player where they were, drawn again once the frame sees both controllers
+    if (state.split) { split.on = state.split.on === true; split.offered = state.split.offered === true; split.kept = state.split.second; }
   }
 
   // sharp: drawing smaller never made frames faster here (the log showed it undone every time), it only blurred the city
@@ -1975,9 +2222,11 @@ async function initApp() {
     // a phone draws fewer pixels, and smaller still if frames come slow
     if (TIER.scale < 1) renderer.setSize(Math.round(1920 * TIER.scale), Math.round(1080 * TIER.scale), false);
     const was = pendingRestore(); if (was) startFrom(was);
-  }, frame, touch: false, keyboard: false, snapshot, sharp: TIER.name !== 'phone',
+  // (on an Xbox too: the runtime's own steps, from 1920x1080, undid its smaller size and left it at 960x540 or full size)
+  }, frame, touch: false, keyboard: false, snapshot, sharp: XBOX || TIER.name !== 'phone',
     // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.
-    dispose() { cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); scenePass.dispose(); } });
+    dispose() { groundShade.group.removeFromParent(); groundShade.dispose(); split.second?.dispose(); split.view?.dispose(); document.body.classList.remove('split');
+      cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); scenePass.dispose(); } });
   container.appendChild(renderer.domElement);
 }
 

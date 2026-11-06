@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { TIER } from './device-tier.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { log, save, load } from '../lamp-game.js';
 import { groundHeight, drapeGeometry, drawOver } from './terrain.js';
@@ -908,8 +909,20 @@ function createAirport(group) {
   }
   // far from the airport (over 1.8 km off) its aircraft and airstairs, a few draws each and specks at that distance,
   // aren't drawn (`far`, set here)
+  // Lamp: on the Xbox the whole field isn't drawn from over a kilometre beyond its edge (device-tier.js), but for
+  // airstairs the player left standing somewhere else
+  let gone = false;
   function update(dt, cam) {
-    const away = !!cam && Math.hypot(cam.x - AIRFIELD_CENTRE.x, cam.z - AIRFIELD_CENTRE.z) > 1800;
+    const off = cam ? Math.hypot(cam.x - AIRFIELD_CENTRE.x, cam.z - AIRFIELD_CENTRE.z) : 0;
+    const away = off > 1800;
+    if (TIER.landmarkReach && (off > TIER.landmarkReach + 900) !== gone) {
+      gone = !gone;
+      for (const o of group.children) {
+        if (stairs.some((s) => s.root === o)) continue;
+        if (gone) { o.userData.shownNear = o.visible; o.visible = false; } else o.visible = o.userData.shownNear ?? true;
+      }
+      if (!gone) { for (const c of craft) c.root.visible = !far && craft.indexOf(c) !== taken; if (circuit) circuit.plane.visible = !far; }
+    }
     if (away !== far) {
       far = away;
       for (const c of craft) c.root.visible = !far && craft.indexOf(c) !== taken;

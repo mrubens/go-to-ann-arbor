@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { asset, log } from '../lamp-game.js';
+import { asset, log, random } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
 import { MOTO_SPECS, buildMotoGeometry, createMotoMaterial } from './motorcycles.js';
 
@@ -8,7 +8,9 @@ import { MOTO_SPECS, buildMotoGeometry, createMotoMaterial } from './motorcycles
 // each a row of galvanized inverted-U stands with bicycles locked to some of them, and the e-bike docks by the Diag: a
 // row of dock posts with a fleet of e-bikes and a kiosk under a little solar panel at one end. The stands and docks
 // are all drawn; the bikes only within REACH of the camera. On foot, F beside a bike borrows it (`nearest`, `take`:
-// controllers.js enterOrExit, main.js getInOrOut), and it's gone from its stand for the rest of the visit.
+// controllers.js enterOrExit, main.js getInOrOut), and it's gone from its stand for the rest of the visit. A car (or
+// a bike) run into a parked one sends it flying, tumbling, to land on its side and lie there (`strike`); it can still
+// be picked up and ridden from there.
 
 const REACH = 220;
 const SHOWN = 240;
@@ -141,6 +143,7 @@ function createBikeRacks(group, data) {
   const near = []; // racks within reach
   const shownSlots = [];
 
+  const fq = new THREE.Quaternion(), fq2 = new THREE.Quaternion(), fax = new THREE.Vector3();
   function draw() {
     const n = { bicycle: 0, ebike: 0 };
     shownSlots.length = 0;
@@ -149,9 +152,12 @@ function createBikeRacks(group, data) {
         if (taken.has(s)) continue;
         const m = meshes[s.kind], i = n[s.kind];
         if (i >= SHOWN) continue;
-        e.set(0, s.yaw, s.lean);
-        q.setFromEuler(e);
-        m4.compose(pos.set(s.x, groundHeight(s.x, s.z) + 0.02, s.z), q, one);
+        if (s.fly) m4.compose(pos.set(s.x, s.fly.y, s.z), s.fly.q, one);
+        else {
+          e.set(0, s.yaw, s.lean);
+          q.setFromEuler(e);
+          m4.compose(pos.set(s.x, groundHeight(s.x, s.z) + 0.02 + (s.down ? 0.24 : 0), s.z), q, one);
+        }
         m.setMatrixAt(i, m4);
         paint.setHex(s.hex);
         m.geometry.attributes.paintColor.setXYZ(i, paint.r, paint.g, paint.b);
@@ -167,7 +173,83 @@ function createBikeRacks(group, data) {
     }
   }
 
-  function update(dt, cam) {
+  // the player's car or bike running into parked bikes: each one it meets goes flying ahead of it, tumbling
+  const flying = new Set();
+  const bodyOf = (ent, mode) => mode === 'car' ? (ent.bike ? [0.45, 1.15] : [1.0, 2.35]) : mode === 'cyclist' ? [0.35, 0.9] : null;
+  function strike(ent, mode) {
+    const body = ent && bodyOf(ent, mode), sp = ent?.speed || 0;
+    if (!body || Math.abs(sp) < 2.2) return;
+    const px = ent.position.x, pz = ent.position.z, sn = Math.sin(ent.heading), cs = Math.cos(ent.heading);
+    let hits = 0;
+    for (const rack of near) {
+      if (Math.abs(rack.x - px) > 30 || Math.abs(rack.z - pz) > 30) continue;
+      for (const s of rack.slots) {
+        if (taken.has(s) || s.fly) continue;
+        const g = groundHeight(s.x, s.z);
+        if (Math.abs(ent.position.y - g) > 2) continue;
+        const dx = s.x - px, dz = s.z - pz, lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
+        if (Math.abs(lx) > body[0] + 0.3 || Math.abs(lz) > body[1] + 0.45) continue;
+        const a = Math.abs(sp), side = Math.sign(lx) || 1, across = (0.3 + random() * 0.5) * a * side;
+        const fling = 0.85 + random() * 0.3;
+        e.set(0, s.yaw, s.lean);
+        const start = new THREE.Quaternion().setFromEuler(e);
+        s.fly = {
+          y: g + 0.02, vx: sn * sp * fling + cs * across, vz: cs * sp * fling - sn * across, vy: Math.min(8, 1.5 + a * 0.35),
+          q: start, ax: cs * (0.5 + random()), ay: (random() - 0.5) * 1.5, az: -sn * (0.5 + random()), w: Math.min(16, 4 + a * 0.6),
+          bounces: 0, settle: 0, side: random() < 0.5 ? -1 : 1
+        };
+        s.down = false;
+        flying.add(s);
+        hits++;
+        cue?.('crash', { x: s.x, y: g + 0.5, z: s.z }, Math.min(0.7, 0.2 + a * 0.02));
+      }
+    }
+    // a bike or two barely slows a car; a bicycle runs into them harder
+    if (hits) ent.speed *= Math.pow(mode === 'cyclist' ? 0.6 : 0.97, hits);
+  }
+  function fly(dt) {
+    for (const s of flying) {
+      const f = s.fly;
+      if (f.settle > 0) {
+        // lying down on its side where it came to rest
+        f.settle += dt * 3;
+        e.set(0, s.yaw, f.side * 1.38);
+        fq2.setFromEuler(e);
+        f.q.slerp(fq2, Math.min(1, f.settle * 0.5));
+        f.y += (groundHeight(s.x, s.z) + 0.26 - f.y) * Math.min(1, dt * 8);
+        if (f.settle >= 2) { s.fly = null; s.down = true; s.lean = f.side * 1.38; flying.delete(s); }
+        continue;
+      }
+      f.vy -= 9.8 * dt;
+      s.x += f.vx * dt; s.z += f.vz * dt; f.y += f.vy * dt;
+      f.q.premultiply(fq.setFromAxisAngle(fax.set(f.ax, f.ay, f.az).normalize(), f.w * dt));
+      const floor = groundHeight(s.x, s.z) + 0.3;
+      if (f.y < floor) {
+        f.y = floor;
+        if (f.vy < -1.5) {
+          if (++f.bounces === 1) cue?.('thud', { x: s.x, y: f.y, z: s.z }, Math.min(0.6, 0.15 - f.vy * 0.05));
+          f.vy = -f.vy * 0.3; f.vx *= 0.55; f.vz *= 0.55; f.w *= 0.5;
+        } else {
+          f.vy = 0;
+          const k = Math.exp(-dt * 5);
+          f.vx *= k; f.vz *= k; f.w *= Math.exp(-dt * 6);
+          if (Math.hypot(f.vx, f.vz) < 0.25) {
+            // its heading as it lands is the way it now lies
+            fax.set(0, 0, 1).applyQuaternion(f.q);
+            if (Math.hypot(fax.x, fax.z) > 0.2) s.yaw = Math.atan2(fax.x, fax.z);
+            f.settle = 1e-3;
+          }
+        }
+      }
+    }
+    draw();
+  }
+
+  let cue = null;
+  function update(dt, cam, ent = null, mode = null, sound = null) {
+    cue = sound;
+    strike(ent, mode);
+    if (flying.size) fly(dt);
     regather -= dt;
     if (regather > 0 || !cam) return;
     regather = 0.5;

@@ -8,7 +8,9 @@ import { groundHeight } from './terrain.js';
 // row over row, a step up each, on steel stringers every couple of metres, a guardrail across the back of the tall
 // ones. Each is set level on the lowest ground under it, its legs running down into the slope. All one instanced mesh
 // per piece: the planks and rails scaled to their length, the stringers to the stand's depth and height.
-// `colliders` keep cars and walkers out of them; `seats` lists where someone sits, a metre apart along each row.
+// `colliders` keep everything out of them but the way up their front, as the stadium's rows are: on foot a row at a
+// time (`top`, the footboard or seat under them), and on wheels up one slope from the front row to the back (`ramp`),
+// to fly off the back or the sides; `seats` lists where someone sits, a metre apart along each row.
 
 const flat = (g) => { g.deleteAttribute('uv'); return g.index ? g.toNonIndexed() : g; };
 const RISE = 0.38;
@@ -54,7 +56,8 @@ function createBleachers(group, data) {
   group.name = 'Bleachers';
   const B = data?.bleachers || [];
   const seatsL = [], footsL = [], framesL = [], railsL = [];
-  const colliders = [], seats = [];
+  const colliders = [], seats = [], stands = [], grid = new Map();
+  const CELL = 64, cellKey = (i, j) => i * 65536 + j;
   for (let i = 0; i + 4 < B.length; i += 5) {
     const [cx, cz, h, length, depth] = B.slice(i, i + 5);
     const fx = Math.sin(h), fz = Math.cos(h), ax = Math.cos(h), az = -Math.sin(h);
@@ -84,11 +87,25 @@ function createBleachers(group, data) {
       const [px, pz] = P(0, -depth / 2 - 0.05);
       railsL.push([px, g + H, pz, h, length]);
     }
-    // solid boxes along it, a stand's depth square each
+    const stand = { cx, cz, fx, fz, ax, az, length, depth, rows, step, g, H };
+    stands.push(stand);
+    const R = Math.hypot(length, depth) / 2;
+    for (let i = Math.floor((cx - R) / CELL); i <= Math.floor((cx + R) / CELL); i++) {
+      for (let j = Math.floor((cz - R) / CELL); j <= Math.floor((cz + R) / CELL); j++) {
+        const k = cellKey(i, j);
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(stand);
+      }
+    }
+    // solid boxes along it, a stand's depth square each; one is walked or driven into only where the row (on foot) or
+    // the slope (on wheels) there is within a step of the feet or wheels: from the front, along it once up on it, or,
+    // as the stadium's rows are, jumped up onto from the side going fast enough (the step a car takes grows with speed)
     const top = g + H + (rows >= 4 ? 1.05 : 0.1);
     for (let u = -length / 2 + depth / 2; u < length / 2 + 0.01; u += depth) {
       const [px, pz] = P(Math.min(u, length / 2 - depth / 2), 0), r = depth / 2;
-      colliders.push({ minX: px - r, maxX: px + r, minZ: pz - r, maxZ: pz + r, minY: g - 1, maxY: top });
+      colliders.push({ minX: px - r, maxX: px + r, minZ: pz - r, maxZ: pz + r, minY: g - 1, maxY: top,
+        stand: true, stepOn: (x, z, y, mode, climb = 0.6) => mode === 'person' ? surface(stand, x, z, true) <= y + 0.55
+          : (mode === 'car' || mode === 'cyclist') && slope(stand, x, z, true) <= y + climb });
     }
   }
 
@@ -114,8 +131,44 @@ function createBleachers(group, data) {
   inst(frameGeometry(), steel, framesL, 260);
   inst(railGeometry(), steel, railsL, 260);
 
+  // the footboard or seat of the row under (x, z), or -Infinity off the stand; `near` takes the nearest point of it
+  function surface(S, x, z, near = false) {
+    const dx = x - S.cx, dz = z - S.cz;
+    let u = dx * S.ax + dz * S.az, v = dx * S.fx + dz * S.fz;
+    if (near) {
+      u = Math.max(-S.length / 2, Math.min(S.length / 2, u));
+      v = Math.max(-S.depth / 2, Math.min(S.depth / 2, v));
+    } else if (Math.abs(u) > S.length / 2 || Math.abs(v) > S.depth / 2) return -Infinity;
+    const f = (S.depth / 2 - v) / S.step, r = Math.min(S.rows - 1, Math.max(0, Math.floor(f)));
+    return S.g + r * RISE + (f - r < 0.45 ? 0.095 : 0.46);
+  }
+  // the slope over the rows' fronts, from the front footboard to the back seat, or -Infinity off the stand
+  function slope(S, x, z, near = false) {
+    const dx = x - S.cx, dz = z - S.cz;
+    let u = dx * S.ax + dz * S.az, v = dx * S.fx + dz * S.fz;
+    if (near) v = Math.max(-S.depth / 2, Math.min(S.depth / 2, v));
+    else if (Math.abs(u) > S.length / 2 || Math.abs(v) > S.depth / 2) return -Infinity;
+    return S.g + 0.1 + (S.H - 0.1) * (S.depth / 2 - v) / S.depth;
+  }
+  function standRamp(x, z) {
+    const list = grid.get(cellKey(Math.floor(x / CELL), Math.floor(z / CELL)));
+    let best = -Infinity;
+    if (list) for (const S of list) best = Math.max(best, slope(S, x, z));
+    return best;
+  }
+  // on foot: the row under them, one within a step of their feet or below them (a stand's underside is never stood on)
+  function standTop(x, z, y = Infinity) {
+    const list = grid.get(cellKey(Math.floor(x / CELL), Math.floor(z / CELL)));
+    let best = -Infinity;
+    if (list) for (const S of list) {
+      const s = surface(S, x, z);
+      if (s > best && s <= y + 0.55) best = s;
+    }
+    return best;
+  }
+
   log(`[bleachers] ${B.length / 5} stands, ${seatsL.length} rows, ${seats.length} places to sit`);
-  return { colliders, seats, count: B.length / 5 };
+  return { colliders, seats, top: standTop, ramp: standRamp, count: B.length / 5 };
 }
 
 async function buildBleachers(group) {

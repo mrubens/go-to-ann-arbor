@@ -1411,7 +1411,7 @@ const TREE_WIND = vec2(0.86, 0.51);
  * pass (alpha-tested in the shadow maps: dappled shadows). Wind: gusts rolling across the city sway the crowns
  * (shadows follow), branches bob and leaves flutter.
  */
-function createTreeMaterial(leafAtlas) {
+function createTreeMaterial(leafAtlas, { merged = false } = {}) {
   // Use alpha-test nodes rather than `alphaTest`: switching that property on the shared shadow material
   // changes its version and forces shader-cache checks for shadow casters.
   const mat = new TreeNodeMaterial({
@@ -1447,7 +1447,12 @@ function createTreeMaterial(leafAtlas) {
     const bob = sin(time.mul(2.1).add(g.x.mul(0.9)).add(g.z.mul(0.7)).add(phase)).mul(0.05).mul(aTree.z).mul(strength);
     // leaves flutter, every card on its own
     const flutter = sin(time.mul(8.0).add(aTree.w.mul(37.0)).add(g.y.mul(2.0))).mul(0.03).mul(isLeaf).mul(aTree.z).mul(strength.add(0.25));
-    return p.add(sway).add(vec3(0.0, bob, 0.0)).add(normalLocal.mul(flutter));
+    const moved = p.add(sway).add(vec3(0.0, bob, 0.0)).add(normalLocal.mul(flutter));
+    if (!merged) return moved;
+    // Lamp: one geometry holding every species' shape at this level (trees.js, the Xbox): each tree keeps only its
+    // own, the rest fold to one point and draw nothing
+    const own = step(abs(attribute('aKind', 'float').sub(attribute('aTreeKind', 'float'))), 0.5);
+    return mix(vec3(0.0, -1000.0, 0.0), moved, own);
   })();
 
   // Coverage: leaf cards from the atlas; bark is opaque from outside (its back faces are dropped)

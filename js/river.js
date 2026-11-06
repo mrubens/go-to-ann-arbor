@@ -260,16 +260,25 @@ function buildBridges(group) {
     mesh.castShadow = true;
     group.add(mesh);
   }
-  for (const [list, m, name] of [[fb.planks, mat(0x94785a, 0.85), 'FootbridgePlanks'], [fb.beams, mat(0x6e5640, 0.8), 'FootbridgeBeams'],
-    [fb.rails, mat(0x33393c, 0.45, 0.6), 'FootbridgeRailings'], [fb.concrete, mat(0xa9a49b, 0.9), 'FootbridgeConcrete']]) {
-    if (!list.length) continue;
-    const geo = mergeGeometries(list.map(clean));
-    if (!geo) continue;
-    const mesh = new THREE.Mesh(geo, m);
-    mesh.name = name;
-    mesh.castShadow = mesh.receiveShadow = true;
-    mesh.userData.cullDistance = 1500;
-    group.add(mesh);
+  // merged in 250 m squares, so the fine parts (the railings above all) of the footbridges further off are hidden
+  for (const [list, m, name, cull] of [[fb.planks, mat(0x94785a, 0.85), 'FootbridgePlanks', 1100], [fb.beams, mat(0x6e5640, 0.8), 'FootbridgeBeams', 600],
+    [fb.rails, mat(0x33393c, 0.45, 0.6), 'FootbridgeRailings', 380], [fb.concrete, mat(0xa9a49b, 0.9), 'FootbridgeConcrete', 1500]]) {
+    const cells = new Map();
+    for (const g of list) {
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      const c = g.boundingSphere.center, key = Math.floor(c.x / 250) + ',' + Math.floor(c.z / 250);
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(clean(g));
+    }
+    for (const parts of cells.values()) {
+      const geo = mergeGeometries(parts);
+      if (!geo) continue;
+      const mesh = new THREE.Mesh(geo, m);
+      mesh.name = name;
+      mesh.castShadow = mesh.receiveShadow = true;
+      mesh.userData.cullDistance = cull;
+      group.add(mesh);
+    }
   }
 }
 

@@ -1,4 +1,5 @@
 import { gpuOnly } from './gpu-only.js';
+import { TIER } from './device-tier.js';
 import * as THREE from 'three/webgpu';
 import { Fn, attribute, float, vec2, vec3, color, fract, floor, abs, clamp, max, min, mix, step, smoothstep, sin, fwidth, uv, texture, pow, mod } from 'three/tsl';
 import { cityUniforms } from './tsl-materials.js';
@@ -570,6 +571,12 @@ function sQuad(c, A, B, C, D, rgb) {
   sTri(c, A, B, C, rgb);
   sTri(c, A, C, D, rgb);
 }
+// The same, into the house's small square of fine parts (trim, soffits, porch ceilings, walks), hidden further off
+function fQuad(c, A, B, C, D, rgb) {
+  const f = c.fine;
+  f.pos.push(...A, ...B, ...C, ...A, ...C, ...D);
+  for (let k = 0; k < 6; k++) f.col.push(...rgb);
+}
 
 // An upright box (centre p, its length along (ux, uz)) in vertex colour, into the cell's solid mesh
 function addBox(c, p, ux, uz, len, dep, y0, y1, rgb) {
@@ -619,8 +626,8 @@ function roofOf(hc, R, spec) {
     const w = [W(-ha, -hb, eY - F), W(ha, -hb, eY - F), W(ha, hb, eY - F), W(-ha, hb, eY - F)];
     for (let i = 0; i < 4; i++) {
       const p = k[i], q = k[(i + 1) % 4];
-      sQuad(c, p, q, [q[0], eY - F, q[2]], [p[0], eY - F, p[2]], trim);
-      sQuad(c, [p[0], eY - F, p[2]], [q[0], eY - F, q[2]], w[(i + 1) % 4], w[i], soff);
+      fQuad(c, p, q, [q[0], eY - F, q[2]], [p[0], eY - F, p[2]], trim);
+      fQuad(c, [p[0], eY - F, p[2]], [q[0], eY - F, q[2]], w[(i + 1) % 4], w[i], soff);
     }
     return { ...frame, soffit: eY - F, ends: null };
   }
@@ -647,8 +654,8 @@ function roofOf(hc, R, spec) {
     sQuad(c, W(A0, pb, py), W(A1, pb, py), W(A1, qb, qy), W(A0, qb, qy), shade);
     // rake boards along the ends, and the rake's underside
     for (const sa of [-1, 1]) {
-      sQuad(c, W(sa * A1, pb, py), W(sa * A1, qb, qy), W(sa * A1, qb, qy - F), W(sa * A1, pb, py - F), trim);
-      sQuad(c, W(sa * ha, pb, py - F), W(sa * A1, pb, py - F), W(sa * A1, qb, qy - F), W(sa * ha, qb, qy - F), soff);
+      fQuad(c, W(sa * A1, pb, py), W(sa * A1, qb, qy), W(sa * A1, qb, qy - F), W(sa * A1, pb, py - F), trim);
+      fQuad(c, W(sa * ha, pb, py - F), W(sa * A1, pb, py - F), W(sa * A1, qb, qy - F), W(sa * ha, qb, qy - F), soff);
     }
   }
   // fascia and soffit along the eaves (a lean-to's low side only)
@@ -656,8 +663,8 @@ function roofOf(hc, R, spec) {
   for (const [eb, ey] of [prof[0], prof[prof.length - 1]]) {
     if (spec.type === 'shed' && Math.sign(eb) === spec.high) continue;
     const wb = Math.sign(eb) * hb;
-    sQuad(c, W(A0, eb, ey), W(A1, eb, ey), W(A1, eb, ey - F), W(A0, eb, ey - F), trim);
-    sQuad(c, W(A0, wb, ey - F), W(A1, wb, ey - F), W(A1, eb, ey - F), W(A0, eb, ey - F), soff);
+    fQuad(c, W(A0, eb, ey), W(A1, eb, ey), W(A1, eb, ey - F), W(A0, eb, ey - F), trim);
+    fQuad(c, W(A0, wb, ey - F), W(A1, wb, ey - F), W(A1, eb, ey - F), W(A0, eb, ey - F), soff);
     soffitY = Math.min(soffitY, ey - F);
   }
   return { ...frame, soffit: soffitY, ends };
@@ -686,7 +693,7 @@ function addDormer(hc, F, sb, ac, w, shed) {
     const k = 0.35 / (bf - bBack), yF = yT + 0.02 - 0.25 * k;
     sQuad(c, F.W(a0 - 0.15, sb * (bf + 0.25), yF), F.W(a1 + 0.15, sb * (bf + 0.25), yF),
       F.W(a1 + 0.15, sb * bBack, yBack + 0.02), F.W(a0 - 0.15, sb * bBack, yBack + 0.02), hc.shade);
-    sQuad(c, F.W(a0 - 0.15, sb * (bf + 0.25), yF), F.W(a1 + 0.15, sb * (bf + 0.25), yF),
+    fQuad(c, F.W(a0 - 0.15, sb * (bf + 0.25), yF), F.W(a1 + 0.15, sb * (bf + 0.25), yF),
       F.W(a1 + 0.15, sb * (bf + 0.25), yF - 0.16), F.W(a0 - 0.15, sb * (bf + 0.25), yF - 0.16), hc.trimRGB);
     return true;
   }
@@ -704,7 +711,7 @@ function addDormer(hc, F, sb, ac, w, shed) {
   for (const sa of [-1, 1]) {
     const aE = ac + sa * (w / 2 + 0.15);
     sQuad(c, F.W(aE, bFront, yEave), F.W(ac, bFront, ridgeD), F.W(ac, sb * bR, ridgeD), F.W(aE, sb * bEave, yEave), hc.shade);
-    sQuad(c, F.W(aE, bFront, yEave), F.W(ac, bFront, ridgeD), F.W(ac, bFront, ridgeD - 0.16), F.W(aE, bFront, yEave - 0.16), hc.trimRGB);
+    fQuad(c, F.W(aE, bFront, yEave), F.W(ac, bFront, ridgeD), F.W(ac, bFront, ridgeD - 0.16), F.W(aE, bFront, yEave - 0.16), hc.trimRGB);
   }
   return true;
 }
@@ -773,11 +780,15 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
 
   wallMaterial ||= createHouseWallMaterial();
   solidMaterial ||= new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.88, side: THREE.DoubleSide });
-  const cells = new Map();
+  const cells = new Map(), fineCells = new Map();
   const cellOf = (x, z) => {
     const key = Math.floor(x / 1000) + ',' + Math.floor(z / 1000);
     let c = cells.get(key);
     if (!c) cells.set(key, (c = { pos: [], nor: [], col: [], info: [], house: [], style: [], idx: [], sPos: [], sCol: [] }));
+    // the fine parts in 500 m squares, so the scene's culling hides those further off (set per house: fQuad)
+    const fk = Math.floor(x / 500) + ',' + Math.floor(z / 500);
+    if (!fineCells.has(fk)) fineCells.set(fk, { pos: [], col: [] });
+    c.fine = fineCells.get(fk);
     return c;
   };
   let houses = 0, porches = 0, wings = 0, dormers = 0, tagged = 0;
@@ -1093,14 +1104,14 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
         }
         addBox(c, Q(doorT, pd - 0.2), dir.x, dir.z, pw, 0.24, ph - 0.3, ph, trimRGB);
         for (const t of [t0 + 0.2, t1 - 0.2]) addBox(c, Q(t, pd / 2), N.x, N.z, pd, 0.2, ph - 0.3, ph, trimRGB);
-        sQuad(c, [Q(t0, 0).x, ph, Q(t0, 0).z], [Q(t1, 0).x, ph, Q(t1, 0).z], [Q(t1, pd).x, ph, Q(t1, pd).z], [Q(t0, pd).x, ph, Q(t0, pd).z], lin(CEILING));
+        fQuad(c, [Q(t0, 0).x, ph, Q(t0, 0).z], [Q(t1, 0).x, ph, Q(t1, 0).z], [Q(t1, pd).x, ph, Q(t1, pd).z], [Q(t0, pd).x, ph, Q(t0, pd).z], lin(CEILING));
         // its roof: a lean-to off the house, with fascia
         const yb = Math.min(ph + 0.05 + (pd + 0.3) * 0.28, blockSoffit - 0.05, blockTop - 0.1);
         const yf = ph + 0.05;
         const e0 = Q(t0 - 0.3, 0), e1 = Q(t1 + 0.3, 0), f0 = Q(t0 - 0.3, pd + 0.3), f1 = Q(t1 + 0.3, pd + 0.3);
         sQuad(c, [e0.x, yb, e0.z], [e1.x, yb, e1.z], [f1.x, yf, f1.z], [f0.x, yf, f0.z], hc.shade);
-        sQuad(c, [f0.x, yf, f0.z], [f1.x, yf, f1.z], [f1.x, yf - 0.2, f1.z], [f0.x, yf - 0.2, f0.z], trimRGB);
-        for (const [e, f] of [[e0, f0], [e1, f1]]) sQuad(c, [e.x, yb, e.z], [f.x, yf, f.z], [f.x, yf - 0.2, f.z], [e.x, yb - 0.2, e.z], trimRGB);
+        fQuad(c, [f0.x, yf, f0.z], [f1.x, yf, f1.z], [f1.x, yf - 0.2, f1.z], [f0.x, yf - 0.2, f0.z], trimRGB);
+        for (const [e, f] of [[e0, f0], [e1, f1]]) fQuad(c, [e.x, yb, e.z], [f.x, yf, f.z], [f.x, yf - 0.2, f.z], [e.x, yb - 0.2, e.z], trimRGB);
         // railings round the deck, open at the steps
         if (fh >= 0.4 && id(23) < 0.85) {
           const rail = (p, q) => {
@@ -1198,7 +1209,7 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
           const d0 = startD + (walkLen * k) / n, d1 = startD + (walkLen * (k + 1)) / n;
           const p = [Q(doorT - 0.6, d0), Q(doorT + 0.6, d0), Q(doorT + 0.6, d1), Q(doorT - 0.6, d1)]
             .map((q) => [q.x, groundHeight(q.x, q.z) + LAWN_Y + 0.03, q.z]);
-          sQuad(c, p[0], p[1], p[2], p[3], walkRGB);
+          fQuad(c, p[0], p[1], p[2], p[3], walkRGB);
         }
       }
     }
@@ -1236,6 +1247,19 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
       m.userData.shadowStandIn = true;
       group.add(m);
     }
+  }
+  for (const f of fineCells.values()) {
+    if (!f.pos.length) continue;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(f.pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(f.col, 3));
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const m = new THREE.Mesh(geo, solidMaterial);
+    m.name = 'HouseTrim';
+    m.receiveShadow = true;
+    m.userData.cullDistance = 420;
+    group.add(m);
   }
 
   // The details only seen up close, instanced so the scene's culling draws them only near the camera
@@ -1371,9 +1395,12 @@ function streamHouses(records, addresses, { radius, x, z, farCut = 1 }) {
   const near = (px, pz) => [...cells.keys()].filter((k) => !built.has(k) && distance(k, px, pz) < radius)
     .sort((a, b) => distance(a, px, pz) - distance(b, px, pz));
   for (const k of near(x, z)) build(k);
-  const update = (px, pz) => {
+  let frames = 0;
+  // (a second player's place, in split screen, keeps and fills the houses around them too)
+  const update = (px, pz, px2 = NaN, pz2 = NaN) => {
+    const two = Number.isFinite(px2) && Number.isFinite(pz2);
     for (const [k, made] of built) {
-      const d = distance(k, px, pz);
+      const d = two ? Math.min(distance(k, px, pz), distance(k, px2, pz2)) : distance(k, px, pz);
       if (d > radius + 300) {
         made.removeFromParent();
         made.traverse((o) => o.geometry?.dispose());
@@ -1382,7 +1409,9 @@ function streamHouses(records, addresses, { radius, x, z, farCut = 1 }) {
       }
       for (const m of made.children) if (m.userData.cullDistance) m.visible = d < m.userData.cullDistance * farCut;
     }
-    const next = near(px, pz)[0];
+    // Lamp: on the Xbox a square every few frames rather than every frame, so arriving doesn't stack them up
+    if (TIER.spreadLoads && (++frames % 4)) return;
+    const next = near(px, pz)[0] ?? (two ? near(px2, pz2)[0] : undefined);
     if (next !== undefined) build(next);
   };
   group.userData.stream = { update, built };

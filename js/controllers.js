@@ -60,30 +60,32 @@ const CAR_DRIVE = {
   rolling: 0.18, drag: 0.0012, coast: 0.6, brake: 9,
   wheelbase: 2.76, grip: 9.5, cornering: 10.5 // Wheelbase (m), tire and steering acceleration limits (m/s²).
 };
-// How each kind of car drives, over CAR_DRIVE: top speed (the real vehicle's, in m/s), pull, braking, tire grip, how tight it turns (cornering and
+// How each kind of car drives, over CAR_DRIVE, from the top trim of the real vehicle: top speed (m/s), pull off the
+// line and the power that takes over from it (acceleration, powerSpeed: worked back from its 0-60 time and power), air
+// drag (its frontal area over its weight), braking (from its 60-0 distance); tire grip, how tight it turns (cornering and
 // wheelbase), how quick the steering is (steer) and how far the body leans in a bend (roll) and pitches (pitch)
 const CAR_HANDLING = {
-  sedan: { speed: 53.6, acceleration: 5 }, // 120 mph, a Camry or Civic
-  taxi: { speed: 53.6, acceleration: 5 },
-  forester: { mass: 1600, speed: 53.6, acceleration: 4.6, grip: 10, cornering: 10.2, wheelbase: 2.67, roll: 0.014 }, // all-wheel drive; 120 mph, a Subaru Forester
-  suv: { mass: 2000, speed: 50.1, acceleration: 4.2, brake: 8.5, grip: 8.6, cornering: 9, wheelbase: 2.8, steer: 8, roll: 0.016 }, // 112 mph, an Outback, RAV4 or CR-V
-  minivan: { mass: 2000, speed: 50.1, acceleration: 3.8, brake: 8.5, grip: 8.4, cornering: 8.5, wheelbase: 3.03, steer: 7.5, roll: 0.015 }, // 112 mph, a Sienna or Odyssey
-  pickup: { mass: 2400, speed: 47.8, acceleration: 4.8, powerSpeed: 11, brake: 8, grip: 7.8, cornering: 7.6, wheelbase: 3.7, steer: 7, roll: 0.017, pitch: 0.034 }, // 107 mph, an F-150
+  sedan: { mass: 1430, speed: 75.5, acceleration: 5.6, powerSpeed: 25.7, drag: 0.000285, brake: 11.7, grip: 9.5, cornering: 10.5, wheelbase: 2.76 }, // 169 mph and 60 in 5.0 s, a Civic Type R
+  taxi: { mass: 1430, speed: 75.5, acceleration: 5.6, powerSpeed: 25.7, drag: 0.000285, brake: 11.7, grip: 9.5, cornering: 10.5, wheelbase: 2.76 },
+  forester: { mass: 1630, speed: 56.8, acceleration: 3.6, powerSpeed: 20.4, drag: 0.000313, brake: 9.3, grip: 10, cornering: 10.2, wheelbase: 2.67, roll: 0.014 }, // all-wheel drive; 127 mph and 60 in 8.4 s, a Subaru Forester
+  suv: { mass: 1910, speed: 50.1, acceleration: 5.2, powerSpeed: 20, drag: 0.000267, brake: 9.7, grip: 8.6, cornering: 9, wheelbase: 2.8, steer: 8, roll: 0.016 }, // 112 mph and 60 in 5.7 s, a RAV4 plug-in hybrid
+  minivan: { mass: 2000, speed: 51.4, acceleration: 4.2, powerSpeed: 21.7, drag: 0.000285, brake: 9.3, grip: 8.4, cornering: 8.5, wheelbase: 3.03, steer: 7.5, roll: 0.015 }, // 115 mph and 60 in 6.9 s, an Odyssey
+  pickup: { mass: 2650, speed: 50.1, acceleration: 7.8, powerSpeed: 22.8, drag: 0.000306, brake: 8.6, grip: 7.8, cornering: 7.6, wheelbase: 3.7, steer: 7, roll: 0.017, pitch: 0.034 }, // 112 mph and 60 in 3.6 s, an F-150 Raptor R
   // the electric cars: heavy, with all their pull from a standstill
-  // the electric performance sedan: a tri-motor's shove off the line (60 mph in about two seconds) and 200 mph flat out
-  tesla: { mass: 2070, speed: 89.4, acceleration: 13, powerSpeed: 30, brake: 12, drag: 0.0005, grip: 14, cornering: 14, wheelbase: 2.96, steer: 12, roll: 0.008, pitch: 0.018 },
-  ioniq: { mass: 2100, speed: 51.4, acceleration: 6.5, powerSpeed: 20, grip: 9.6, cornering: 9.6, wheelbase: 3.0, steer: 8.5, roll: 0.013 }, // 115 mph, an Ioniq 5
-  r1s: { mass: 2700, speed: 49.2, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 9, cornering: 9, wheelbase: 3.08, steer: 8, roll: 0.013 }, // 110 mph, a Rivian R1S
-  r1t: { mass: 3000, speed: 49.2, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.6, cornering: 8.2, wheelbase: 3.45, steer: 7.5, roll: 0.013, pitch: 0.028 }, // 110 mph, a Rivian R1T
-  cybertruck: { mass: 3100, speed: 58.1, acceleration: 7, powerSpeed: 22, brake: 8.5, grip: 8.4, cornering: 7.8, wheelbase: 3.81, steer: 8, roll: 0.012, pitch: 0.026 }, // 130 mph, the Cybertruck Cyberbeast
-  van: { mass: 2700, speed: 40.2, acceleration: 3.2, powerSpeed: 11, brake: 7.5, grip: 7.2, cornering: 7, wheelbase: 3.6, steer: 6.5, roll: 0.02, pitch: 0.036 }, // 90 mph, a high-roof Sprinter or Transit
+  // the electric performance sedan: a tri-motor's shove off the line (60 mph in about two seconds) and 200 mph flat out, a Model S Plaid
+  tesla: { mass: 2160, speed: 89.4, acceleration: 13.1, powerSpeed: 23.7, drag: 0.000136, brake: 11.2, grip: 14, cornering: 14, wheelbase: 2.96, steer: 12, roll: 0.008, pitch: 0.018 },
+  ioniq: { mass: 2200, speed: 72, acceleration: 8.6, powerSpeed: 22.1, drag: 0.000196, brake: 11.5, grip: 9.6, cornering: 9.6, wheelbase: 3.0, steer: 8.5, roll: 0.013 }, // 161 mph and 60 in 3.25 s, an Ioniq 5 N
+  r1s: { mass: 3200, speed: 58.1, acceleration: 11.2, powerSpeed: 18.7, drag: 0.000197, brake: 9.9, grip: 9, cornering: 9, wheelbase: 3.08, steer: 8, roll: 0.013 }, // 130 mph and 60 in 2.6 s, a quad-motor Rivian R1S
+  r1t: { mass: 3150, speed: 58.1, acceleration: 11.8, powerSpeed: 18, drag: 0.00021, brake: 10.1, grip: 8.6, cornering: 8.2, wheelbase: 3.45, steer: 7.5, roll: 0.013, pitch: 0.028 }, // 130 mph and 60 in 2.5 s, a quad-motor Rivian R1T
+  cybertruck: { mass: 3100, speed: 58.1, acceleration: 13.1, powerSpeed: 13.7, drag: 0.000242, brake: 8.9, grip: 8.4, cornering: 7.8, wheelbase: 3.81, steer: 8, roll: 0.012, pitch: 0.026 }, // 130 mph and 60 in 2.6 s, the Cybertruck Cyberbeast
+  van: { mass: 2800, speed: 44.7, acceleration: 4.3, powerSpeed: 16.9, drag: 0.000343, brake: 8.2, grip: 7.2, cornering: 7, wheelbase: 3.6, steer: 6.5, roll: 0.02, pitch: 0.036 }, // 100 mph and 60 in 7.5 s, a high-roof Transit with the twin-turbo V6
   // motorcycles (motorcycles.js): light, quick off the line, leaning into bends
   // the sport bike turns on a dime: sticky tires, a quick wheel and a wide lock
-  sportbike: { mass: 290, speed: 71.5, acceleration: 10, powerSpeed: 26, brake: 13, grip: 24, cornering: 30, wheelbase: 1.4, steer: 30, lock: 0.9, yaw: 22, roll: 0, pitch: 0.03 }, // 160 mph, a 600 cc supersport
-  cruiser: { mass: 380, speed: 49.2, acceleration: 6.5, powerSpeed: 16, brake: 9, grip: 10, cornering: 11, wheelbase: 1.65, steer: 10, roll: 0, pitch: 0.025 }, // 110 mph, a big V-twin cruiser
-  scooter: { mass: 190, speed: 26.8, acceleration: 4.5, powerSpeed: 9, brake: 8, grip: 10, cornering: 12, wheelbase: 1.3, steer: 14, roll: 0, pitch: 0.025 }, // 60 mph, a 150 cc Vespa
-  touring: { mass: 470, speed: 51.4, acceleration: 6, powerSpeed: 18, brake: 9, grip: 10, cornering: 10, wheelbase: 1.62, steer: 9, roll: 0, pitch: 0.022 }, // 115 mph, a V-twin bagger
-  adventure: { mass: 320, speed: 55.4, acceleration: 7.5, powerSpeed: 18, brake: 9.5, grip: 11, cornering: 12, wheelbase: 1.55, steer: 12, roll: 0, pitch: 0.03 }, // 124 mph, a BMW R 1250 GS
+  sportbike: { mass: 280, speed: 71.5, acceleration: 9, powerSpeed: 33.9, drag: 0.000686, brake: 10.1, grip: 24, cornering: 30, wheelbase: 1.4, steer: 30, lock: 0.9, yaw: 22, roll: 0, pitch: 0.03 }, // 160 mph and 60 in 3.1 s, a ZX-6R with its rider
+  cruiser: { mass: 395, speed: 51.4, acceleration: 7.6, powerSpeed: 20.6, drag: 0.000911, brake: 8.9, grip: 10, cornering: 11, wheelbase: 1.65, steer: 10, roll: 0, pitch: 0.025 }, // 115 mph and 60 in 3.9 s, a Fat Boy 114
+  scooter: { mass: 240, speed: 35.8, acceleration: 3.4, powerSpeed: 19.5, drag: 0.001125, brake: 8.9, grip: 10, cornering: 12, wheelbase: 1.3, steer: 14, roll: 0, pitch: 0.025 }, // 80 mph and 60 in 10 s, a Vespa GTS 310
+  touring: { mass: 460, speed: 53.6, acceleration: 9, powerSpeed: 18.1, drag: 0.000848, brake: 8.9, grip: 10, cornering: 10, wheelbase: 1.62, steer: 9, roll: 0, pitch: 0.022 }, // 120 mph and 60 in 3.4 s, a Road Glide ST
+  adventure: { mass: 317, speed: 62.6, acceleration: 9.4, powerSpeed: 31.7, drag: 0.001041, brake: 10.1, grip: 11, cornering: 12, wheelbase: 1.55, steer: 12, roll: 0, pitch: 0.03 }, // 140 mph and 60 in 3.0 s, a BMW R 1300 GS
   // and what's borrowed from the bike lane: a bicycle, an e-scooter and a hoverboard, at their own gentle pace
   bicycle: { mass: 95, speed: 12.1, acceleration: 2.8, powerSpeed: 5, brake: 6, grip: 9, cornering: 10, wheelbase: 1.04, steer: 14, roll: 0, pitch: 0.02 },
   // pedal-assisted to 28 mph, as a Class 3 e-bike is
@@ -96,12 +98,14 @@ const CAR_HANDLING = {
   // the airport's rolling airstairs: a light truck under a tall flight of steps, slow and wide in a turn
   stairtruck: { mass: 5200, speed: 16, acceleration: 2.8, powerSpeed: 7, brake: 6.5, grip: 7, cornering: 7, wheelbase: 6.6, steer: 6, roll: 0.02, pitch: 0.025 },
   excavator: { mass: 21000, speed: 1.5, acceleration: 1.6, brake: 6, grip: 7, cornering: 16, wheelbase: 0.9, steer: 6, roll: 0.004, pitch: 0.012 }, // 3.4 mph, a 20-tonne excavator in high travel
-  sports: { mass: 1500, speed: 85.4, acceleration: 10, powerSpeed: 34, brake: 12, drag: 0.0006, grip: 15, cornering: 17, wheelbase: 2.72, steer: 16, roll: 0.007, pitch: 0.016 } // 191 mph, a 911 Carrera S
+  sports: { mass: 1640, speed: 91.6, acceleration: 12, powerSpeed: 23.4, drag: 0.000227, brake: 12.6, grip: 15, cornering: 17, wheelbase: 2.72, steer: 16, roll: 0.007, pitch: 0.016 } // 205 mph and 60 in 2.3 s, a 911 Turbo S
 };
-// Lamp: a game's cars turn in sharper than the real ones' figures above: more grip in a bend, a quicker wheel
+// Lamp: a game's cars turn in sharper than the real ones' figures above: more grip in a bend, a quicker wheel (the
+// person chose this over the real skidpad figures, which felt too tough to steer)
 // what the player's car is now, for its size against walls and other cars: [half width, half length]
 const MACHINE_BOX = { dumptruck: [1.3, 4.6], excavator: [1.45, 2.4], stairtruck: [1.25, 5.3] };
 const playerBox = [0.86, 2.18];
+let paintSlots = 0; // each player's car materials their own (createCarEntity)
 const MACHINES = { dumptruck: 'Dump Truck', excavator: 'Excavator', stairtruck: 'Airstairs' };
 const carDrive = (kind) => {
   const d = { mass: 1500, steer: 10, roll: 0.012, pitch: 0.026, ...CAR_DRIVE, ...CAR_HANDLING[kind] };
@@ -432,6 +436,9 @@ class ThirdPersonControllerManager {
     this._gamepadKeys = {};
 
     const onKey = (e, isDown) => {
+      // only the keyboard's own keys: on the Xbox every controller's stick and buttons come as made-up key presses too
+      // (lamp.js), which would steer the first player from the second's controller; controllers are read as pads
+      if (!e.isTrusted) return;
       const action = actionsByCode.get(e.code);
       if (!action || (isDown && isTypingInField(e))) return;
       if (isDown) this._pressedCodes.add(e.code);
@@ -714,7 +721,8 @@ class ThirdPersonControllerManager {
     root.add(chassisPivot);
 
     const spec = BODY_SPECS[look.kind] || BODY_SPECS.forester;
-    const taxiLoftMat = createLoftedCarMaterial(spec, look.hex);
+    // (this player's own material for the kind: cars.js)
+    const taxiLoftMat = createLoftedCarMaterial(spec, look.hex, { slot: this.paintSlot ??= ++paintSlots });
 
     // 1. 3D Lofted SUV Body + Curved Windscreens + Crowned Roof + Side Mirrors + Roof Rails
     const carBodyGeo = buildCarGeometry(spec, false);
@@ -1186,6 +1194,20 @@ class ThirdPersonControllerManager {
     };
   }
 
+  // Every kind of car this player might take, each as a body and a wheel in its material, made one at a time for main.js
+  // to compile while the city is played, so getting into one later builds and compiles no shader then
+  *carsToPrepare() {
+    for (const [kind, spec] of Object.entries(BODY_SPECS)) {
+      if (kind === this.carLook?.kind) continue;
+      const mat = createLoftedCarMaterial(spec, 0x808080, { slot: this.paintSlot ??= ++paintSlots });
+      const group = new THREE.Group();
+      group.add(new THREE.Mesh(buildCarGeometry(spec, false), mat));
+      group.add(new THREE.Mesh(buildSteerableWheelGeo(spec, 1), createCarWheelMaterial({ wheelRadius: spec.wheelRadius })));
+      group.updateMatrixWorld(true);
+      yield group;
+    }
+  }
+
   // The player's car becomes another (a parked car they got into): its body, paint and lights made again on the same root
   restyleCar(look) {
     const car = this.entities.car;
@@ -1561,6 +1583,8 @@ class ThirdPersonControllerManager {
     if (pool) return pool.floor(x, z);
     const base = groundHeight(x, z) + (mode !== 'kayak' && onAirfield(x, z) ? PAVE + 0.04 : 0);
     let ground = Math.max(base, mode === 'kayak' ? -Infinity : this.rampTop(x, z));
+    // on wheels, the bleachers are one slope up from their front row, driven up and flown off (bleachers.js ramp)
+    if (mode !== 'person' && mode !== 'kayak' && this.bleachers) ground = Math.max(ground, this.bleachers.ramp(x, z));
     // up a parking structure: the deck or ramp under them, the highest within a step of where they are now (their
     // own height, else that mode's player's; -Infinity for the ground itself) (parking-structures.js)
     if (this.parking && mode !== 'kayak') ground = Math.max(ground, this.parking.top(x, z, y ?? this.entities?.[mode]?.position.y));
@@ -1578,7 +1602,9 @@ class ThirdPersonControllerManager {
     if (mode === 'person') {
       const st = carSurface(x, z);
       if (st !== null) return stadiumGround() + st;
-      return Math.max(ground + (this.isPointOnSidewalk(x, z) ? TOWN_BOUNDS.sidewalkHeight : 0.0), this.railways?.trackTop(x, z) ?? -Infinity);
+      // up the bleachers' rows, a step at a time (bleachers.js top)
+      return Math.max(ground + (this.isPointOnSidewalk(x, z) ? TOWN_BOUNDS.sidewalkHeight : 0.0), this.railways?.trackTop(x, z) ?? -Infinity,
+        this.bleachers?.top(x, z, y ?? this.entities?.person?.position.y) ?? -Infinity);
     }
     if (mode === 'kayak') return waterLevel(x, z) ?? ground;
     // over a railroad track: up on its ballast and ties, not sunk into them (railways.js)
@@ -1679,6 +1705,8 @@ class ThirdPersonControllerManager {
       if (carEntity && isStadium(c)) continue;
       // and on foot inside it (got out there), its wall keeps the player in until they drive or fly out
       if (!heli && isStadium(c) && carSurface(pos.x, pos.z) !== null) continue;
+      // the bleachers are climbed from the front, on foot a row at a time and on wheels up their slope (bleachers.js)
+      if (c.stepOn && c.stepOn(pos.x, pos.z, pos.y, this.activeMode, 0.6 + 0.055 * Math.abs((carEntity || entity)?.speed || 0))) continue;
       // a roof the car came down on is its ground (carRoof), not a wall
       if (carEntity && this._carStanding?.has(c)) continue;
       // a parked car is a body of its own: the two trade momentum, and it's shoved along and spun (parked-cars.js)
@@ -2546,7 +2574,10 @@ class ThirdPersonControllerManager {
       const acceleration = (speed - forward) / step;
       // Braking and cornering share tire grip; air resistance does not use it.
       const tireAcceleration = acceleration + D.drag * forward * Math.abs(forward);
-      const grip = air ? 0 : Math.sqrt(Math.max(0, D.grip ** 2 - tireAcceleration ** 2));
+      // Anti-lock brakes and traction control: hard braking or launching never takes more than 70% of the grip,
+      // so the realistic brakes and pull still leave the tires enough to steer
+      const used = Math.min(Math.abs(tireAcceleration), 0.7 * D.grip);
+      const grip = air ? 0 : Math.sqrt(D.grip ** 2 - used ** 2);
       // A handbrake slide preserves steering while reducing lateral grip; fade it out at low speed.
       const handbrake = Math.max(locked, forward * throttle < 0 ? Math.abs(throttle) * Math.min(1, Math.abs(forward) / 5) : 0);
       const lateralGrip = grip * (1 - (0.7 + 0.2 * locked) * handbrake);
@@ -2639,7 +2670,7 @@ class ThirdPersonControllerManager {
     const sn = Math.sin(c.heading), cs = Math.cos(c.heading);
     let roof = -Infinity;
     for (const k of this.nearColliders(x, z, 4)) {
-      if (isStadium(k) || k.thin || k.knock || k.parked || k.onHit || k.maxY < lastY - 40 || k.maxY - (k.minY ?? 0) < 2.2) continue;
+      if (isStadium(k) || k.stand || k.thin || k.knock || k.parked || k.onHit || k.maxY < lastY - 40 || k.maxY - (k.minY ?? 0) < 2.2) continue;
       let top = -Infinity;
       for (const [s, f] of CAR_CORNERS) top = Math.max(top, roofHeightAt(k, x + cs * s + sn * f, z - sn * s + cs * f));
       if (!Number.isFinite(top) || top > lastY + 0.6) continue;
@@ -2702,8 +2733,8 @@ class ThirdPersonControllerManager {
     if (ul > 1e-4) {
       const bx = x - (ux / ul) * back, bz = z - (uz / ul) * back;
       const behind = Math.max(this.getGroundHeight(bx, bz, 'car'), this.carRoof(c, bx, bz, prevY, false));
-      // up a dirt pile's or a slide's ramp it climbs its full slope, so it flies off the top
-      const steep = this.rampTop(x, z) > -Infinity ? 1.0 : 0.45;
+      // up a dirt pile's, a slide's or the bleachers' ramp it climbs its full slope, so it flies off the top
+      const steep = this.rampTop(x, z) > -Infinity || this.bleachers?.ramp(x, z) > -Infinity ? 1.0 : 0.45;
       slopeVy = Math.max(-0.45, Math.min(steep, (ground - behind) / back)) * (ul / dt);
     }
     const ballistic = prevY + c.vy * dt - 4.9 * dt * dt;

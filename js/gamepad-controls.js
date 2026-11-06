@@ -134,7 +134,7 @@ class GamepadControls {
     const edge = (i) => pressed[i] && !this.previousButtons[i] && !this.suppressedButtons[i];
     const held = (i) => pressed[i] && !this.suppressedButtons[i];
     // Capture edges before callbacks: changing mode or opening the map may synchronously call reset().
-    const toggleMap = edge(9), closeMap = edge(1);
+    const toggleMap = edge(9), closeMap = edge(1), go = edge(0), mark = edge(2);
     const cycleMode = Number(Boolean(edge(5))) - Number(Boolean(edge(4)));
     const cycleCamera = edge(3), recenter = edge(11), getInOut = edge(2);
     const radio = Number(Boolean(edge(15))) - Number(Boolean(edge(14)));
@@ -158,8 +158,14 @@ class GamepadControls {
     }
     if (!this.enabled) {
       this.controller.clearGamepadInput();
-      for (let i = 0; i < BUTTON_COUNT; i++) if (i !== 1 && i !== 9) this.suppressedButtons[i] = pressed[i];
-      if (closeMap) this.callbacks.onCloseMap?.();
+      // the map's cursor: the left stick moves it, the right pans, the triggers or the pad's up and down zoom, A goes there, X routes there
+      for (let i = 0; i < BUTTON_COUNT; i++) if (i !== 0 && i !== 1 && i !== 2 && i !== 9) this.suppressedButtons[i] = pressed[i];
+      if (closeMap) {
+        this.callbacks.onCloseMap?.();
+        return;
+      }
+      const zoom = buttonValue(pad, 7) - buttonValue(pad, 6) + Number(pressed[12]) - Number(pressed[13]);
+      this.callbacks.onMapInput?.({ move: stick(pad, 0), pan: stick(pad, 2), zoom, go, mark }, dt);
       return;
     }
     if (cycleMode) this.callbacks.onCycleMode?.(cycleMode);

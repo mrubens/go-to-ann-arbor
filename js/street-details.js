@@ -390,7 +390,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
     dummy.updateMatrix();
     own(lampHeadMatrices);
     dummy.rotation.set(0, 0, 0);
-    cobraLampSites.push({ x: headX, y: 8.02, z: headZ, tx: lx + outX * 3.4, tz: lz + outZ * 3.4 });
+    cobraLampSites.push({ x: headX, y: 8.02, z: headZ, tx: lx + outX * 3.4, tz: lz + outZ * 3.4, px: lx, pz: lz });
     lightPools.push(headX + outX * 0.8, headZ + outZ * 0.8, 17);
   }
   let poolMesh = null;
@@ -487,7 +487,9 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
             y: 8.02,
             z: headZ,
             tx: lx + outX * 3.4,
-            tz: lz + outZ * 3.4
+            tz: lz + outZ * 3.4,
+            px: lx,
+            pz: lz
           });
         }
 
@@ -1456,10 +1458,17 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
       } });
     });
   }
+  // a cobra head's arm, by its pole: what birds perch along (city-birds.js), from just off the pole to the head, its top
+  // ARM_TOP over the ground
+  const ARM_TOP = 8.245;
+  const armOf = new Map();
+  for (const s of cobraLampSites) if (s.px != null) armOf.set(Math.round(s.px * 4) + ',' + Math.round(s.pz * 4), s);
   for (const cell of poleCells.values()) for (const p of cell) {
     const parts = [];
+    const head = armOf.get(Math.round(p.x * 4) + ',' + Math.round(p.z * 4));
     for (let k = 0; k < p.parts.length; k += 2) for (const mesh of meshesOf.get(p.parts[k]) || []) parts.push(mesh, p.parts[k + 1]);
-    obstacles.push({ x: p.x, z: p.z, r: Math.min(0.2, p.width * 0.4), kind: p.width >= 0.5 ? 'signal' : 'lamp', height: 8, parts, out: () => lightsOut(p) });
+    obstacles.push({ x: p.x, z: p.z, r: Math.min(0.2, p.width * 0.4), kind: p.width >= 0.5 ? 'signal' : 'lamp', height: 8, parts, out: () => lightsOut(p),
+      arm: head ? { x: head.px + (head.x - head.px) * 0.86, z: head.pz + (head.z - head.pz) * 0.86, y: ARM_TOP } : null });
   }
   // hydrants break off their flange at a bump and fly, and the water main under them gushes (knockdowns.js)
   if (hydrantMesh) hydrantSites.forEach((h, i) => obstacles.push({ x: h.x, z: h.z, r: 0.2, kind: 'hydrant', height: 0.8, parts: [hydrantMesh, i] }));

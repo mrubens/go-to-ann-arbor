@@ -477,6 +477,58 @@ function hawkCry(ctx) {
   }, 0.5, ANIMAL_RATE);
 }
 
+// A rock pigeon's soft, throaty "coo-roo-coo": three low hooted notes, the middle one rising
+function coo(ctx, seed) {
+  const random = randomSource(seed);
+  const notes = [[0, 0.16, 210, 1], [0.2, 0.32, 235, 1.4], [0.58, 0.22, 200, 0.8]];
+  const base = 0.95 + random() * 0.1;
+  let phase = 0;
+  return makeBuffer(ctx, 0.85, (t) => {
+    let f = 0, env = 0;
+    for (const [at, len, hz, rise] of notes) {
+      const u = t - at;
+      if (u < 0 || u > len) continue;
+      const k = u / len;
+      f = hz * base * (1 + (rise - 1) * 0.12 * Math.sin(Math.PI * k));
+      env = Math.sin(Math.PI * Math.min(1, k * 1.4)) ** 1.5 * (k > 0.7 ? (1 - k) / 0.3 : 1);
+    }
+    if (!f) return 0;
+    phase += TAU * f / ANIMAL_RATE;
+    return (Math.sin(phase) + 0.35 * Math.sin(phase * 2) + 0.08 * Math.sin(phase * 3) + (random() * 2 - 1) * 0.05) * env;
+  }, 0.5, ANIMAL_RATE);
+}
+
+// An American crow's harsh "caaw": a hoarse, falling note with a rasp through it
+function caw(ctx, seed) {
+  const random = randomSource(seed);
+  const len = 0.32 + random() * 0.08, f0 = 640 + random() * 90;
+  const co = 1 - Math.exp(-TAU * 140 / ANIMAL_RATE);
+  let phase = 0, rasp = 0;
+  return makeBuffer(ctx, len + 0.04, (t) => {
+    const noise = random() * 2 - 1;
+    rasp += (noise - rasp) * co;
+    const u = t / len;
+    const f = f0 * (1.08 - 0.22 * u) * (1 + rasp * 0.12);
+    phase += TAU * f / ANIMAL_RATE;
+    const env = (1 - Math.exp(-t * 90)) * (u > 0.65 ? Math.max(0, (1 - u) / 0.35) : 1);
+    return (voiced(phase, f, 1300, 2600, 520, 16) * (0.6 + Math.abs(rasp) * 3) + noise * 0.35) * env;
+  }, 0.6, ANIMAL_RATE);
+}
+
+// A house sparrow's "chirp" (or a robin's "tut"): a quick bright note, bent down and up
+function chirp(ctx, seed) {
+  const random = randomSource(seed);
+  const len = 0.07 + random() * 0.04, f0 = 3400 + random() * 900;
+  let phase = 0;
+  return makeBuffer(ctx, len + 0.02, (t) => {
+    const u = t / len;
+    const f = f0 * (1 - 0.35 * Math.sin(Math.PI * Math.min(1, u)));
+    phase += TAU * f / ANIMAL_RATE;
+    const env = u < 1 ? Math.sin(Math.PI * u) ** 0.8 : 0;
+    return (Math.sin(phase) + 0.3 * Math.sin(phase * 2)) * env;
+  }, 0.45, ANIMAL_RATE);
+}
+
 // A car into the Cube (the-cube.js): a deep metallic clang, a big hollow steel box struck, its low modes ringing on
 function clang(ctx, seed) {
   const random = randomSource(seed);
@@ -526,7 +578,10 @@ export function createEventResources(ctx, resources) {
       hiss: hiss(ctx),
       wingbeat: wingbeat(ctx, 1601),
       hawk: hawkCry(ctx),
-      snort: [snort(ctx, 1801), snort(ctx, 1802)]
+      snort: [snort(ctx, 1801), snort(ctx, 1802)],
+      coo: [coo(ctx, 1901), coo(ctx, 1902)],
+      caw: [caw(ctx, 2001), caw(ctx, 2002), caw(ctx, 2003)],
+      chirp: [chirp(ctx, 2101), chirp(ctx, 2102), chirp(ctx, 2103)]
     }
   };
 }
@@ -536,7 +591,8 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   const start = Math.max(ctx.currentTime, finite(options.when, ctx.currentTime));
   const intensity = clamp(finite(options.intensity, 1));
   const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, plunge: 0.9, door: 0.45, thud: 0.5,
-    chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55, snort: 0.4 };
+    chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55, snort: 0.4,
+    coo: 0.22, caw: 0.36, chirp: 0.16 };
   if (!Object.hasOwn(levels, kind) || intensity === 0) return { endTime: start, dispose() {} };
   const gain = ctx.createGain();
   gain.gain.value = intensity * levels[kind];
@@ -657,6 +713,21 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
     const set = resources.animals.snort, pitch = 0.9 + random() * 0.2;
     const end = play(set[Math.floor(random() * set.length)], start, pitch);
     if (random() < 0.4) play(set[Math.floor(random() * set.length)], end + 0.15 + random() * 0.2, pitch * 0.97, 0.8);
+  } else if (kind === 'coo') {
+    const set = resources.animals.coo;
+    play(set[Math.floor(random() * set.length)], start, 0.92 + random() * 0.14);
+  } else if (kind === 'caw') {
+    // crows call in runs of two to four
+    const set = resources.animals.caw, pitch = 0.93 + random() * 0.14;
+    let at = start;
+    const n = 2 + Math.floor(random() * 3);
+    for (let i = 0; i < n; i++) at = play(set[Math.floor(random() * set.length)], at, pitch * (1 - i * 0.015), 1 - i * 0.08) + 0.12 + random() * 0.14;
+  } else if (kind === 'chirp') {
+    // a sparrow's run of chirps; low intensity is a robin's slower, lower "tut"
+    const set = resources.animals.chirp, robin = intensity < 0.6, pitch = (robin ? 0.62 : 0.9) + random() * 0.2;
+    let at = start;
+    const n = (robin ? 2 : 2) + Math.floor(random() * 3);
+    for (let i = 0; i < n; i++) at = play(set[Math.floor(random() * set.length)], at, pitch * (0.96 + random() * 0.08)) + (robin ? 0.16 : 0.05) + random() * 0.08;
   } else if (kind === 'hiss') {
     play(resources.animals.hiss, start, 0.92 + random() * 0.16);
   } else if (kind === 'wingbeat') {

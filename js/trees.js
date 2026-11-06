@@ -1,4 +1,5 @@
 import { TIER } from './device-tier.js';
+import { log } from '../lamp-game.js';
 import * as THREE from 'three/webgpu';
 import { createTreeMaterial } from './tsl-materials.js';
 import { groundHeight } from './terrain.js';
@@ -970,6 +971,47 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     l1: [0, 1].map((v) => makeType(geos[s][v][1], `Trees_${sp.name}_v${v}_lod1`)),
     l2: [0, 1].map((v) => makeType(geos[s][v][2], `Trees_${sp.name}_v${v}_lod2`))
   }));
+  // Lamp: on the Xbox, where setting up each draw is what costs, a level's shapes of every species are one geometry
+  // (each vertex knowing its shape, `aKind`) and each tree its shape (`aTreeKind`): the material folds the others away,
+  // so a cell's trees at a level are one draw rather than one per species and variant
+  const mergeLevel = (l) => {
+    const parts = [];
+    let verts = 0, tris = 0;
+    geos.forEach((variants, s) => variants.forEach((levels, v) => {
+      const g = levels[l];
+      parts.push({ g, kind: s * 2 + v });
+      verts += g.attributes.position.count;
+      tris += g.index.count / 3;
+    }));
+    // every tree runs every shape's vertices: only where that's cheap
+    if (tris > TIER.mergeTrees) { log(`[trees] level ${l} kept apart (${Math.round(tris / 1000)}k triangles merged)`); return null; }
+    const geo = new THREE.BufferGeometry();
+    const names = ['position', 'normal', 'uv', 'aTree'];
+    const arrays = names.map((n) => new Float32Array(verts * parts[0].g.attributes[n].itemSize));
+    const kind = new Float32Array(verts), index = new Uint32Array(tris * 3);
+    let vo = 0, io = 0;
+    const box = new THREE.Box3();
+    for (const { g, kind: k } of parts) {
+      names.forEach((n, j) => arrays[j].set(g.attributes[n].array, vo * g.attributes[n].itemSize));
+      const n = g.attributes.position.count;
+      kind.fill(k, vo, vo + n);
+      const src = g.index.array;
+      for (let i = 0; i < src.length; i++) index[io + i] = src[i] + vo;
+      io += src.length; vo += n;
+      box.union(g.boundingBox);
+    }
+    names.forEach((n, j) => geo.setAttribute(n, new THREE.BufferAttribute(arrays[j], parts[0].g.attributes[n].itemSize)));
+    geo.setAttribute('aKind', new THREE.BufferAttribute(kind, 1));
+    geo.setIndex(new THREE.BufferAttribute(index, 1));
+    geo.boundingBox = box;
+    geo.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+    const type = makeType(geo, `Trees_all_lod${l}`);
+    type.merged = true;
+    log(`[trees] level ${l}: ${parts.length} shapes as one draw a cell (${Math.round(tris / 1000)}k triangles)`);
+    return type;
+  };
+  const MERGED = TIER.mergeTrees ? [0, 1, 2].map(mergeLevel) : [null, null, null];
+  const mergedMaterial = MERGED.some(Boolean) ? createTreeMaterial(atlas.texture, { merged: true }) : null;
 
   // Lamp: park, wood and yard trees (`likeStreet`) take their heights from the surveyed street trees of their kind,
   // each picked by its place, so a park's maples grow as the street's maples do
@@ -1022,6 +1064,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
   const py = new Float32Array(capacity);
   const pz = new Float32Array(capacity);
   const meshOf = new Int32Array(capacity * 3); // mesh index per level
+  const kindOf = new Uint8Array(capacity); // species * 2 + variant, for a merged level's material
   const cellOf = new Array(capacity);
   const farOf = new Array(capacity);
   const tier = new Uint8Array(capacity);
@@ -1075,8 +1118,9 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     const far = farOf[i] = cellAt(FAR_CELL_SIZE, true);
     const mi = meshIndex[sp];
     const treeTypes = [mi.l0[variant], mi.l1[variant], mi.l2[variant]];
+    kindOf[i] = sp * 2 + variant;
     for (let l = 0; l < 3; l++) {
-      const type = treeTypes[l];
+      const type = MERGED[l] || treeTypes[l];
       const cell = l === 2 ? far : near, key = cell.key;
       let index = cell.meshes.get(type);
       if (index === undefined) {
@@ -1146,11 +1190,12 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     // when the levels change.
     const treeData = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
     geo.setAttribute('aTreeData', treeData);
-    const mesh = new THREE.InstancedMesh(geo, material, cap);
+    if (m.type.merged) geo.setAttribute('aTreeKind', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
+    const mesh = new THREE.InstancedMesh(geo, m.type.merged ? mergedMaterial : material, cap);
     mesh.name = m.name;
     mesh.count = 0;
     mesh.visible = false;
-    mesh.castShadow = !m.cell.far;
+    mesh.castShadow = !m.cell.far && TIER.shadows !== false;
     mesh.receiveShadow = true;
     m.cell.group.add(mesh);
     m.type.meshes.push(mesh);
@@ -1194,6 +1239,8 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
         dstD[dstDOff + 1] = data[srcD + 1];
         dstD[dstDOff + 2] = data[srcD + 2];
         dstD[dstDOff + 3] = data[srcD + 3];
+        const kinds = mesh.geometry.attributes.aTreeKind;
+        if (kinds) kinds.array[c] = kindOf[i];
       }
       let visible = false;
       for (let m = 0; m < mIndices.length; m++) {
@@ -1205,7 +1252,8 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
         if (n > 0) {
           visible = true;
           // main.js swaps instanceMatrix for a storage attribute: look it up here on every changed cell.
-          for (const attr of [mesh.instanceMatrix, mesh.geometry.attributes.aTreeData]) {
+          for (const attr of [mesh.instanceMatrix, mesh.geometry.attributes.aTreeData, mesh.geometry.attributes.aTreeKind]) {
+            if (!attr) continue;
             attr.clearUpdateRanges();
             attr.addUpdateRange(0, n * attr.itemSize);
             attr.needsUpdate = true;
@@ -1365,7 +1413,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
   function dispose() {
     group.removeFromParent();
     for (const mesh of instanced) {
-      dropBuffers([mesh.instanceMatrix, mesh.geometry.attributes.aTreeData]);
+      dropBuffers([mesh.instanceMatrix, mesh.geometry.attributes.aTreeData, mesh.geometry.attributes.aTreeKind].filter(Boolean));
       for (const type of types) { const k = type.meshes.indexOf(mesh); if (k >= 0) type.meshes.splice(k, 1); }
     }
   }

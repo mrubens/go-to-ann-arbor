@@ -3,7 +3,7 @@ import { Fn, attribute, texture, uv, mix, vec3, float, step, normalMap, normalVi
 import { Body, paintFeathers } from './animal-models.js';
 
 // The birds of the river and the sky (animals.js): mallards (drakes and hens), Canada geese, the great blue heron and
-// the red-tailed hawk. One skeleton for every bird (a body, a neck of three, a head, a tail, two wings of three and two
+// the red-tailed hawk; and the town's (city-birds.js): rock pigeons, American crows, robins and house sparrows. One skeleton for every bird (a body, a neck of three, a head, a tail, two wings of three and two
 // legs of three), each species its own proportions and colours, built as lofted rings like the squirrel
 // (animal-models.js), with one feather texture shared by all of them.
 //
@@ -159,6 +159,150 @@ const SPECIES = {
       const band = sm(0.25, 0.4, z) * (1 - sm(0.55, 0.65, z)) * sm(0.2, -0.3, n.y) * (Math.sin(p.x * 180) > 0.2 ? 1 : 0.45);
       const k = mixC(mixC(C(0xece2cc), C(0x3d2a1c), band * 0.8), C(0x5a3e2a), top);
       return [k, k];
+    },
+    mat(part) {
+      if (part === 'bill' || part === 'leg' || part === 'foot') return [1, 0, 0, 0];
+      return [0, 0, 0.55, 0];
+    }
+  },
+  // The town's birds (city-birds.js). The rock pigeon: blue-grey with two black wing bars, a dark tail band and the
+  // green and purple sheen on its neck (A, the common "blue bar"); B the darker checkered kind
+  pigeon: {
+    len: 0.27, w: 0.066, h: 0.06, d: 0.064, cy: 0.118, rise: 0.03, float: 0, zfold: 0.6,
+    neck: [[0, 0.14, 0.095], [0, 0.158, 0.11], [0, 0.174, 0.12], [0, 0.188, 0.126]], neckR: [0.036, 0.022],
+    head: { r: 0.021, long: 1.1 }, bill: { len: 0.017, w: 0.0055, h: 0.0052, droop: 0.002, tip: 0.4 },
+    legs: { x: 0.022, hip: [0.095, 0.0], knee: [0.05, 0.012], ankle: 0.012, r: 0.0052, foot: { len: 0.036, w: 0.026 } },
+    tail: { len: 0.1, w: 0.046, up: 0.0 }, wing: { half: 0.32, chord: 0.1, at: [0.04, 0.142, 0.05], tipShape: 0.4, sweep: 0.05 },
+    paint(part, p, n, u) {
+      const top = sm(-0.2, 0.5, n.y);
+      if (part === 'bill') { const k = mixC(C(0x3a3436), C(0xdcd6d0), sm(0.35, 0.15, u) * top); return [k, k]; }
+      if (part === 'leg' || part === 'foot') { const k = C(0xc24a58); return [k, k]; }
+      if (part === 'head') return [C(0x6c7383), C(0x4b4f5a)];
+      if (part === 'neck') {
+        // the sheen: green and purple by the angle of the feathers, fading into the head's grey
+        const sheen = mixC(C(0x3d7c5a), C(0x7b4a88), sm(-0.4, 0.4, n.x * 0.7 + n.y * 0.5));
+        return [mixC(sheen, C(0x6c7383), sm(0.7, 0.95, u)), mixC(mixC(sheen, C(0x404450), 0.4), C(0x4b4f5a), sm(0.7, 0.95, u))];
+      }
+      if (part === 'tail') { const band = sm(0.72, 0.8, u); return [mixC(C(0x7b8290), C(0x26282c), band), mixC(C(0x5a5f6b), C(0x1f2024), band)]; }
+      if (part === 'wing') {
+        const inner = 1 - sm(0.42, 0.5, u);
+        const bars = inner * sm(0.1, 0.18, u) * (Math.exp(-(((p.chord - 0.45) / 0.06) ** 2)) + Math.exp(-(((p.chord - 0.75) / 0.06) ** 2))) * top;
+        const tip = sm(0.68, 0.9, u);
+        const check = Math.sin(p.x * 260) * Math.sin(p.z * 260) > 0.2 ? 1 : 0;
+        const a = mixC(mixC(C(0xa4aab5), C(0x3a3c42), tip), C(0x1c1d21), Math.min(1, bars * 1.6));
+        const b = mixC(mixC(mixC(C(0x7c818c), C(0x2e3035), check * inner * 0.7), C(0x2a2b30), tip), C(0x1c1d21), Math.min(1, bars * 1.6));
+        const under = C(0xc9ccd3);
+        return [mixC(a, under, 1 - top), mixC(b, under, 1 - top)];
+      }
+      // the body: the back paler, a pale rump over the tail, the breast with a wine-grey cast
+      const z = p.z / this.len + 0.5;
+      let a = mixC(C(0x858b98), C(0xa2a8b3), top);
+      a = mixC(a, C(0xdadce1), (1 - sm(0.1, 0.2, z)) * top * 0.8);
+      a = mixC(a, C(0x7d7088), sm(0.68, 0.85, z) * (1 - top) * 0.6);
+      const b = mixC(mixC(C(0x585c67), C(0x6b707b), top), C(0x5d5266), sm(0.68, 0.85, z) * 0.4);
+      return [a, b];
+    },
+    mat(part) {
+      if (part === 'bill' || part === 'leg' || part === 'foot') return [1, 0, 0, 0];
+      if (part === 'neck') return [0, 0, 0.1, 0.9];
+      return [0, 0, 0.3, 0];
+    }
+  },
+  // The American crow: black all over with a blue-violet gloss, a stout black bill
+  crow: {
+    len: 0.3, w: 0.076, h: 0.07, d: 0.072, cy: 0.2, rise: 0.03, float: 0, zfold: 0.55,
+    neck: [[0, 0.218, 0.13], [0, 0.238, 0.15], [0, 0.256, 0.164], [0, 0.27, 0.174]], neckR: [0.044, 0.031],
+    head: { r: 0.031, long: 1.25 }, bill: { len: 0.052, w: 0.012, h: 0.015, droop: 0.009, tip: 0.25 },
+    legs: { x: 0.03, hip: [0.16, -0.01], knee: [0.09, 0.012], ankle: 0.02, r: 0.0072, foot: { len: 0.05, w: 0.036 } },
+    tail: { len: 0.16, w: 0.07, up: 0.0 }, wing: { half: 0.46, chord: 0.15, at: [0.05, 0.222, 0.07], tipShape: 0.3, sweep: 0.06 },
+    paint(part, p, n) {
+      if (part === 'bill' || part === 'leg' || part === 'foot') { const k = C(0x121214); return [k, k]; }
+      const k = mixC(C(0x141519), C(0x1c1e27), sm(-0.2, 0.6, n.y));
+      return [k, k];
+    },
+    mat(part) {
+      if (part === 'bill' || part === 'leg' || part === 'foot') return [1, 0, 0, 0];
+      return [0, 0, 0.12, part === 'tail' ? 0.4 : 0.65];
+    }
+  },
+  // The American robin: brick-orange breast, a dark head, a yellow bill, grey-brown back, the white under the tail; A the
+  // male, B the paler female
+  robin: {
+    len: 0.17, w: 0.046, h: 0.043, d: 0.046, cy: 0.1, rise: 0.02, float: 0, zfold: 0.55,
+    neck: [[0, 0.112, 0.07], [0, 0.126, 0.082], [0, 0.139, 0.09], [0, 0.149, 0.095]], neckR: [0.027, 0.018],
+    head: { r: 0.018, long: 1.15 }, bill: { len: 0.019, w: 0.0052, h: 0.005, droop: 0.0012, tip: 0.35 },
+    legs: { x: 0.016, hip: [0.08, 0.0], knee: [0.046, 0.01], ankle: 0.012, r: 0.0036, foot: { len: 0.026, w: 0.016 } },
+    tail: { len: 0.09, w: 0.035, up: 0.012 }, wing: { half: 0.17, chord: 0.072, at: [0.03, 0.112, 0.035], tipShape: 0.35, sweep: 0.03 },
+    paint(part, p, n, u) {
+      const top = sm(-0.2, 0.5, n.y);
+      if (part === 'bill') { const k = mixC(C(0xe0a92a), C(0x3b3428), sm(0.7, 0.95, u) * 0.8); return [k, k]; }
+      if (part === 'leg' || part === 'foot') { const k = C(0x5a4c42); return [k, k]; }
+      if (part === 'head') {
+        // the white throat streaked with black, under the chin
+        const throat = sm(-0.35, -0.7, n.y) * sm(0.25, 0.5, u) * (Math.sin(p.x * 900) > 0.1 ? 1 : 0.35);
+        return [mixC(C(0x26262a), C(0xe8e4dc), throat), mixC(C(0x4f4b48), C(0xe8e4dc), throat)];
+      }
+      if (part === 'neck') {
+        const front = sm(0.1, -0.5, n.y);
+        return [mixC(mixC(C(0x3e3b3a), C(0x26262a), u), C(0xb9512a), front), mixC(C(0x5f5a55), C(0xc47a4c), front)];
+      }
+      if (part === 'tail') { const k = mixC(C(0x2a2a2c), C(0xe9e6e0), sm(0.05, 0.2, u) * sm(0, -0.5, n.y)); return [k, mixC(k, C(0x45423f), 0.5)]; }
+      if (part === 'wing') {
+        const k = mixC(C(0x5a544e), C(0x37332f), sm(0.6, 1, u));
+        const under = C(0x8c7e72);
+        return [mixC(k, under, 1 - top), mixC(mixC(k, C(0x6e675f), 0.4), under, 1 - top)];
+      }
+      // the body: the orange breast down to a white belly and undertail, the grey-brown back
+      const z = p.z / this.len + 0.5, below = sm(0.25, -0.35, n.y);
+      const breast = sm(0.3, 0.45, z), vent = (1 - sm(0.15, 0.32, z)) * below;
+      const a = mixC(mixC(mixC(C(0x5b5550), C(0xb4502a), breast * sm(0.35, -0.2, n.y)), C(0xeeeae2), vent), C(0x5b5550), top * 0.9);
+      const b = mixC(mixC(mixC(C(0x736b63), C(0xc47d4f), breast * sm(0.35, -0.2, n.y)), C(0xeeeae2), vent), C(0x736b63), top * 0.9);
+      return [a, b];
+    },
+    mat(part) {
+      if (part === 'bill' || part === 'leg' || part === 'foot') return [1, 0, 0, 0];
+      return [0, 0, 0.25, 0];
+    }
+  },
+  // The house sparrow: A the male (grey crown, chestnut behind the eye, white cheek, black bib, streaked back, white wing
+  // bar), B the female (buff and brown, a pale stripe over the eye)
+  sparrow: {
+    len: 0.1, w: 0.031, h: 0.03, d: 0.033, cy: 0.066, rise: 0.01, float: 0, zfold: 0.55,
+    neck: [[0, 0.073, 0.045], [0, 0.081, 0.052], [0, 0.089, 0.057], [0, 0.096, 0.06]], neckR: [0.021, 0.016],
+    head: { r: 0.0155, long: 1.0 }, bill: { len: 0.011, w: 0.0056, h: 0.0062, droop: 0.002, tip: 0.35 },
+    legs: { x: 0.011, hip: [0.05, 0.0], knee: [0.03, 0.006], ankle: 0.009, r: 0.0026, foot: { len: 0.017, w: 0.012 } },
+    tail: { len: 0.056, w: 0.025, up: 0.01 }, wing: { half: 0.11, chord: 0.05, at: [0.02, 0.071, 0.02], tipShape: 0.3, sweep: 0.02 },
+    paint(part, p, n, u) {
+      const top = sm(-0.2, 0.5, n.y), side = Math.abs(n.x);
+      if (part === 'bill') return [C(0x1b1a19), C(0xb39a6a)];
+      if (part === 'leg' || part === 'foot') { const k = C(0xb08a6e); return [k, k]; }
+      if (part === 'head') {
+        const crown = sm(0.35, 0.65, n.y) * sm(0.6, 0.3, side);
+        const nape = sm(0.3, 0.55, side) * sm(-0.15, 0.2, n.y) * sm(0.6, 0.35, u);
+        const cheek = sm(0.45, 0.7, side) * sm(0.1, -0.25, n.y);
+        const bib = sm(-0.45, -0.75, n.y) * sm(0.2, 0.45, u);
+        let a = mixC(mixC(C(0x7d7c7a), C(0x7a4325), Math.max(nape, 1 - crown) * 0.85), C(0xdad6cc), cheek);
+        a = mixC(a, C(0x151412), bib);
+        const brow = Math.exp(-(((n.y - 0.35) / 0.12) ** 2)) * sm(0.4, 0.65, side) * sm(0.6, 0.35, u);
+        const b = mixC(mixC(C(0x8a7a64), C(0xb5a68c), sm(0, -0.5, n.y)), C(0xcfba92), brow);
+        return [a, b];
+      }
+      if (part === 'neck') {
+        const front = sm(0, -0.5, n.y);
+        return [mixC(mixC(C(0x7a4325), C(0x8f8e8a), front), C(0x151412), front * sm(0.4, 0.7, u)), mixC(C(0x8e7c62), C(0xb9ab92), front)];
+      }
+      if (part === 'tail') { const k = C(0x4f3d2c); return [k, k]; }
+      if (part === 'wing') {
+        const bar = Math.exp(-(((p.chord - 0.3) / 0.07) ** 2)) * (1 - sm(0.3, 0.42, u)) * top;
+        const streak = Math.sin(p.z * 700 + p.x * 90) > 0.4 ? 1 : 0;
+        const k = mixC(mixC(C(0x80552f), C(0x2f2219), Math.max(streak * 0.6 * top, sm(0.65, 1, u))), C(0xe6e0d2), bar);
+        const under = C(0xb0a796);
+        return [mixC(k, under, 1 - top), mixC(mixC(k, C(0x8c7356), 0.3), under, 1 - top)];
+      }
+      // the body: the back streaked buff and black on brown, the belly plain grey
+      const streak = Math.sin(p.x * 620 + p.z * 90) > 0.45 ? 1 : 0;
+      const back = mixC(mixC(C(0x8a5d35), C(0xc49a62), streak * 0.5), C(0x2b2118), (Math.sin(p.x * 620 + p.z * 90) < -0.6 ? 1 : 0) * 0.8);
+      return [mixC(C(0xa9a7a1), back, top), mixC(C(0xbcae94), mixC(back, C(0x9a8466), 0.35), top)];
     },
     mat(part) {
       if (part === 'bill' || part === 'leg' || part === 'foot') return [1, 0, 0, 0];

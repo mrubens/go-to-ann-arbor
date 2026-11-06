@@ -1,4 +1,4 @@
-import { TIER } from './device-tier.js';
+import { TIER, XBOX } from './device-tier.js';
 import * as THREE from 'three/webgpu';
 import { buildRoadNetwork } from './road-network.js';
 import { planClosures } from './road-work.js';
@@ -2171,6 +2171,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   let lastFocusZ = Infinity;
   let vehicleCursor = 0;
 
+  let spawnTick = 0;
   function update(dt, elapsed, focusPos = null, playerEntity = null, activeMode = 'car', camera = null) {
     clock = elapsed;
     avePhase = signalPhase(elapsed, true);
@@ -2206,7 +2207,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     // 1. Cars & buses
     // Limit attempted placements, not just successes, and rotate through the pool so an awkward location
     // cannot monopolize a frame. Previous-frame lane lists protect spawn spacing; rebuild before driving.
-    let budget = jump ? vehicles.length : 4;
+    // (on the Xbox, short of processor, the scan for cars to bring in runs every third frame, with the same budget)
+    spawnTick++;
+    let budget = jump ? vehicles.length : XBOX && spawnTick % 3 ? 0 : 4;
     for (let scanned = 0; scanned < vehicles.length && budget > 0; scanned++) {
       const v = vehicles[vehicleCursor];
       vehicleCursor = (vehicleCursor + 1) % vehicles.length;

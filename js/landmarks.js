@@ -8,6 +8,8 @@ import { buildDiagM } from './diag-m.js';
 import { buildGraffitiAlley } from './graffiti-alley.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { STADIUM, N, radiiAt, FIELD_Y, WALL_TOP, SEAT_TOP, RIM_Y, WALL_Y, AISLE_IN, CONCOURSE } from './stadium-shape.js';
+import { mergeStatic, splitByCell } from './merge-static.js';
+import { TIER } from './device-tier.js';
 
 // Ann Arbor's landmarks are the city's own surveyed buildings (Burton Tower, Hill Auditorium, the Union...), drawn by
 // buildings.js. What the survey can't give is Michigan Stadium, "the Big House": a bowl dug into the ground, its stands
@@ -357,7 +359,15 @@ function buildLandmarks(scene) {
   if (buildDiagM(group)) campus.push('the Diag M');
   // Graffiti Alley beside the theater, painted over every surface
   if (buildGraffitiAlley(group, colliders)) campus.push('Graffiti Alley');
-  console.info(`[landmarks] the Big House, ${campus.join(', ')}`);
+  // the hundreds of small pieces they're built of, merged by material: a few dozen draws (merge-static.js)
+  const reach = TIER.landmarkReach;
+  // Lamp: on the Xbox the landmarks built as one mesh across the town (campus-landmarks.js, more-landmarks.js) are cut
+  // by where they stand, so each building is culled and hidden on its own
+  if (reach) for (const o of [...group.children]) if (/^(CampusLandmark|MoreLandmarks)/.test(o.name)) splitByCell(o, 300);
+  const { before, after } = mergeStatic(group, 400, { share: !!reach });
+  // Lamp: on the Xbox none drawn beyond about a kilometre (the city's culling scales a distance by `farCut`)
+  if (reach) group.traverse((o) => { if (o.isMesh && !o.userData.cullDistance) o.userData.cullDistance = reach / TIER.farCut; });
+  console.info(`[landmarks] the Big House, ${campus.join(', ')}; ${before} pieces drawn as ${after}`);
   scene.add(group);
   return { group, colliders };
 }

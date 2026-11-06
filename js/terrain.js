@@ -18,6 +18,7 @@ import { GEO } from './city-geodata.js';
 import { carveCascades, cascadeDepth, cascadeLevel } from './cascades.js';
 import { baseHeight, digAt, levelAt, onDeck, BUCKET, bucketKey, drapeLayer, CORE_SOURCE, coreHeight, inCore, splitsOf, CORE_FLOOR } from './ground-core.js';
 import { LIFT } from './ground-lifts.js';
+import { TIER } from './device-tier.js';
 
 let grid = null; // { x0, z0, step, cols, rows, heights: Float32Array }
 
@@ -25,7 +26,7 @@ let grid = null; // { x0, z0, step, cols, rows, heights: Float32Array }
 // read once; the parts of the city built on them name what this returns as one of their inputs.
 async function loadTerrain(url = './data/elevation.bin.gz') {
   grid = await hot(import.meta).keep('heightsAndRiver', () => readHeights(url),
-    { from: [url.replace(/^\.\//, ''), 'js/cascades.js', 'data/river.bin.gz', 'data/ground.bin.gz', 'js/ground-core.js'] });
+    { from: [url.replace(/^\.\//, ''), 'js/cascades.js', 'data/river.bin.gz', 'data/ground.bin.gz', 'js/ground-core.js', 'js/device-tier.js'] });
   return grid;
 }
 
@@ -66,7 +67,8 @@ async function readHeights(url) {
 // bed are dug into it here, then it's made into one mesh of right triangles that strays no more than 10 cm from them
 // (25 cm in its smallest triangles, about 11 m across and less, which are cut again only at a bank or a street's edge)
 // (ground-core.js), which the ground layers are all cut along, and a coarser one for the ground under the city.
-const CORE_TOLERANCE = 0.1, UNDER_TOLERANCE = 0.5, CORE_SMALLEST = 4, SMALL_STRAY = 2.5;
+// (on an Xbox, within TIER.ground: device-tier.js)
+const CORE_TOLERANCE = TIER.ground || 0.1, UNDER_TOLERANCE = TIER.ground ? 0.8 : 0.5, CORE_SMALLEST = 4, SMALL_STRAY = 2.5;
 async function readCore(g, url) {
   try {
     const began = performance.now();
@@ -1177,9 +1179,14 @@ async function buildTiles(list) {
     mesh.name = layer.group.name;
     mesh.userData.streamed = true;
     gpuOnly(mesh);
-    layer.group.add(mesh);
-    mesh.updateMatrixWorld(true);
     layer.built.set(k, mesh);
+    const put = () => {
+      if (layer.built.get(k) !== mesh) return; // let go before it was put in
+      layer.group.add(mesh);
+      mesh.updateMatrixWorld(true);
+    };
+    // Lamp: on the Xbox one a frame (updateGroundStreaming), so a batch's uploads don't all land on one frame
+    if (TIER.spreadLoads) (stream.pending ||= []).push(put); else put();
   });
   return missing.length;
 }
@@ -1187,8 +1194,10 @@ async function buildTiles(list) {
 // Every frame: the tiles the player has come near are drawn (a few at a time, one batch in hand), and those left more
 // than 400 m beyond the radius let go. Answers whether any were drawn or let go.
 const AWAY = 300, BATCH = 6;
-function updateGroundStreaming(x, z) {
+// (a second player's place, in split screen, keeps and fills the tiles around them too)
+function updateGroundStreaming(x, z, x2 = NaN, z2 = NaN) {
   if (!stream.radius || !stream.layers.length) return false;
+  const two = Number.isFinite(x2) && Number.isFinite(z2);
   stream.x = x; stream.z = z;
   let changed = false;
   for (const layer of stream.layers) {
@@ -1198,7 +1207,7 @@ function updateGroundStreaming(x, z) {
     // (counted only once it's been in the scene: a part still being set on the ground hasn't put it there yet)
     if (top.isScene) { layer.placed = true; layer.away = 0; } else if (layer.placed) layer.away++;
     for (const [k, mesh] of layer.built) {
-      if (tileDistance(k, x, z) < stream.radius + AWAY) continue;
+      if (tileDistance(k, x, z) < stream.radius + AWAY || (two && tileDistance(k, x2, z2) < stream.radius + AWAY)) continue;
       mesh?.removeFromParent();
       mesh?.geometry.dispose();
       layer.built.delete(k);
@@ -1208,8 +1217,11 @@ function updateGroundStreaming(x, z) {
   const before = stream.layers.length;
   stream.layers = stream.layers.filter((layer) => layer.away < 600);
   if (stream.layers.length < before) log(`[stream] let go of ${before - stream.layers.length} layers no longer drawn`);
-  if (!stream.busy) {
-    const want = wantedTiles(x, z, stream.layers.filter((layer) => !layer.away)).slice(0, BATCH);
+  if (stream.pending?.length) { stream.pending.shift()(); changed = true; }
+  if (!stream.busy && !(stream.pending?.length > BATCH)) {
+    const layers = stream.layers.filter((layer) => !layer.away);
+    let want = wantedTiles(x, z, layers).slice(0, BATCH);
+    if (two && want.length < BATCH) want = want.concat(wantedTiles(x2, z2, layers).filter(([l, k]) => !want.some(([l2, k2]) => l2 === l && k2 === k)).slice(0, BATCH - want.length));
     if (want.length) {
       stream.busy = true;
       buildTiles(want).catch((error) => log(`[stream] ${error?.message || error}`)).finally(() => { stream.busy = false; });

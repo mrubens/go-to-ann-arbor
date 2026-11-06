@@ -392,7 +392,19 @@ body.hud-minimized .toolbar > :not(#btn-toggle-hud) {
   white-space: nowrap;
 }
 
+.brand-fps {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 #hud-fps {
+  display: inline-block;
+  min-width: 2ch;
+  text-align: right;
   font-weight: 650;
   color: var(--text-2);
 }
@@ -1059,6 +1071,33 @@ body[data-mode='helicopter'] .gauge-alt {
   cursor: grabbing;
 }
 
+/* the controller's cursor on the full map: a ring with a dot, its middle on the point */
+.fullmap-pad-cursor {
+  position: absolute;
+  left: -22px;
+  top: -22px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px rgba(10, 20, 40, 0.75), inset 0 0 0 2px rgba(10, 20, 40, 0.75);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.fullmap-pad-cursor::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: #ff4d4d;
+  box-shadow: 0 0 0 2px #fff;
+}
+
 #fullmap-canvas {
   touch-action: none;
   display: block;
@@ -1540,3 +1579,50 @@ body.touch-enabled .pop-item { min-height: 44px; }
 #btn-record[aria-pressed="true"] .icon { animation: rec-pulse 1.2s ease-in-out infinite; }
 #btn-record .rec-time { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: left; }
 @keyframes rec-pulse { 50% { opacity: 0.35; } }
+
+/* ------------------------------------------------------------------------------------------------------------------
+   Split screen (split-screen.js): the first player's speedometer at the corner of the left half, the second's at the
+   right edge, a dark line between the halves; the controls guide steps aside
+   ------------------------------------------------------------------------------------------------------------------ */
+.p2-hud { display: none; }
+body.split .p2-hud { display: block; }
+body.split .hud-bottom-right:not(.p2-hud) { right: calc(50% + var(--edge)); }
+body.split .hud-bottom-center { display: none; }
+body.split .cluster { width: 220px; }
+body.split #hud-cluster .gauge-label::before { content: 'P1 · '; }
+.p2-hud .gauge-label::before { content: 'P2 · '; }
+.p2-speed {
+  font-size: 42px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+.p2-meter {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--text);
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+/* each player's mini map, smaller, in the bottom-left corner of their own half */
+.p2-radar { display: none; left: calc(50% + var(--edge)); bottom: var(--edge); }
+body.split .p2-radar { display: block; }
+body.split .radar { width: 220px; height: 140px; }
+.p2-radar-canvas { display: block; width: 100%; height: 100%; }
+/* only the first player has the radio */
+body.split .p2-hud .car-radio { display: none; }
+.split-divider { display: none; }
+body.split .split-divider {
+  display: block;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 4px;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 5;
+  pointer-events: none;
+}

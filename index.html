@@ -130,6 +130,7 @@
       <div class="brand-titles">
         <div class="brand-heading">
           <h1>Go To Ann Arbor</h1>
+          <span class="brand-fps" aria-label="Frames a second"><span id="hud-fps">--</span> fps</span>
           <a class="repo-link" href="https://github.com/mrubens/go-to-ann-arbor" target="_blank" rel="noopener noreferrer" aria-label="Go To Ann Arbor on GitHub (opens in your browser)">GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </div>
@@ -404,7 +405,7 @@
 
     <div class="fullmap-footer">
       <div class="panel fullmap-status">
-        <span id="fullmap-hover-info">Click anywhere to teleport &amp; set your GPS route · Drag to pan · Scroll to zoom</span>
+        <span id="fullmap-hover-info">Click to teleport · Right-click to set a route · Drag to pan · Scroll to zoom</span>
       </div>
       <button id="map-clear-route" class="panel tool-btn map-clear-route hidden" type="button" title="Clear the GPS route">
         <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg><span>Clear route</span>
@@ -425,12 +426,12 @@
 <div id="lamp-remix" hidden>
   <div class="lamp-remix-head">Make Go To Ann Arbor yours<button type="button" id="lamp-remix-close" aria-label="Close">×</button></div>
   <p>Say what you'd change. Lamp makes the change and keeps your data.</p>
-  <button type="button" class="lamp-remix-pick">Add snow and fall leaves by season</button><button type="button" class="lamp-remix-pick">Let me honk the SUV horn</button><button type="button" class="lamp-remix-pick">Put game day crowds in the Big House</button>
+  <button type="button" class="lamp-remix-pick">Add a night mode with glowing streetlights</button><button type="button" class="lamp-remix-pick">Let me drop a pin on the minimap</button><button type="button" class="lamp-remix-pick">Make rain and snow roll through the city</button>
   <textarea id="lamp-remix-ask" rows="3" placeholder="Or say it your way"></textarea>
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of Go To Ann Arbor with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"f19122b0e65533789672ad428f94efc800631fe9","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"5b60c567882f1ba0e487068b80f65ab2c23b865b","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');

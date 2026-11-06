@@ -17,7 +17,7 @@ import { groundHeight } from './terrain.js';
 import { layOutHoles } from './golf.js';
 import { AIRPORT } from './airport-data.js';
 import { onAirfield } from './airport.js';
-import { hot } from '../lamp-game.js';
+import { hot, BUTTON, STICK, TRIGGER, glyph, onInput } from '../lamp-game.js';
 
 // Lamp: the map systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so a
 // change to how the map is drawn shows at once rather than after the player moves (the end of this file).
@@ -492,6 +492,9 @@ class CityMapSystem {
     this.panPointerId = null;
     this.panStart = { x: 0, y: 0, cx: 0, cz: 0 };
     this.dragMoved = false;
+    // A controller's cursor on the full map (CSS pixels in the canvas), shown once a stick moves it
+    this.cursor = { x: 0, y: 0, on: false };
+    this.elCursor = null;
 
     this.searchHighlight = '';
     this.searchPath = null;
@@ -584,7 +587,9 @@ class CityMapSystem {
     if (this.fullCanvas) {
       this.fullCanvas.style.touchAction = 'none';
       this.fullCanvas.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0 || !this.isFullMapOpen || this.panPointerId !== null) return;
+        // a Control-click is a right-click on a Mac: it sets a route (contextmenu below), never a teleport
+        if (e.button !== 0 || e.ctrlKey || !this.isFullMapOpen || this.panPointerId !== null) return;
+        this.routeClick = false;
         e.preventDefault();
         // a click in the whole-city overview moves the map there
         const r0 = this.fullCanvas.getBoundingClientRect();
@@ -624,34 +629,24 @@ class CityMapSystem {
           return;
         }
 
+        if (this.cursor.on) this.showCursor(false);
         if (mx >= 0 && mx <= rect.width && my >= 0 && my <= rect.height) {
           const wPos = this.screenToWorld(mx, my, rect.width, rect.height);
           if (this.elHoverInfo) {
-            this.elHoverInfo.textContent = `${getLocationLabel(wPos.x, wPos.z)} · Click to teleport here`;
+            this.elHoverInfo.textContent = `${getLocationLabel(wPos.x, wPos.z)} · Click to teleport here · Right-click to set a route`;
           }
         }
       });
 
       this.fullCanvas.addEventListener('pointerup', (e) => {
         if (e.pointerId !== this.panPointerId) return;
-        const clicked = !this.dragMoved && Math.hypot(e.clientX - this.panStart.x, e.clientY - this.panStart.y) <= 5;
+        const clicked = e.button === 0 && !e.ctrlKey && !this.routeClick && !this.dragMoved && Math.hypot(e.clientX - this.panStart.x, e.clientY - this.panStart.y) <= 5;
         this.cancelPan();
         if (clicked && this.isFullMapOpen && this.fullCanvas) {
           const rect = this.fullCanvas.getBoundingClientRect();
           const mx = e.clientX - rect.left;
           const my = e.clientY - rect.top;
-          if (mx >= 0 && mx <= rect.width && my >= 0 && my <= rect.height) {
-            const wPos = this.clampToTown(this.screenToWorld(mx, my, rect.width, rect.height));
-            this.waypoint = {
-              x: wPos.x,
-              z: wPos.z,
-              name: getLocationLabel(wPos.x, wPos.z)
-            };
-            if (this.onTeleport) {
-              this.onTeleport(wPos.x, wPos.z);
-            }
-            this.renderFullMap();
-          }
+          if (mx >= 0 && mx <= rect.width && my >= 0 && my <= rect.height) this.teleportAt(mx, my, rect.width, rect.height);
         }
       });
       for (const type of ['pointercancel', 'lostpointercapture']) {
@@ -662,6 +657,19 @@ class CityMapSystem {
       window.addEventListener('blur', () => this.cancelPan());
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) this.cancelPan();
+      });
+
+      // A right-click sets the GPS route there without moving the player
+      this.fullCanvas.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        this.routeClick = true;
+        if (!this.isFullMapOpen) return;
+        const rect = this.fullCanvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+        if (this.overviewHit(mx, my)) return;
+        const wPos = this.clampToTown(this.screenToWorld(mx, my, rect.width, rect.height));
+        this.waypoint = { x: wPos.x, z: wPos.z, name: getLocationLabel(wPos.x, wPos.z) };
+        this.renderFullMap();
       });
 
       // Wheel zoom about the cursor (the place under it stays put)
@@ -719,6 +727,115 @@ class CityMapSystem {
     this.renderFullMap();
   }
 
+  // Teleports to a point on the full map and routes the GPS there
+  teleportAt(mx, my, w, h) {
+    const wPos = this.clampToTown(this.screenToWorld(mx, my, w, h));
+    this.waypoint = { x: wPos.x, z: wPos.z, name: getLocationLabel(wPos.x, wPos.z) };
+    if (this.onTeleport) this.onTeleport(wPos.x, wPos.z);
+    this.renderFullMap();
+  }
+
+  // The controller on the full map: the left stick moves a cursor (pushing the map along at its edges), the right
+  // stick pans, the triggers or the pad's up and down zoom about the cursor, A teleports there and X sets the GPS route there
+  gamepad({ move, pan, zoom, go, mark }, dt) {
+    if (!this.isFullMapOpen || !this.fullCanvas) return;
+    dt = Math.max(0, Math.min(0.1, dt || 0));
+    const { w, h } = this.fullSize();
+    const c = this.cursor;
+    if (!c.on) {
+      if (!(Math.hypot(move.x, move.y) > 0.05 || Math.hypot(pan.x, pan.y) > 0.05 || Math.abs(zoom) > 0.05 || go || mark)) return;
+      c.x = w * 0.5;
+      c.y = h * 0.5;
+      this.showCursor(true);
+    }
+    let changed = false;
+    const speed = 760 * dt;
+    // a gentle curve, so a light push places it to the pixel and a full one crosses the screen in a second
+    const curve = (v) => Math.sign(v) * Math.pow(Math.abs(v), 1.6);
+    if (move.x || move.y) {
+      c.x += curve(move.x) * speed;
+      c.y += curve(move.y) * speed; // the standard pad's sticks read down as positive
+      const m = 40;
+      const ox = Math.min(0, c.x - m) + Math.max(0, c.x - (w - m));
+      const oy = Math.min(0, c.y - m) + Math.max(0, c.y - (h - m));
+      if (ox || oy) {
+        this.viewCenterX += ox / this.viewZoom;
+        this.viewCenterZ += oy / this.viewZoom;
+        changed = true;
+      }
+      c.x = Math.max(m, Math.min(w - m, c.x));
+      c.y = Math.max(m, Math.min(h - m, c.y));
+    }
+    if (pan.x || pan.y) {
+      this.viewCenterX += curve(pan.x) * speed * 1.4 / this.viewZoom;
+      this.viewCenterZ += curve(pan.y) * speed * 1.4 / this.viewZoom;
+      changed = true;
+    }
+    if (Math.abs(zoom) > 0.05) {
+      const before = this.screenToWorld(c.x, c.y, w, h);
+      this.viewZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.viewZoom * Math.exp(zoom * 2.2 * dt)));
+      this.viewCenterX = before.x - (c.x - w * 0.5) / this.viewZoom;
+      this.viewCenterZ = before.z - (c.y - h * 0.5) / this.viewZoom;
+      changed = true;
+    }
+    if (this.elCursor) this.elCursor.style.transform = `translate(${c.x}px, ${c.y}px)`;
+    if (mark && !this.overviewHit(c.x, c.y)) {
+      const wPos = this.clampToTown(this.screenToWorld(c.x, c.y, w, h));
+      this.waypoint = { x: wPos.x, z: wPos.z, name: getLocationLabel(wPos.x, wPos.z) };
+      changed = true;
+    }
+    if (go) {
+      const there = this.overviewHit(c.x, c.y);
+      if (there) {
+        this.viewCenterX = there.x;
+        this.viewCenterZ = there.z;
+        changed = true;
+      } else {
+        this.teleportAt(c.x, c.y, w, h);
+        return;
+      }
+    }
+    if (changed) this.renderFullMap();
+    const at = this.screenToWorld(c.x, c.y, w, h);
+    this.cursorPlace = getLocationLabel(at.x, at.z);
+    this.drawCursorHint();
+  }
+
+  showCursor(on) {
+    this.cursor.on = on;
+    if (on && !this.elCursor && this.fullCanvasWrap) {
+      this.elCursor = document.createElement('div');
+      this.elCursor.className = 'fullmap-pad-cursor';
+      this.fullCanvasWrap.append(this.elCursor);
+    }
+    if (this.elCursor) this.elCursor.hidden = !on;
+    if (on && !this.stopHint) this.stopHint = onInput(() => this.drawCursorHint(true));
+    if (!on && this.stopHint) {
+      this.stopHint();
+      this.stopHint = null;
+    }
+  }
+
+  // The prompt under the map for the controller's cursor: the place, then how to teleport, move and zoom
+  drawCursorHint(force = false) {
+    const el = this.elHoverInfo;
+    if (!el || !this.cursor.on) return;
+    const place = this.cursorPlace || '';
+    if (!force && el.dataset.place === place) return;
+    el.dataset.place = place;
+    el.replaceChildren(place);
+    const part = (what, text) => {
+      const g = glyph(what);
+      if (!g) return;
+      el.append(' · ', g, ` ${text}`);
+    };
+    part(BUTTON.A, 'teleport here');
+    part(BUTTON.X, 'set route');
+    part(STICK.RIGHT, 'pan');
+    const zoomIn = glyph(TRIGGER.RT), zoomOut = glyph(TRIGGER.LT);
+    if (zoomIn && zoomOut) el.append(' · ', zoomOut, ' ', zoomIn, ' zoom');
+  }
+
   cancelPan() {
     const id = this.panPointerId;
     this.panPointerId = null;
@@ -730,6 +847,7 @@ class CityMapSystem {
   toggleFullMap(open) {
     this.isFullMapOpen = Boolean(open);
     if (!this.isFullMapOpen) this.cancelPan();
+    this.showCursor(false);
     if (this.onToggle) this.onToggle(this.isFullMapOpen);
     if (!this.modal) return;
     this.modal.classList.toggle('hidden', !this.isFullMapOpen);
@@ -1004,42 +1122,53 @@ class CityMapSystem {
       this.renderFullMap();
     } else {
       this.renderMinimap();
+      for (const r of this.radars || []) this.renderMinimap(r);
     }
+  }
+
+  // Lamp: another player's radar (split screen, split-screen.js): its own canvas and street label, centred on their
+  // player and turned with their camera. Answers a function that takes it away.
+  addRadar(canvas, streetEl, controllerManager, cameraSystem) {
+    const r = { miniCanvas: canvas, miniCtx: canvas.getContext('2d'), elMiniStreet: streetEl, miniStreetText: '',
+      miniScale: RADAR_SCALE, miniCache: null, controllerManager, cameraSystem };
+    (this.radars ||= []).push(r);
+    return () => { this.radars = this.radars.filter((x) => x !== r); };
   }
 
   // =========================================================================
   // 1. LIVE MINIMAP (BOTTOM-LEFT HUD)
   // =========================================================================
-  renderMinimap() {
-    if (!this.miniCtx || !this.miniCanvas) return;
+  // `r` is the radar: this map's own, or another player's (addRadar)
+  renderMinimap(r = this) {
+    if (!r.miniCtx || !r.miniCanvas) return;
     // Nothing to draw while the radar is hidden (narrow screens, clean view)
-    if (!this.miniCanvas.offsetParent || document.body.classList.contains('hud-minimized')) return;
-    const ctx = this.miniCtx;
+    if (!r.miniCanvas.offsetParent || document.body.classList.contains('hud-minimized')) return;
+    const ctx = r.miniCtx;
     // Radar size in CSS pixels, backed at the device pixel ratio (crisp street names on HiDPI screens)
-    const w = this.miniCanvas.clientWidth;
-    const h = this.miniCanvas.clientHeight;
+    const w = r.miniCanvas.clientWidth;
+    const h = r.miniCanvas.clientHeight;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const bw = Math.round(w * dpr);
     const bh = Math.round(h * dpr);
-    if (this.miniCanvas.width !== bw || this.miniCanvas.height !== bh) {
-      this.miniCanvas.width = bw;
-      this.miniCanvas.height = bh;
-      this.miniCache = null;
+    if (r.miniCanvas.width !== bw || r.miniCanvas.height !== bh) {
+      r.miniCanvas.width = bw;
+      r.miniCanvas.height = bh;
+      r.miniCache = null;
     }
 
-    const ent = this.controllerManager.getActiveEntity();
+    const ent = r.controllerManager.getActiveEntity();
     const px = ent.position.x;
     const pz = ent.position.z;
     // Ground-level radar shows ~800 m of the city; it zooms out as the camera climbs (helicopter)
     const target = Math.max(0.05, RADAR_SCALE / (1 + Math.max(0, ent.position.y - groundHeight(ent.position.x, ent.position.z) - 25) / 180));
-    this.miniScale += (target - this.miniScale) * 0.08;
-    const scale = this.miniScale;
+    r.miniScale += (target - r.miniScale) * 0.08;
+    const scale = r.miniScale;
 
-    if (this.elMiniStreet) {
+    if (r.elMiniStreet) {
       const label = getLocationLabel(px, pz);
-      if (label !== this.miniStreetText) {
-        this.miniStreetText = label;
-        this.elMiniStreet.textContent = label;
+      if (label !== r.miniStreetText) {
+        r.miniStreetText = label;
+        r.elMiniStreet.textContent = label;
       }
     }
 
@@ -1047,13 +1176,13 @@ class CityMapSystem {
     // edge or the zoom drifts (or the buildings arrive)
     const fp = footprintLayers(this.allBlocks);
     const version = fp ? fp.version : 0;
-    const bikeView = this.controllerManager.activeMode === 'cyclist';
-    let c = this.miniCache;
+    const bikeView = r.controllerManager.activeMode === 'cyclist';
+    let c = r.miniCache;
     if (!c || c.version !== version || c.bike !== bikeView || Math.abs(scale / c.s - 1) > 0.12 ||
       Math.abs(px - c.cx) > w / c.s - w / (2 * scale) - 8 / scale ||
       Math.abs(pz - c.cz) > h / c.s - h / (2 * scale) - 8 / scale) {
       if (!c) {
-        c = this.miniCache = { canvas: document.createElement('canvas') };
+        c = r.miniCache = { canvas: document.createElement('canvas') };
         c.canvas.width = bw * 2;
         c.canvas.height = bh * 2;
         c.ctx = c.canvas.getContext('2d');
@@ -1129,7 +1258,7 @@ class CityMapSystem {
     }
 
     // Camera FOV Cone & Player Arrow at center (0, 0)
-    const camDir = this.cameraSystem.currentLookAt.clone().sub(this.cameraSystem.currentPos);
+    const camDir = r.cameraSystem.currentLookAt.clone().sub(r.cameraSystem.currentPos);
     const camAngle = Math.atan2(camDir.x, camDir.z);
 
     ctx.save();

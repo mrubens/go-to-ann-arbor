@@ -13,8 +13,8 @@ import { LIFT } from './ground-lifts.js';
 // The water is real (`at`): terrain.js's waterLevel and riverDepth answer for it as for the river, so the player swims
 // in it, the camera goes murky under it and things splash into it; controllers.js's getGroundHeight takes its floor
 // (shallow at one end, deep at the other) for walking, driving and riding, and a car or a bike driven in sinks to the
-// floor, slows to a stop in the water and can't climb out over the wall (`trap`). The player can: swimming to the edge
-// they climb out onto the side.
+// floor and is slowed by the water (`trap`); the floor curves up along every wall to the rim, so it drives up and out,
+// and a swimmer climbs out the same way.
 
 const BUCKET = 32;
 const COPING = 0.38; // the coping's width round the water
@@ -273,11 +273,26 @@ function createPools(group, data) {
     for (const [t, w] of tw) { t0 = Math.min(t0, t); t1 = Math.max(t1, t); w0 = Math.min(w0, w); w1 = Math.max(w1, w); }
     const len = Math.max(1, t1 - t0);
     const shallowAt = (x, z) => 1 - smooth01((tOf(x, z) - t0) / len);
+    // how far out from the walls the floor curves up: wider for a deeper pool, at most a third of its width
+    const bowl = Math.max(1, Math.min(0.34 * (w1 - w0), 0.34 * len, 1.2 + depth * 0.8));
     const pool = {
       pts, level, kind, depth,
       minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity,
-      // the floor: about a metre down at the shallow end, sloping to `depth` at the deep end
-      floor(x, z) { return level - (depth - (depth - 1.05) * shallowAt(x, z)); }
+      // the floor: about a metre down at the shallow end, sloping to `depth` at the deep end, and curving up along
+      // every wall to the rim like a bowl's, so whatever falls in can drive or climb back out
+      floor(x, z) {
+        const base = level - (depth - (depth - 1.05) * shallowAt(x, z));
+        let d = Infinity;
+        for (let i = 0; i < n; i++) {
+          const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % n], ex = bx - ax, ez = bz - az;
+          const t = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez || 1)));
+          d = Math.min(d, Math.hypot(x - ax - ex * t, z - az - ez * t));
+        }
+        if (!insidePoly(pts, x, z)) return level - 0.03;
+        if (d >= bowl) return base;
+        const u = 1 - d / bowl;
+        return base + (level - 0.03 - base) * u ** 1.6;
+      }
     };
     for (const [x, z] of pts) {
       pool.minX = Math.min(pool.minX, x); pool.maxX = Math.max(pool.maxX, x);
@@ -323,16 +338,17 @@ function createPools(group, data) {
       else water.idx.push(base + a, base + c, base + b);
     }
 
-    // the basin's floor: a metre grid in the pool's frame, sloping from the shallow end to the deep, a little past the
+    // the basin's floor: a half-metre grid in the pool's frame, sloping from the shallow end to the deep, a little past the
     // walls all round (that part is under the ground)
     const grown = offset(pts, 0.9);
-    const nt = Math.ceil(len + 2), nw = Math.ceil(w1 - w0 + 2), fb = floor.pos.length / 3;
+    const FS = 0.5; // the floor's grid, fine enough for the curve up the walls
+    const nt = Math.ceil((len + 2) / FS), nw = Math.ceil((w1 - w0 + 2) / FS), fb = floor.pos.length / 3;
     const fid = new Map();
     const fv = (i, j) => {
       const k = i * (nw + 1) + j;
       let id = fid.get(k);
       if (id === undefined) {
-        const t = t0 - 1 + i, w = w0 - 1 + j, [x, z] = at2(t, w);
+        const t = t0 - 1 + i * FS, w = w0 - 1 + j * FS, [x, z] = at2(t, w);
         const L = lanes[Math.max(0, Math.min(lanes.length - 1, Math.floor((w - w0) / 2.5)))];
         id = fb + fid.size; fid.set(k, id);
         floor.pos.push(x, pool.floor(x, z), z);
@@ -342,7 +358,7 @@ function createPools(group, data) {
     };
     for (let i = 0; i < nt; i++) {
       for (let j = 0; j < nw; j++) {
-        const [x, z] = at2(t0 - 0.5 + i, w0 - 0.5 + j);
+        const [x, z] = at2(t0 - 1 + (i + 0.5) * FS, w0 - 1 + (j + 0.5) * FS);
         if (!insidePoly(grown, x, z)) continue;
         const a = fv(i, j), b = fv(i + 1, j), c = fv(i + 1, j + 1), d = fv(i, j + 1);
         // facing up: t then w is turned the way the outline is, so the wind follows the frame's sign
@@ -506,7 +522,7 @@ function createPools(group, data) {
   }
 
   // a car or a bike sunk in a pool (where it was last frame, (px, py, pz), under its water): the water holds it back,
-  // and it can't drive up over the wall, so a move out of the water is taken back. Returns whether it's in one.
+  // and it drives out up the curved floor by a wall. Returns whether it's in one.
   function trap(ent, px, py, pz, dt) {
     const was = at(px, pz);
     if (!was || py > was.level - 0.5) {
@@ -514,13 +530,9 @@ function createPools(group, data) {
       return false;
     }
     if (!ent._inPool) { ent._inPool = true; log(`[pool] a ${ent.bike ? 'bike' : ent.type === 'cyclist' ? 'bicycle' : 'car'} went into a pool`); }
-    ent.speed *= Math.exp(-dt * 2.4);
+    ent.speed *= Math.exp(-dt * 1.1);
     if (ent.vx) ent.vx *= Math.exp(-dt * 3);
     if (ent.vz) ent.vz *= Math.exp(-dt * 3);
-    if (at(ent.position.x, ent.position.z) !== was) {
-      ent.position.set(px, Math.min(ent.position.y, py), pz);
-      ent.speed *= -0.15;
-    }
     return true;
   }
 

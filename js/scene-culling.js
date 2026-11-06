@@ -202,7 +202,8 @@ function setupSceneCulling(scene, roots, shadow = null) {
       largeMeshes.push(mesh);
       continue;
     }
-    const cell = Math.min(600, Math.max(250, cullDist * 0.5));
+    // big squares: a draw costs far more here than the triangles of the copies just beyond the distance
+    const cell = Math.min(900, Math.max(450, cullDist));
     for (const chunk of replaceWithChunks(mesh, cell)) {
       const sphere = chunk.boundingSphere.clone().applyMatrix4(chunk.matrixWorld);
       pushCulled(chunk, sphere, cullDist);

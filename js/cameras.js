@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { TIER } from './device-tier.js';
 import { groundHeight, stadiumGround, waterLevel, riverDepth } from './terrain.js';
 import { hot, log } from '../lamp-game.js';
 
@@ -34,7 +35,8 @@ class CameraSystem {
       56,
       window.innerWidth / window.innerHeight,
       0.35,
-      60000 // at 1:1 the countryside runs out ~20-40 km to the fogged horizon (reversed float depth keeps precision)
+      TIER.far || 60000 // at 1:1 the countryside runs out ~20-40 km to the fogged horizon (reversed float depth keeps
+      // precision); on the Xbox only as far as the haze at street level hides (device-tier.js)
     );
   }
 

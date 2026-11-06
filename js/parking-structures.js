@@ -17,7 +17,7 @@ import { cityUniforms } from './tsl-materials.js';
 // its low end for the next. A brick stair tower stands in a corner, light poles on the ramp walls' tops over the roof,
 // lights under every deck between its double tees' stems, painted stalls with wheel stops, yellow-topped curbs up the
 // ramps, panel joints down the spandrels, plinths and corbels on the columns, a steel door onto every deck from the
-// tower. On the roof a launch ramp runs up to the parapet at one end, clear of stalls, to jump off from. Its cars are the parked cars' own (parked-cars.js takes
+// tower. One open corner of the roof rises gently over the railing, clear of stalls, to drive up and off. Its cars are the parked cars' own (parked-cars.js takes
 // `stalls`): about three in ten stalls taken, fewer on the roof.
 // `top(x, z, y)` is the deck or ramp under someone at height y there (the highest within a step above them), or
 // -Infinity: controllers.js makes it their ground. `colliders` are the spandrels, the ramp walls, the columns and the
@@ -30,8 +30,9 @@ const TOWER = 5.4;
 const INSET = 0.07;
 // the precast double tees' stems under every deck, a stem every RIB_EVERY metres
 const RIB = 0.42, RIB_W = 0.16, RIB_EVERY = 1.2;
-// the roof's launch ramp: a wedge up to the parapet at one end, to jump off from
-const LAUNCH = { len: 9, rise: 1.9, hw: 1.8 };
+// the roof's raised corner: a wedge across it, flat this far in from the corner along its bisector, at the full rise
+// (well over the cap, so a car's nose clears the railing before it gets there) this close, laid in cells this big
+const BANK = { reach: 9, full: 3.4, rise: PARAPET + 0.4, cell: 0.6 };
 const flat = (g) => { g.deleteAttribute('uv'); return g.index ? g.toNonIndexed() : g; };
 const hash = (x, z, k = 0) => { const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453; return v - Math.floor(v); };
 
@@ -282,55 +283,79 @@ function createParkingStructures(group, data) {
       colliders.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs), minY: g, maxY: top + 0.25,
         obb: { cx: tx, cz: tz, hx: h, hz: h, cs: ux, sn: -uz }, thin: true, keepsSurvey: true });
     }
-    // the roof's launch ramp: along a side of the deck beside the bay, up to the parapet at the end away from where the
-    // ramps arrive, clear of the tower, with a run-up before it
-    let launch = null;
-    const inPoly = (u, v) => polygonContains(poly, ...W(u, v));
-    const nearTower = (u, v, pad) => tower && Math.abs(u - tower.u) < TOWER / 2 + pad && Math.abs(v - tower.v) < TOWER / 2 + pad;
-    const sideVs = [(v1 + vMax) / 2, (vMin + v0) / 2];
-    if (tower) sideVs.sort((p, q) => Math.abs(q - tower.v) - Math.abs(p - tower.v));
-    for (const lv of sideVs) {
-      if (launch) break;
-      if (!(lv - LAUNCH.hw > v1 + 0.6 || lv + LAUNCH.hw < v0 - 0.6)) continue;
-      for (const dir of [uA < uB ? -1 : 1, uA < uB ? 1 : -1]) {
-        const clear = (u) => inPoly(u, lv - LAUNCH.hw) && inPoly(u, lv) && inPoly(u, lv + LAUNCH.hw);
-        let u = (uA + uB) / 2;
-        if (!clear(u)) continue;
-        while (clear(u + dir * 0.25)) u += dir * 0.25;
-        // its high end just short of the columns on the outline
-        const end = u - dir * 0.7, start = end - dir * LAUNCH.len;
-        let ok = true;
-        for (let t = 0; t <= LAUNCH.len + 12 && ok; t += 1) {
-          const su = end - dir * t;
-          ok = clear(su) && !nearTower(su, lv, LAUNCH.hw + 0.6);
-        }
-        if (ok) { launch = { start, end, dir, v: lv }; break; }
+    // one corner of the roof rises gently over the railing: the open corner (clear of the bay and the tower) with the
+    // longest walls, the deck swelling across it from flat BANK.reach in to over the cap, so a car run into it rides up and off
+    const area2 = ring.reduce((sum, p, i) => { const q = ring[(i + 1) % ring.length]; return sum + p.x * q.z - q.x * p.z; }, 0);
+    const banks = [];
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[(i + ring.length - 1) % ring.length], b = ring[i], c = ring[(i + 1) % ring.length];
+      const e1x = b.x - a.x, e1z = b.z - a.z, e2x = c.x - b.x, e2z = c.z - b.z;
+      if (Math.hypot(e1x, e1z) < 4 || Math.hypot(e2x, e2z) < 4) continue;
+      const cross = e1x * e2z - e1z * e2x;
+      // convex corners only, turning by a third of a right angle or more
+      if (cross * area2 <= 0 || Math.atan2(Math.abs(cross), e1x * e2x + e1z * e2z) < 0.6) continue;
+      const [u, v] = local(b.x, b.z);
+      if (Math.hypot(Math.max(uA - u, 0, u - uB), Math.max(v0 - v, 0, v - v1)) < 5) continue;
+      if (tower && Math.hypot(u - tower.u, v - tower.v) < TOWER + 3) continue;
+      // the way in from the corner, halfway between its walls
+      const l1 = Math.hypot(e1x, e1z), l2 = Math.hypot(e2x, e2z);
+      let ix = -e1x / l1 + e2x / l2, iz = -e1z / l1 + e2z / l2;
+      const il = Math.hypot(ix, iz) || 1; ix /= il; iz /= il;
+      // its whole run in from the corner on the roof's deck
+      let clear = true;
+      for (let t = 1; t <= BANK.reach + 4 && clear; t += 1) {
+        const [pu, pv] = local(b.x + ix * t, b.z + iz * t);
+        clear = polygonContains(poly, b.x + ix * t, b.z + iz * t) && Math.hypot(Math.max(uA - pu, 0, pu - uB), Math.max(v0 - pv, 0, pv - v1)) > 2;
       }
+      if (clear) banks.push({ x: b.x, z: b.z, u, v, ix, iz, size: Math.min(l1, l2) });
     }
-    if (launch) {
-      const { start, end, dir, v } = launch, { len, rise, hw: lh } = LAUNCH;
-      const sh = new THREE.Shape();
-      if (dir > 0) { sh.moveTo(0, 0); sh.lineTo(len, 0); sh.lineTo(len, rise); }
-      else { sh.moveTo(0, 0); sh.lineTo(len, 0); sh.lineTo(0, rise); }
-      sh.closePath();
-      const lp = [];
-      lp.push(painted(new THREE.ExtrudeGeometry(sh, { depth: lh * 2, bevelEnabled: false, curveSegments: 1 }).translate(Math.min(start, end), roofY + 0.004, v - lh), PAINT.ramp));
-      const slope = Math.hypot(len, rise), pitch = Math.atan2(rise, len) * dir, mu = (start + end) / 2;
-      for (const side of [-1, 1]) lp.push(painted(new THREE.BoxGeometry(slope, 0.012, 0.22).rotateZ(pitch).translate(mu, roofY + rise / 2 + 0.012, v + side * (lh - 0.2)), PAINT.yellow));
-      // chevrons up the middle, and a yellow lip on the high end
-      for (let c = 1; c < 4; c++) {
-        const cu = start + dir * len * c / 4, cy = roofY + rise * c / 4 + 0.014;
-        for (const side of [-1, 1]) lp.push(painted(new THREE.BoxGeometry(0.9, 0.012, 0.16).rotateY(side * 0.6 * dir).rotateZ(pitch).translate(cu - dir * 0.3, cy - rise / len * 0.3, v + side * 0.33), PAINT.yellow));
+    banks.sort((p, q) => q.size - p.size);
+    banks.length = Math.min(banks.length, 1);
+    const inBay = (u, v) => u >= uA && u <= uB && v >= v0 && v <= v1;
+    // how far the roof stands above its deck at (x, z)
+    const bank = (x, z) => {
+      if (!banks.length) return 0;
+      const [u, v] = local(x, z);
+      if (inBay(u, v)) return 0;
+      let h = 0;
+      for (const k of banks) {
+        const d = (x - k.x) * k.ix + (z - k.z) * k.iz;
+        if (d >= BANK.reach) continue;
+        const t = Math.min(1, (BANK.reach - d) / (BANK.reach - BANK.full));
+        h = Math.max(h, BANK.rise * t ** 1.5);
       }
-      lp.push(painted(slabBox(Math.min(end, end - dir * 0.15), Math.max(end, end - dir * 0.15), roofY + rise - 0.25, roofY + rise + 0.01, v - lh, v + lh), PAINT.yellow));
-      for (const p of lp) parts.push(p.applyMatrix4(frame));
-      log(`[parking structures] ${s.name || 'a structure'}: a launch ramp on the roof`);
-    }
-    const inLaunch = (x, z) => {
-      if (!launch) return false;
-      const [u, v] = local(x, z), lo = Math.min(launch.end, launch.start - launch.dir * 12), hi = Math.max(launch.end, launch.start - launch.dir * 12);
-      return u > lo - 2.6 && u < hi + 2.6 && Math.abs(v - launch.v) < LAUNCH.hw + 2.8;
+      return h;
     };
+    if (banks.length) {
+      const pos = [], nor = [], cs = BANK.cell, e = 0.25;
+      const vert = (u, v) => {
+        const [x, z] = W(u, v);
+        // its slope from the heights either side, for smooth shading
+        const gu = (bank(...W(u + e, v)) - bank(...W(u - e, v))) / (2 * e), gv = (bank(...W(u, v + e)) - bank(...W(u, v - e))) / (2 * e);
+        const l = Math.hypot(gu, 1, gv);
+        pos.push(u, roofY + 0.008 + bank(x, z), v);
+        nor.push(-gu / l, 1 / l, -gv / l);
+      };
+      const done = new Set();
+      for (const k of banks) {
+        const R = BANK.reach * 2.5;
+        const u0 = Math.floor((k.u - R) / cs), u1 = Math.ceil((k.u + R) / cs);
+        const w0 = Math.floor((k.v - R) / cs), w1 = Math.ceil((k.v + R) / cs);
+        for (let i = u0; i < u1; i++) for (let j = w0; j < w1; j++) {
+          const key = i * 100000 + j;
+          if (done.has(key)) continue;
+          const mu = (i + 0.5) * cs, mv = (j + 0.5) * cs, [mx, mz] = W(mu, mv);
+          if ((mx - k.x) * k.ix + (mz - k.z) * k.iz > BANK.reach + cs || inBay(mu, mv) || !polygonContains(poly, mx, mz)) continue;
+          done.add(key);
+          const p0 = [i * cs, j * cs], p1 = [(i + 1) * cs, j * cs], p2 = [(i + 1) * cs, (j + 1) * cs], p3 = [i * cs, (j + 1) * cs];
+          for (const p of [p0, p2, p1, p0, p3, p2]) vert(p[0], p[1]);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+      parts.push(painted(g, PAINT.slab).applyMatrix4(frame));
+    }
     const mesh = new THREE.Mesh(mergeGeometries(parts), null);
     mesh.name = s.name || 'Parking structure';
     mesh.castShadow = mesh.receiveShadow = true;
@@ -348,7 +373,7 @@ function createParkingStructures(group, data) {
     for (let k = 0; k <= topK; k++) {
       for (let i = 0; i < s.stalls.length; i += 3) {
         const x = s.stalls[i], z = s.stalls[i + 1], yaw = s.stalls[i + 2];
-        if (inTower(x, z) || (k === topK && inLaunch(x, z))) continue;
+        if (inTower(x, z) || (k === topK && bank(x, z) > 0)) continue;
         const y = k === 0 ? groundHeight(x, z) + LIFT.lawn + 0.02 : deckY(k) + 0.006;
         const fx = Math.sin(yaw), fz = Math.cos(yaw), ax = Math.cos(yaw), az = -Math.sin(yaw);
         for (const side of [-1, 1]) stripes.push([x + ax * side * 1.3, y, z + az * side * 1.3, yaw]);
@@ -372,7 +397,7 @@ function createParkingStructures(group, data) {
     floors += levels;
 
     // where someone stands on it
-    const rec = { poly, minX, maxX, minZ, maxZ, local, uA, uB, v0, v1, topK, deckY, rampY, levels, roofY, launch };
+    const rec = { poly, minX, maxX, minZ, maxZ, local, uA, uB, v0, v1, topK, deckY, rampY, levels, roofY, bank };
     for (let ix = Math.floor(minX / CELL); ix <= Math.floor(maxX / CELL); ix++) {
       for (let iz = Math.floor(minZ / CELL); iz <= Math.floor(maxZ / CELL); iz++) {
         const key = ix * 100000 + iz;
@@ -435,12 +460,9 @@ function createParkingStructures(group, data) {
       } else {
         for (let k = 1; k <= r.topK; k++) { const h = r.deckY(k); if (h <= y + STEP && h > best) best = h; }
       }
-      // up the roof's launch ramp
-      const l = r.launch;
-      if (l && Math.abs(v - l.v) <= LAUNCH.hw) {
-        const t = (u - l.start) * l.dir / LAUNCH.len;
-        if (t >= 0 && t <= 1) { const h = r.roofY + LAUNCH.rise * t; if (h <= y + STEP && h > best) best = h; }
-      }
+      // up a roof corner's rise
+      const h = r.roofY + r.bank(x, z);
+      if (h > r.roofY && h <= y + STEP && h > best) best = h;
     }
     return best;
   };
