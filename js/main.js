@@ -48,6 +48,7 @@ import { buildAnimals } from './animals.js';
 import { buildCube, CUBE_FOOTPRINT } from './the-cube.js';
 import { buildBandShell } from './band-shell.js';
 import { buildRestrooms } from './restrooms.js';
+import { buildDraftedHouses } from './drafted-houses.js';
 import { buildHelipads } from './helipads.js';
 import { speedLimitAt } from './speed-limits.js';
 import { createSeats } from './seats.js';
@@ -314,7 +315,9 @@ async function initApp() {
   const bandShellPart = live.keep('bandShell', () => cityPart((g) => buildBandShell(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/band-shell.js'] });
   // the town's public restrooms and portable toilets, where the map has them (restrooms.js)
   const restroomsPart = await live.keep('restrooms', () => cityPart((g) => buildRestrooms(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/restrooms.js', 'data/restrooms.json'] });
-  const landmarkColliders = [...landmarks.made.colliders, ...parkingPart.made.colliders, ...bandShellPart.made.colliders, ...restroomsPart.made.colliders];
+  // houses drafted from street photos by Open Facades, each in place of the survey's block where it really stands (drafted-houses.js)
+  const draftedPart = await live.keep('draftedHouses', () => cityPart((g) => buildDraftedHouses(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/drafted-houses.js', 'js/drafted/spec-render.js', 'js/drafted/generator.js', 'js/drafted-yards.js', 'data/drafted-houses.json'] });
+  const landmarkColliders = [...landmarks.made.colliders, ...parkingPart.made.colliders, ...bandShellPart.made.colliders, ...restroomsPart.made.colliders, ...draftedPart.made.colliders];
   markInit('landmarks');
   await showLoadingStage('Generating building footprints and facades...');
   // house numbers by the front doors (build-addresses.py, the city's Address Points)
@@ -332,7 +335,7 @@ async function initApp() {
   const looksBytes = await asset('data/building-looks.json');
   setBuildingLooks(looksBytes ? JSON.parse(new TextDecoder().decode(looksBytes)) : null);
   const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarkColliders, addresses, gasStations), { cull: setupSceneCulling, still: true }),
-    { inputs: [heights, landmarks, parkingPart, bandShellPart, restroomsPart], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json'] });
+    { inputs: [heights, landmarks, parkingPart, bandShellPart, restroomsPart, draftedPart], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json', 'js/houses.js', 'js/trees.js'] });
   const cityBlocks = blocks.made;
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...outskirts.colliders, ...(cityGrid.colliders || [])];
@@ -344,10 +347,10 @@ async function initApp() {
   const furnitureBytes = await asset('data/street-furniture.json');
   const streetFurniture = furnitureBytes ? JSON.parse(new TextDecoder().decode(furnitureBytes)) : null;
   const details = await live.keep('streetDetails', () => cityPart(async (g) => {
-    const made = buildStreetDetails(g, allColliders, streetFurniture, parkingPart.made.inside);
+    const made = buildStreetDetails(g, allColliders, streetFurniture, parkingPart.made.inside, draftedPart.made.yard || []);
     await setOnTerrain(g.getObjectByName('StreetDetails'));
     return made;
-  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, parkingPart], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js'] });
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, parkingPart, draftedPart], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js', 'js/drafted-yards.js', 'js/trees.js'] });
   const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
@@ -496,7 +499,7 @@ async function initApp() {
   // Lamp: the Cube on Regents Plaza, which turns when it's pushed or hit (the-cube.js)
   const cubePart = live.keep('cube', () => cityPart((g) => buildCube(g)), { inputs: [heights], from: ['js/the-cube.js'] });
   allColliders.push(cubePart.made.collider);
-  const parts = [grid, bandShellPart, restroomsPart, cascadesPart, riverPeoplePart, animalsPart, cubePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart, moonPart, helipadsPart];
+  const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, cubePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart, moonPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);

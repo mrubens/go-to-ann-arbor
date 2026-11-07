@@ -941,8 +941,7 @@ function createTreeClearance(colliders) {
 function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null } = {}) {
   const group = new THREE.Group();
   group.name = 'Trees';
-  const atlas = createLeafAtlas();
-  const material = createTreeMaterial(atlas.texture);
+  const { atlas, material } = sharedLeaves();
 
   // Geometries: [species][variant][lod]
   const geos = SPECIES.map((_, s) => [0, 1].map((v) => buildTreeGeometries(s, v, atlas.tileMeters)));
@@ -1536,4 +1535,103 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     set onObstacles(fn) { onObstacles = fn; } };
 }
 
-export { createTreeField, createLeafAtlas, buildTreeGeometries, SPECIES as TREE_SPECIES };
+// =====================================================================================================================
+// 6. SHRUBS & HEDGES: the trees' own leaf cards and material on a bush or a clipped hedge piece, so a yard's planting looks
+// like the trees over it. `bushes` and `hedges` are lists of { x, y, z, yaw, w, h, len, color }: a unit shape stood at
+// (x, y, z), w across, h high and len long (along yaw). One instanced draw for each.
+// =====================================================================================================================
+function shrubGeometry(kind, tileMeters) {
+  const gb = new TreeGeometryBuilder(), rng = mulberry32(kind === 'hedge' ? 4241 : 9173), R = (a, b) => a + (b - a) * rng();
+  const tiles = [0, 2];
+  // a card centred at c, facing `out` (give or take), shaded as by `shade`
+  const card = (c, out, size, shade) => {
+    const face = out.clone().add(new V3(R(-0.5, 0.5), R(-0.3, 0.5), R(-0.5, 0.5))).normalize();
+    let up = new V3(0, 1, 0).addScaledVector(face, -face.y);
+    if (up.lengthSq() < 1e-3) up = new V3(1, 0, 0);
+    up.normalize().applyAxisAngle(face, R(-0.9, 0.9));
+    addCard(gb, c.clone().addScaledVector(up, -size / 2), up, face, size, tiles[Math.floor(R(0, 1.999))], rng() < 0.5, rng(), { shade });
+  };
+  // a dark twiggy core, so the planting reads solid between its cards
+  const core = (geo, ao) => {
+    const base = gb.pos.length / 3, p = geo.attributes.position, n = geo.attributes.normal, v = new V3(), m = new V3();
+    for (let i = 0; i < p.count; i++) gb.vertex(v.fromBufferAttribute(p, i), m.fromBufferAttribute(n, i), p.getX(i) * 3, p.getY(i) * 3, 0, ao, 0, 0);
+    for (let i = 0; i < geo.index.count; i++) gb.idx.push(base + geo.index.getX(i));
+  };
+  // leaf size as on the trees, in this unit shape about a metre across
+  const size = Math.min(0.55, Math.max(0.3, tileMeters[0] * 0.6));
+  if (kind === 'bush') {
+    const C = new V3(0, 0.52, 0), Rr = new V3(0.5, 0.48, 0.5), tmp = new V3();
+    const shade = (p, f) => {
+      tmp.copy(p).sub(C).divide(Rr);
+      const e = tmp.length(), sn = tmp.normalize().clone(); sn.y += 0.25; sn.normalize();
+      const ff = f.dot(sn) < 0 ? f.clone().negate() : f.clone();
+      return { n: sn.multiplyScalar(0.72).addScaledVector(ff, 0.28).normalize(), ao: (0.25 + 0.75 * smooth(0.1, 1.0, e)) * (0.8 + 0.2 * Math.min(1, p.y)) };
+    };
+    const n = 46;
+    for (let i = 0; i < n; i++) {
+      const y = 1 - (i + 0.5) / n * 1.7, r = Math.sqrt(Math.max(0, 1 - y * y)), ph = i * 2.39996 + R(-0.3, 0.3);
+      const dir = new V3(Math.cos(ph) * r, y, Math.sin(ph) * r);
+      card(C.clone().add(dir.clone().multiply(Rr).multiplyScalar(R(0.55, 0.75))), dir, size * R(0.85, 1.15), shade);
+    }
+    core(new THREE.SphereGeometry(1, 8, 6).scale(0.36, 0.34, 0.36).translate(0, 0.42, 0), 0.25);
+  } else {
+    // a hedge piece: one metre long with a little to spare at each end, so pieces in a row grow into one another
+    const shade = (p, f) => {
+      const dx = p.x / 0.5, dy = (p.y - 0.5) / 0.5;
+      const sn = new V3(Math.sign(dx) * Math.abs(dx) ** 3, Math.sign(dy) * Math.abs(dy) ** 3 + 0.25, 0).normalize();
+      const ff = f.dot(sn) < 0 ? f.clone().negate() : f.clone();
+      return { n: sn.multiplyScalar(0.75).addScaledVector(ff, 0.25).normalize(), ao: 0.45 + 0.55 * smooth(0, 1, p.y) };
+    };
+    const s = size * 0.8;
+    for (let z = -0.55; z <= 0.56; z += 0.22) {
+      for (const sx of [-1, 1]) for (let y = 0.2; y < 0.86; y += 0.22) card(new V3(sx * R(0.36, 0.44), y + R(-0.05, 0.05), z + R(-0.06, 0.06)), new V3(sx, 0.1, 0), s * R(0.85, 1.15), shade);
+      for (let x = -0.3; x <= 0.31; x += 0.2) card(new V3(x + R(-0.05, 0.05), R(0.86, 0.94), z + R(-0.06, 0.06)), new V3(x * 1.2, 1, 0).normalize(), s * R(0.85, 1.15), shade);
+    }
+    core(new THREE.BoxGeometry(0.76, 0.86, 1.1).translate(0, 0.43, 0), 0.22);
+  }
+  return gb.build();
+}
+
+// The leaf atlas and material every tree and bush shares (made once), so the houses' shrubs, built before the trees,
+// draw in the trees' own leaves too
+let leaves = null;
+function sharedLeaves() {
+  if (!leaves) {
+    const atlas = createLeafAtlas();
+    leaves = { atlas, material: createTreeMaterial(atlas.texture) };
+  }
+  return leaves;
+}
+
+function createShrubs(field, { bushes = [], hedges = [] } = {}) {
+  field ||= sharedLeaves();
+  const group = new THREE.Group();
+  group.name = 'Shrubs';
+  // already stood on the ground where they're listed: setOnTerrain leaves them be
+  group.userData.terrain = 'set';
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new V3(), sc = new V3(), UP = new V3(0, 1, 0), tint = new THREE.Color();
+  for (const [kind, list] of [['bush', bushes], ['hedge', hedges]]) {
+    if (!list.length) continue;
+    const shape = shrubGeometry(kind, field.atlas.tileMeters);
+    const geo = new THREE.BufferGeometry();
+    for (const name of Object.keys(shape.attributes)) geo.setAttribute(name, shape.attributes[name]);
+    geo.setIndex(shape.index);
+    const data = new Float32Array(list.length * 4);
+    const mesh = new THREE.InstancedMesh(geo, field.material, list.length);
+    list.forEach((b, i) => {
+      mesh.setMatrixAt(i, m4.compose(p.set(b.x, b.y, b.z), q.setFromAxisAngle(UP, b.yaw), sc.set(b.w, b.h, b.len)));
+      tint.copy(b.color).multiplyScalar(0.9);
+      data.set([tint.r, tint.g, tint.b, 3 + hashPos(b.x, b.y, b.z) * 0.999], i * 4);
+    });
+    geo.setAttribute('aTreeData', new THREE.InstancedBufferAttribute(data, 4));
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    mesh.castShadow = TIER.shadows !== false;
+    mesh.receiveShadow = true;
+    mesh.name = kind === 'bush' ? 'Shrubs' : 'Hedges';
+    group.add(mesh);
+  }
+  return group;
+}
+
+export { createShrubs, sharedLeaves, createTreeField, createLeafAtlas, buildTreeGeometries, SPECIES as TREE_SPECIES };

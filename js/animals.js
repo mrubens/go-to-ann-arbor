@@ -21,6 +21,8 @@ import { createRiverBirds } from './river-birds.js';
 import { createDeer } from './deer.js';
 import { createCityBirds } from './city-birds.js';
 
+const BIRDS = false;
+
 const POPULATE = 62, RELEASE = 85; // alive within this far of the view (m); let go beyond this
 const MAX = TIER.stream ? 10 : 16; // alive at once
 const NEAR = TIER.stream ? 5 : 8, NEAR_DIST = 24; // skinned bodies, within this far
@@ -94,15 +96,18 @@ function buildAnimals(group) {
   const kit = createSquirrelKit({ farCount: MAX });
   for (const m of Object.values(kit.far)) group.add(m);
   const habitat = makeHabitat();
-  const riverBirds = createRiverBirds(group, { parkAt: habitat.parkAt });
+  // Birds are off: the person asked for them gone (seen from the street they read as blimps in the sky). Set BIRDS to
+  // bring the river's and the town's birds back.
+  const noBirds = { update() {}, dispose() {} };
+  const riverBirds = BIRDS ? createRiverBirds(group, { parkAt: habitat.parkAt }) : noBirds;
   const deer = createDeer(group, { parkAt: habitat.parkAt });
-  const cityBirds = createCityBirds(group, { parkAt: habitat.parkAt, treesNear: (x, z, r, out) => treesNear(x, z, r, out) });
+  const cityBirds = !BIRDS ? noBirds : createCityBirds(group, { parkAt: habitat.parkAt, treesNear: (x, z, r, out) => treesNear(x, z, r, out) });
 
   // --- trees, in cells -------------------------------------------------------------------------------------------
   // Kept up as the city's colliders change: only what's new since the last look is read (the list grows at its end,
   // and is cut back to an earlier length now and then before growing again), so a change costs a compare of the list
   // and the new entries, not a rebuild of every tree's cell (that stalled frames by 100-170 ms on the Xbox)
-  const cells = new Map(), seen = [], known = new WeakSet();
+  const cells = new Map(), seen = [], known = new WeakSet(), infoOf = new WeakMap();
   let treeCount = 0, treesAt = -10;
   const cellKey = (i, j) => i * 65536 + j;
   function gatherTrees(now, list) {

@@ -17,9 +17,10 @@ import {
   LANDMARK_SITES
 } from './city-config.js';
 import { cityUniforms, createSteamMaterial, createTreeGrateMaterial, createGodRayMaterial } from './tsl-materials.js';
-import { createTreeField } from './trees.js';
+import { createTreeField, createShrubs } from './trees.js';
 import { REAL_TREES, REAL_TREE_KINDS, REAL_TREE_HEIGHTS } from './tree-geodata.js';
 import { placeStreetTrees, dropCanopyFill } from './tree-placements.js';
+import { yardTreeSites, yardLeaves } from './drafted-yards.js';
 import { createFoodCartParts } from './street-props.js';
 import { pavedPlazaRects, bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes } from './city-grid.js';
 import { bryantParkLawn } from './landmarks.js';
@@ -104,7 +105,7 @@ function createWalkSignalMaterial(clock) {
   return mat;
 }
 
-function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStructure = null) {
+function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStructure = null, draftedYard = []) {
   const group = new THREE.Group();
   group.name = 'StreetDetails';
 
@@ -1211,6 +1212,18 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   // B5. The squares, the other parks & the plazas (sites laid out by city-grid.js)
   for (const s of parkTreeSites || []) treePositions.push(s);
 
+  // B6. The drafted houses' yard trees (drafted-yards.js), as Open Facades saw them in the street photos: the canopy's
+  // fill trees close to one are left out, since the canopy data saw the same tree from above
+  const yardTrees = yardTreeSites(draftedYard);
+  if (yardTrees.length) {
+    const near = (t) => yardTrees.some((y) => (y.x - t.x) ** 2 + (y.z - t.z) ** 2 < 36);
+    for (let i = treePositions.length - 1; i >= 0; i--) {
+      const t = treePositions[i];
+      if (t.likeStreet && !t.height && near(t)) treePositions.splice(i, 1);
+    }
+    for (const y of yardTrees) treePositions.push(y);
+  }
+
   // Surveyed street trees; parks keep their authored terrain, clearings and tree layouts.
   let sidewalkTreePositions = placeStreetTrees(REAL_TREES, treePositions,
     (x, z) => !inPlaza(x, z, 1.5) && isClearOfPoles(x, z, 2.2), REAL_TREE_KINDS, REAL_TREE_HEIGHTS);
@@ -1219,6 +1232,8 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   const treeField = createTreeField(scene, keptTrees, colliders,
     { stream: TIER.stream, at: TIER.stream ? groundStreamCenter() : null });
   group.add(treeField.group);
+  // the drafted houses' shrubs and hedges, in the trees' own leaves
+  if (draftedYard.length) group.add(createShrubs(treeField, yardLeaves(draftedYard)));
   sidewalkTreePositions = sidewalkTreePositions.filter((t) => treeField.sites.has(t));
   console.info(`[streetDetails] ${treeField.stats.trees} trees (${sidewalkTreePositions.length} street trees)`);
 

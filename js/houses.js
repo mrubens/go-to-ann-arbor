@@ -1,4 +1,5 @@
 import { gpuOnly } from './gpu-only.js';
+import { createShrubs } from './trees.js';
 import { TIER } from './device-tier.js';
 import * as THREE from 'three/webgpu';
 import { Fn, attribute, float, vec2, vec3, color, fract, floor, abs, clamp, max, min, mix, step, smoothstep, sin, fwidth, uv, texture, pow, mod } from 'three/tsl';
@@ -444,7 +445,7 @@ function createRailMaterial() {
   return mat;
 }
 
-let wallMaterial = null, solidMaterial = null, railMaterial = null, stepMaterial = null, shrubMaterial = null, lampMaterial = null;
+let wallMaterial = null, solidMaterial = null, railMaterial = null, stepMaterial = null, lampMaterial = null;
 
 // The garage doors, in 16 m cells: [x0, z0, x1, z1]
 const DOOR_CELL = 16;
@@ -1309,14 +1310,19 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     }
   }
   if (shrubs.length) {
-    shrubMaterial ||= new THREE.MeshStandardNodeMaterial({ roughness: 0.95 });
-    const count = shrubs.length / 7, geo = new THREE.IcosahedronGeometry(1, 1);
-    const mesh = instanced(geo, shrubMaterial, count, 'HouseShrubs', 320, () => {});
-    for (let i = 0; i < count; i++) {
+    // in the trees' own leaves (trees.js), as the drafted houses' yards are
+    const bushes = [];
+    for (let i = 0; i < shrubs.length / 7; i++) {
       const o = i * 7, rad = shrubs[o + 3];
-      mtx.compose(at.set(shrubs[o], shrubs[o + 1] + rad * 0.5, shrubs[o + 2]), q.setFromAxisAngle(up, i * 1.7), size.set(rad, rad * 0.8, rad));
-      mesh.setMatrixAt(i, mtx);
-      mesh.setColorAt(i, col.setRGB(shrubs[o + 4], shrubs[o + 5], shrubs[o + 6]));
+      bushes.push({ x: shrubs[o], y: shrubs[o + 1] - 0.05, z: shrubs[o + 2], yaw: i * 1.7, w: rad * 2, h: rad * 1.45, len: rad * 2,
+        color: new THREE.Color().setRGB(shrubs[o + 4], shrubs[o + 5], shrubs[o + 6]) });
+    }
+    for (const mesh of [...createShrubs(null, { bushes }).children]) {
+      mesh.name = 'HouseShrubs';
+      mesh.userData.terrain = 'set';
+      mesh.userData.cullDistance = 320;
+      mesh.castShadow = false;
+      group.add(mesh);
     }
   }
   if (lamps.length) {
