@@ -20,8 +20,9 @@ function probe(renderer) {
   let s = 0;
   for (let i = 0; i < 4e6; i++) { const k = i & 1023; a[k] = a[k] * 0.5 + i * 1e-6; s += a[k]; }
   const ms = performance.now() - t0;
-  const timer = gl?.getExtension('EXT_disjoint_timer_query_webgl2') ? 'yes' : 'no';
-  log(`[device] GPU: ${gpu}; a fixed 4M-step JavaScript loop took ${ms.toFixed(1)} ms (${ms < 25 ? 'fast JavaScript on' : 'fast JavaScript seemingly off'}); GPU timer: ${timer}; ${navigator.hardwareConcurrency || '?'} cores (${s > 0 ? 'ok' : ''})`);
+  const timer = gl?.getSupportedExtensions()?.includes('EXT_disjoint_timer_query_webgl2') ? 'offered, not used' : 'no';
+  renderer.userData.deviceLine = `[device] GPU: ${gpu}; a fixed 4M-step JavaScript loop took ${ms.toFixed(1)} ms (${ms < 25 ? 'fast JavaScript on' : 'fast JavaScript seemingly off'}); GPU timer: ${timer}; ${navigator.hardwareConcurrency || '?'} cores (${s > 0 ? 'ok' : ''})`;
+  log(renderer.userData.deviceLine);
 }
 
 // Times what's drawn between begin() and end() on the GPU. One query at a time; results come back frames later.
@@ -30,7 +31,8 @@ function gpuTimer(renderer) {
   const u = (renderer.userData ||= {});
   if (u.gpuTimer) return u.gpuTimer;
   const gl = renderer.backend?.gl;
-  const ext = gl?.getExtension('EXT_disjoint_timer_query_webgl2');
+  // (not turned on for now: the Xbox lost its graphics within seconds of every start after this was added)
+  const ext = null;
   const free = [], pending = [];
   let active = null, total = 0, count = 0;
   const t = {

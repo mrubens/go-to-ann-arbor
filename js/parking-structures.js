@@ -7,6 +7,7 @@ import { LIFT } from './ground-lifts.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
 import { cityUniforms } from './tsl-materials.js';
+import { XBOX } from './device-tier.js';
 
 // Lamp: the town's parking structures (data/parking-structures.json, Assets/Tools/build-parking-structures.py, from
 // OpenStreetMap), driven and walked up floor by floor. Each stands on its mapped outline in place of the survey's plain
@@ -420,7 +421,7 @@ function createParkingStructures(group, data) {
     const m = new THREE.InstancedMesh(ribGeo, ribMat, list.length);
     list.forEach(([x, y, z, yaw, len], k) => m.setMatrixAt(k, m4.compose(v3.set(x, y, z), q.setFromAxisAngle(up, yaw), sc.set(1, 1, len))));
     m.castShadow = false; m.receiveShadow = true;
-    m.userData.cullDistance = 240;
+    m.userData.cullDistance = XBOX ? 150 : 240;
     m.instanceMatrix.needsUpdate = true;
     m.computeBoundingSphere();
     group.add(m);
@@ -437,13 +438,16 @@ function createParkingStructures(group, data) {
     return m;
   };
   const paint = new THREE.MeshStandardNodeMaterial({ color: 0xe9e6dc, roughness: 0.8 });
-  inst(new THREE.PlaneGeometry(0.11, 5.0).rotateX(-Math.PI / 2), paint, stripes, 160);
-  const stopMat = new THREE.MeshStandardNodeMaterial({ color: PAINT.stop, roughness: 0.95 });
-  inst(flat(new THREE.BoxGeometry(1.8, 0.13, 0.16).translate(0, 0.065, 0)), stopMat, stops, 120);
+  // Lamp: on the Xbox the stall lines and wheel stops are left out, and the lights show only close by (fewer draws downtown)
+  if (!XBOX) {
+    inst(new THREE.PlaneGeometry(0.11, 5.0).rotateX(-Math.PI / 2), paint, stripes, 160);
+    const stopMat = new THREE.MeshStandardNodeMaterial({ color: PAINT.stop, roughness: 0.95 });
+    inst(flat(new THREE.BoxGeometry(1.8, 0.13, 0.16).translate(0, 0.065, 0)), stopMat, stops, 120);
+  }
   const lit = new THREE.MeshStandardNodeMaterial({ color: 0xdfe3e6, roughness: 0.5 });
   lit.emissiveNode = color(0xf2f4ff).mul(smoothstep(0.35, 1.3, cityUniforms.uInteriorGlow).mul(2.2).add(0.06));
-  inst(flat(new THREE.BoxGeometry(1.25, 0.08, 0.3)), lit, fixtures, 220);
-  inst(flat(new THREE.BoxGeometry(0.55, 0.12, 0.32)), lit, heads, 420);
+  inst(flat(new THREE.BoxGeometry(1.25, 0.08, 0.3)), lit, fixtures, XBOX ? 120 : 220);
+  inst(flat(new THREE.BoxGeometry(0.55, 0.12, 0.32)), lit, heads, XBOX ? 200 : 420);
 
   // the highest deck or ramp under (x, z) within a step above y, or -Infinity
   const top = (x, z, y) => {

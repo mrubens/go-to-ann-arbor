@@ -1,4 +1,7 @@
-import { TIER } from './device-tier.js';
+import { TIER, XBOX } from './device-tier.js';
+// Trees kept apart on the Xbox were tried (half the triangles, ~140 more draws) and made frames no faster: there each
+// draw costs ~70 us, and triangles barely count. Set here, not in its tier, so a change rebuilds only the street details.
+const MERGE_TREES = TIER.mergeTrees;
 import { log } from '../lamp-game.js';
 import * as THREE from 'three/webgpu';
 import { createTreeMaterial } from './tsl-materials.js';
@@ -984,7 +987,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
       tris += g.index.count / 3;
     }));
     // every tree runs every shape's vertices: only where that's cheap
-    if (tris > TIER.mergeTrees) { log(`[trees] level ${l} kept apart (${Math.round(tris / 1000)}k triangles merged)`); return null; }
+    if (tris > MERGE_TREES) { log(`[trees] level ${l} kept apart (${Math.round(tris / 1000)}k triangles merged)`); return null; }
     const geo = new THREE.BufferGeometry();
     const names = ['position', 'normal', 'uv', 'aTree'];
     const arrays = names.map((n) => new Float32Array(verts * parts[0].g.attributes[n].itemSize));
@@ -1010,7 +1013,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     log(`[trees] level ${l}: ${parts.length} shapes as one draw a cell (${Math.round(tris / 1000)}k triangles)`);
     return type;
   };
-  const MERGED = TIER.mergeTrees ? [0, 1, 2].map(mergeLevel) : [null, null, null];
+  const MERGED = MERGE_TREES ? [0, 1, 2].map(mergeLevel) : [null, null, null];
   const mergedMaterial = MERGED.some(Boolean) ? createTreeMaterial(atlas.texture, { merged: true }) : null;
 
   // Lamp: park, wood and yard trees (`likeStreet`) take their heights from the surveyed street trees of their kind,

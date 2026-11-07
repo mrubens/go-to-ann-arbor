@@ -42,7 +42,7 @@ export function reportTriangles(scene, camera, shadow = null) {
   camera.updateMatrixWorld();
   viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   frustum.setFromProjectionMatrix(viewProj, camera.coordinateSystem, camera.reversedDepth);
-  const parts = new Map(), meshes = new Map();
+  const parts = new Map(), meshes = new Map(), meshDraws = new Map();
   let all = 0, casting = 0, draws = 0;
   scene.traverse((o) => {
     if (!o.isMesh || !shown(o) || !inView(o)) return;
@@ -57,6 +57,7 @@ export function reportTriangles(scene, camera, shadow = null) {
       + (o.name ? '' : ` [${o.material?.type} #${o.material?.color?.getHexString?.()} in ${o.parent?.name || o.parent?.type}, r ${Math.round(geo.boundingSphere?.radius || 0)}]`);
     const key = `${part} / ${what}${o.userData?.cullDistance ? ` cull ${Math.round(o.userData.cullDistance)}` : ''}`;
     meshes.set(key, (meshes.get(key) || 0) + t);
+    meshDraws.set(key, (meshDraws.get(key) || 0) + 1);
     all += t; draws++; if (o.castShadow) casting += t;
   });
   // what each shadow cascade draws, part by part
@@ -80,6 +81,9 @@ export function reportTriangles(scene, camera, shadow = null) {
   log(`[triangles] in view: ${m(all)} in ${draws} draws, ${m(casting)} casting shadows. ${top.join('; ')}`);
   const big = [...meshes].sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => `${k} ${m(v)}`);
   log(`[triangles] biggest: ${big.join('; ')}`);
+  // the most draws, mesh by mesh: on the Xbox each draw costs ~70 us whatever it holds
+  const most = [...meshDraws].sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => `${k} x${v}`);
+  log(`[triangles] most draws: ${most.join('; ')}`);
   return { top: [...top, ...shadowTop], big, all, casting, draws };
 }
 

@@ -99,16 +99,26 @@ function buildAnimals(group) {
   const cityBirds = createCityBirds(group, { parkAt: habitat.parkAt, treesNear: (x, z, r, out) => treesNear(x, z, r, out) });
 
   // --- trees, in cells -------------------------------------------------------------------------------------------
-  let cells = new Map(), treeCount = 0, seenLength = -1, treesAt = -10;
-  const infoOf = new WeakMap();
+  // Kept up as the city's colliders change: only what's new since the last look is read (the list grows at its end,
+  // and is cut back to an earlier length now and then before growing again), so a change costs a compare of the list
+  // and the new entries, not a rebuild of every tree's cell (that stalled frames by 100-170 ms on the Xbox)
+  const cells = new Map(), seen = [], known = new WeakSet();
+  let treeCount = 0, treesAt = -10;
+  const cellKey = (i, j) => i * 65536 + j;
   function gatherTrees(now, list) {
-    if (!list || (seenLength > 0 && (list.length === seenLength || now - treesAt < 3))) return;
-    treesAt = now; seenLength = list.length;
-    cells = new Map(); treeCount = 0;
-    for (const c of list) {
-      const k = c.knock;
-      if (!k || k.kind !== 'tree') continue;
-      const key = `${Math.floor(k.x / CELL)},${Math.floor(k.z / CELL)}`;
+    if (!list || (seen.length && (list.length === seen.length && list[seen.length - 1] === seen[seen.length - 1] || now - treesAt < 3))) return;
+    treesAt = now;
+    let from = 0;
+    const n = Math.min(seen.length, list.length);
+    while (from < n && list[from] === seen[from]) from++;
+    seen.length = list.length;
+    for (let i = from; i < list.length; i++) {
+      const c = list[i];
+      seen[i] = c;
+      const k = c?.knock;
+      if (!k || k.kind !== 'tree' || known.has(k)) continue;
+      known.add(k);
+      const key = cellKey(Math.floor(k.x / CELL), Math.floor(k.z / CELL));
       let cell = cells.get(key);
       if (!cell) cells.set(key, (cell = []));
       cell.push(k);
@@ -119,7 +129,7 @@ function buildAnimals(group) {
     out.length = 0;
     const c0 = Math.floor((x - r) / CELL), c1 = Math.floor((x + r) / CELL), d0 = Math.floor((z - r) / CELL), d1 = Math.floor((z + r) / CELL);
     for (let i = c0; i <= c1; i++) for (let j = d0; j <= d1; j++) {
-      const cell = cells.get(`${i},${j}`);
+      const cell = cells.get(cellKey(i, j));
       if (cell) for (const t of cell) if (!t.down && (t.x - x) ** 2 + (t.z - z) ** 2 < r * r) out.push(t);
     }
     return out;

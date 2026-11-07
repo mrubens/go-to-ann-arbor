@@ -2222,8 +2222,13 @@ class ThirdPersonControllerManager {
     const p = this.entities.person, ch = p.chute, mesh = this.parachute();
     ch.t += dt;
     if (!this.keys.up) ch.held = false;
-    if (!ch.pulled && this.keys.up && !ch.held && ch.t > 0.3) { ch.pulled = true; log('[parachute] opened'); }
-    if (ch.pulled) ch.open = Math.min(1, ch.open + dt * 1.6);
+    // each fresh press of jump opens the canopy, or folds it away to fall free again (a hidden trick: no hint says so)
+    if (this.keys.up && !ch.held && ch.t > 0.3) {
+      ch.held = true;
+      ch.pulled = !ch.pulled;
+      log(ch.pulled ? '[parachute] opened' : '[parachute] folded away');
+    }
+    ch.open = ch.pulled ? Math.min(1, ch.open + dt * 1.6) : Math.max(0, ch.open - dt * 2.2);
     // the camera: above and behind in free fall, looking down at the body; under the canopy, back and level with
     // the harness, looking up between the body and the canopy so both stay in frame
     const w = p.walkCamera, e = Math.min(1, dt * 3);

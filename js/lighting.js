@@ -203,6 +203,7 @@ function presetForSun({ alt, az }) {
   return p;
 }
 
+const _sunDir = new THREE.Vector3();
 class LightingSystem {
   // Lamp: the kept part it belongs to was built again (main.js). While the part is kept, so is this.
   release() { systems.delete(this); }
@@ -383,7 +384,17 @@ class LightingSystem {
     cityUniforms.uCanyonBounce.value = p.canyonBounce;
 
     this.scene.environmentIntensity = p.envIntensity;
-    this.bakeEnvironmentMap();
+    // Lamp: the sky's reflections are baked again only when the sky has changed enough to see: "Now" is put on again
+    // every minute, and each bake stalled the Xbox by 180-290 ms (the sun moves ~0.25 degrees a minute, so a bake
+    // every ~10 minutes there, or at once for another time, look or weather)
+    // ("Now" eases between the presets as the sun climbs or sets: its settings in steps big enough to see)
+    const q = (v, step) => Math.round((v || 0) / step);
+    const sky = `${p.id}|${this.lookId}|${q(p.cloudCoverage, 0.05)}|${q(p.cloudDensity, 0.05)}|${q(p.turbidity, 0.5)}|${q(p.rayleigh, 0.1)}|${q(p.skyExposure, 0.05)}|${q(p.nightFactor, 0.05)}`;
+    if (this.envRenderTarget === null || sky !== this.bakedSky || !this.bakedSun || this.bakedSun.dot(_sunDir.copy(p.sunDir).normalize()) < 0.9995) {
+      this.bakedSky = sky;
+      (this.bakedSun ||= new THREE.Vector3()).copy(p.sunDir).normalize();
+      this.bakeEnvironmentMap();
+    }
   }
 
   update(focusPos) {
@@ -402,7 +413,7 @@ class LightingSystem {
 // player is in; one to what the constructor built (the sun, the sky, the fog's shader) opens the page again.
 live.accept((next, { changed }) => {
   if (changed.some((name) => /\.(createAerialFogNode)$/.test(name))) return false;
-  for (const system of systems) system.applyPreset(system.activePresetId, true);
+  for (const system of systems) { system.bakedSky = null; system.applyPreset(system.activePresetId, true); }
 });
 
 export { LightingSystem, sunPosition, sunTimes };

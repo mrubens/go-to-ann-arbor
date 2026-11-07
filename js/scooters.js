@@ -1,18 +1,53 @@
 import * as THREE from 'three/webgpu';
-import { asset, log } from '../lamp-game.js';
+import { asset, log, random } from '../lamp-game.js';
 import { nativeJSON, toWorld } from './live-feeds.js';
 import { groundHeight } from './terrain.js';
 import { MOTO_SPECS, buildMotoGeometry, createMotoMaterial } from './motorcycles.js';
+import { ROADS, blockAt } from './city-config.js';
 
 // Lamp: the rental e-scooters standing around Ann Arbor, where they really are: the operator's public GBFS feed
 // (free_bike_status, Bird's Spin system for the city), asked through the app around the page every two minutes of
 // play. Each stands on its kickstand at its spot, leaning a little, turned its own way. The 140 nearest the camera are
-// drawn. Without the live feed (Lamp's preview, or offline) the spots saved when this was written stand in.
+// drawn. Without the live feed (Lamp's preview, or offline) the spots saved when this was written stand in. Others are
+// left about town as riders leave them: now and then by a street, on its tree lawn or its sidewalk (`strew`). The
+// player's car or bike sends any it runs into flying, tumbling ahead of it, to lie on its side where it lands (as the
+// bikes in bike-racks.js do).
 
 const FEED = 'https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/free_bike_status';
 const POLL = 120;
 const SHOWN = 140;
 const REACH = 320; // metres from the camera
+
+// Scooters left about town: along each street (not a highway), now and then, one stands just past the curb on its
+// tree lawn or a little further out on its sidewalk, turned any which way, where a curb island's edge really is (the
+// street's own edge out of any block, the spot and a step further out in one that isn't a median or a park)
+const STEP = 45, CHANCE = 0.07;
+function strew() {
+  const out = [];
+  const h = (x, z, k) => { const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453; return v - Math.floor(v); };
+  const kerb = (x, z) => { const b = blockAt(x, z); return b && !b.median && !(b.park > 0.6) ? b : null; };
+  for (const r of ROADS) {
+    if (r.highway || !(r.w > 0)) continue;
+    let carry = h(r.pts[0].x, r.pts[0].z, 1) * STEP;
+    for (let i = 1; i < r.pts.length; i++) {
+      const a = r.pts[i - 1], b = r.pts[i], len = Math.hypot(b.x - a.x, b.z - a.z);
+      if (len < 0.1) continue;
+      const ux = (b.x - a.x) / len, uz = (b.z - a.z) / len;
+      for (let t = carry; t < len; t += STEP) {
+        const cx = a.x + ux * t, cz = a.z + uz * t;
+        if (h(cx, cz, 2) > CHANCE) continue;
+        const side = h(cx, cz, 3) < 0.5 ? -1 : 1, nx = -uz * side, nz = ux * side;
+        const out0 = r.w / 2 + (h(cx, cz, 4) < 0.5 ? 1.2 : 2.6);
+        const x = cx + nx * out0, z = cz + nz * out0;
+        if (blockAt(cx + nx * (r.w / 2 - 0.6), cz + nz * (r.w / 2 - 0.6)) || !kerb(x, z) || !kerb(x + nx * 0.6, z + nz * 0.6)) continue;
+        out.push({ x, z, yaw: h(cx, cz, 5) * Math.PI * 2, g: groundHeight(x, z), lean: -0.12, strewn: true });
+      }
+      carry = ((carry - len) % STEP + STEP) % STEP;
+    }
+  }
+  log(`[scooters] ${out.length} left about town on tree lawns and sidewalks`);
+  return out;
+}
 
 function createScooters(group) {
   group.name = 'Scooters';
@@ -23,7 +58,9 @@ function createScooters(group) {
   mesh.castShadow = true;
   group.add(mesh);
 
-  let spots = []; // { x, z, yaw, g }
+  let spots = []; // { x, z, yaw, g, lean }: the feed's, then the strewn ones
+  let feed = [];
+  const strewn = strew();
   let wait = 0, busy = false, logged = false, regather = 0, triedSample = false;
   const hash = (x, z) => { const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return v - Math.floor(v); };
 
@@ -31,10 +68,13 @@ function createScooters(group) {
   const ridden = new Set();
   const keyOf = (x, z) => `${Math.round(x)},${Math.round(z)}`;
   function take(list, from) {
-    spots = list.map(([lat, lon]) => {
-      const { x, z } = toWorld(lat, lon);
-      return { x, z, yaw: hash(x, z) * Math.PI * 2, g: groundHeight(x, z) };
-    }).filter((s) => !ridden.has(keyOf(s.x, s.z)));
+    // one flying or lying knocked over keeps on as it is, though the feed has it where it stood
+    const kept = new Map(feed.filter((s) => s.fly || s.down).map((s) => [s.key, s]));
+    feed = list.map(([lat, lon]) => {
+      const { x, z } = toWorld(lat, lon), key = keyOf(x, z);
+      return kept.get(key) || { key, x, z, yaw: hash(x, z) * Math.PI * 2, g: groundHeight(x, z), lean: -0.12 };
+    }).filter((s) => !ridden.has(s.key));
+    spots = feed.concat(strewn);
     regather = 0;
     if (!logged) { logged = true; log(`[scooters] ${from}: ${spots.length} standing around town`); }
   }
@@ -56,8 +96,92 @@ function createScooters(group) {
 
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ');
   const pos = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
-  const near = [];
-  function update(dt, cam) {
+  const near = [], shown = [];
+  const fq = new THREE.Quaternion(), fq2 = new THREE.Quaternion(), fax = new THREE.Vector3();
+  function draw() {
+    for (let i = 0; i < shown.length; i++) {
+      const s = shown[i];
+      if (s.fly) m4.compose(pos.set(s.x, s.fly.y, s.z), s.fly.q, one);
+      else {
+        e.set(0, s.yaw, s.lean); // on its kickstand, or lying on its side
+        q.setFromEuler(e);
+        m4.compose(pos.set(s.x, s.g + 0.02 + (s.down ? 0.2 : 0), s.z), q, one);
+      }
+      mesh.setMatrixAt(i, m4);
+    }
+    mesh.count = shown.length;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  // the player's car or bike running into one: it goes flying ahead of it, tumbling, and lies where it lands
+  const flying = new Set();
+  const bodyOf = (ent, mode) => mode === 'car' ? (ent.bike ? [0.45, 1.15] : [1.0, 2.35]) : mode === 'cyclist' ? [0.35, 0.9] : null;
+  let cue = null;
+  function strike(ent, mode) {
+    const body = ent && bodyOf(ent, mode), sp = ent?.speed || 0;
+    if (!body || Math.abs(sp) < 2.2) return;
+    const px = ent.position.x, pz = ent.position.z, sn = Math.sin(ent.heading), cs = Math.cos(ent.heading);
+    let hits = 0;
+    for (const s of shown) {
+      if (s.fly || Math.abs(s.x - px) > 4 || Math.abs(s.z - pz) > 4 || Math.abs(ent.position.y - s.g) > 2) continue;
+      const dx = s.x - px, dz = s.z - pz, lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
+      if (Math.abs(lx) > body[0] + 0.25 || Math.abs(lz) > body[1] + 0.4) continue;
+      const a = Math.abs(sp), side = Math.sign(lx) || 1, across = (0.3 + random() * 0.6) * a * side;
+      const fling = 0.95 + random() * 0.35;
+      e.set(0, s.yaw, s.lean);
+      s.fly = {
+        y: s.g + 0.02 + (s.down ? 0.2 : 0), vx: sn * sp * fling + cs * across, vz: cs * sp * fling - sn * across, vy: Math.min(9, 2 + a * 0.4),
+        q: new THREE.Quaternion().setFromEuler(e), ax: cs * (0.5 + random()), ay: (random() - 0.5) * 1.5, az: -sn * (0.5 + random()),
+        w: Math.min(18, 5 + a * 0.7), bounces: 0, settle: 0, side: random() < 0.5 ? -1 : 1
+      };
+      s.down = false;
+      flying.add(s);
+      hits++;
+      cue?.('crash', { x: s.x, y: s.g + 0.5, z: s.z }, Math.min(0.6, 0.18 + a * 0.02));
+    }
+    if (hits) { ent.speed *= Math.pow(mode === 'cyclist' ? 0.6 : 0.98, hits); log(`[scooters] knocked ${hits} flying at ${Math.round(Math.abs(sp) * 2.237)} mph`); }
+  }
+  function fly(dt) {
+    for (const s of flying) {
+      const f = s.fly;
+      if (f.settle > 0) {
+        f.settle += dt * 3;
+        e.set(0, s.yaw, f.side * 1.4);
+        fq2.setFromEuler(e);
+        f.q.slerp(fq2, Math.min(1, f.settle * 0.5));
+        f.y += (s.g + 0.22 - f.y) * Math.min(1, dt * 8);
+        if (f.settle >= 2) { s.fly = null; s.down = true; s.lean = f.side * 1.4; flying.delete(s); }
+        continue;
+      }
+      f.vy -= 9.8 * dt;
+      s.x += f.vx * dt; s.z += f.vz * dt; f.y += f.vy * dt;
+      f.q.premultiply(fq.setFromAxisAngle(fax.set(f.ax, f.ay, f.az).normalize(), f.w * dt));
+      s.g = groundHeight(s.x, s.z);
+      const floor = s.g + 0.25;
+      if (f.y < floor) {
+        f.y = floor;
+        if (f.vy < -1.5) {
+          if (++f.bounces === 1) cue?.('thud', { x: s.x, y: f.y, z: s.z }, Math.min(0.5, 0.12 - f.vy * 0.04));
+          f.vy = -f.vy * 0.35; f.vx *= 0.6; f.vz *= 0.6; f.w *= 0.55;
+        } else {
+          f.vy = 0;
+          const k = Math.exp(-dt * 4);
+          f.vx *= k; f.vz *= k; f.w *= Math.exp(-dt * 6);
+          if (Math.hypot(f.vx, f.vz) < 0.25) {
+            fax.set(0, 0, 1).applyQuaternion(f.q);
+            if (Math.hypot(fax.x, fax.z) > 0.2) s.yaw = Math.atan2(fax.x, fax.z);
+            f.settle = 1e-3;
+          }
+        }
+      }
+    }
+    draw();
+  }
+
+  function update(dt, cam, ent = null, mode = null, sound = null) {
+    cue = sound;
+    strike(ent, mode);
+    if (flying.size) fly(dt);
     wait -= dt;
     if (wait <= 0 && !busy) {
       wait = POLL;
@@ -73,16 +197,11 @@ function createScooters(group) {
       if (d < REACH) near.push([d, s]);
     }
     near.sort((a, b) => a[0] - b[0]);
-    const n = Math.min(SHOWN, near.length);
-    for (let i = 0; i < n; i++) {
-      const s = near[i][1];
-      e.set(0, s.yaw, -0.12); // on its kickstand
-      q.setFromEuler(e);
-      m4.compose(pos.set(s.x, s.g + 0.02, s.z), q, one);
-      mesh.setMatrixAt(i, m4);
-    }
-    mesh.count = n;
-    mesh.instanceMatrix.needsUpdate = true;
+    shown.length = 0;
+    for (let i = 0; i < Math.min(SHOWN, near.length); i++) shown.push(near[i][1]);
+    // one still flying stays drawn though it's left the nearest few
+    for (const f of flying) if (!shown.includes(f) && shown.length < SHOWN) shown.push(f);
+    draw();
   }
 
   // the scooter nearest (x, z) within reach, scored by `facing` as the player's other choices are (controllers.js
@@ -90,6 +209,7 @@ function createScooters(group) {
   function nearest(x, z, reach, facing = () => 1) {
     let best = null, score = Infinity;
     for (const s of spots) {
+      if (s.fly || s.down) continue;
       const d = Math.hypot(s.x - x, s.z - z);
       if (d >= reach) continue;
       const sc = (d / reach) * facing(s.x, s.z);
@@ -99,12 +219,16 @@ function createScooters(group) {
   }
   // ride it off: gone from where it stood, and its look for the player's ride
   function ride(slot) {
-    ridden.add(keyOf(slot.x, slot.z));
-    spots = spots.filter((s) => s !== slot);
+    if (slot.key) ridden.add(slot.key);
+    feed = feed.filter((s) => s !== slot);
+    const k = strewn.indexOf(slot);
+    if (k >= 0) strewn.splice(k, 1);
+    spots = feed.concat(strewn);
     regather = 0;
     return { kind: 'escooter', hex: 0x24272b, style: 0 };
   }
 
+  spots = feed.concat(strewn);
   const made = { update, nearest, take: ride };
   return made;
 }

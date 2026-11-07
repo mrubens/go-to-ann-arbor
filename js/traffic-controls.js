@@ -351,8 +351,10 @@ function buildTrafficControls(group, network) {
   ]);
   // one lamp each: red on top, amber, green at the bottom, facing the drivers coming up to the head
   const lampGeo = LY.map((ly) => new THREE.CircleGeometry(R, 20).translate(0, ly, D / 2 + 0.004));
-  const plane = new THREE.PlaneGeometry(1, 1);
-  const back = plane.clone().rotateY(Math.PI).translate(0, 0, -0.01);
+  // a sign's face stands just in front of its post (5 cm round), bolted to it from behind, so the post shows only
+  // behind the sign and above and below it
+  const plane = new THREE.PlaneGeometry(1, 1).translate(0, 0, 0.07);
+  const back = new THREE.PlaneGeometry(1, 1).rotateY(Math.PI).translate(0, 0, 0.06);
   const face = (draw) => new THREE.MeshStandardNodeMaterial({ map: signTexture(draw), alphaTest: 0.5, roughness: 0.5 });
   const backOf = (shape) => new THREE.MeshStandardNodeMaterial({
     color: 0x9a9ea2, alphaMap: signTexture(silhouette(shape)), alphaTest: 0.5, roughness: 0.6, metalness: 0.5

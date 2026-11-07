@@ -1,5 +1,6 @@
-import { TIER } from './device-tier.js';
+import { TIER, XBOX } from './device-tier.js';
 import * as THREE from 'three/webgpu';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hot } from '../lamp-game.js';
 
 // Spatial culling for the island-wide static geometry. Most of the town's street furniture and building massing is
@@ -18,9 +19,13 @@ const SHADOW_PROXY_LAYER = 3;
 const CULL_PER_METRE = 700;
 // never closer: the shadow cascades reach ~200 m at street level (on a phone, without them, the far props go sooner)
 const CULL_MIN = 220 * TIER.farCut;
+// Lamp: on the Xbox a draw costs ~70 us of the browser's time whatever it holds, so fewer, bigger pieces there: the
+// props in bigger squares, and the plain meshes of a part that share a material merged square by square (bundle)
+const XBOX_CELL = 1200;
+const BUNDLE_CELL = 700;
 const CULL_MAX = 1400; // beyond this the props are kept in static cells with far horizon culling
 const PROXY_CELL = 500; // the far cascade spans ~400 m at street level: a cascade sees a few cells
-const STATIC_CELL = 600;
+const STATIC_CELL = XBOX ? XBOX_CELL : 600;
 const STATIC_FAR_CULL = 2000 * TIER.farCut;
 
 const _m = new THREE.Matrix4();
@@ -123,6 +128,13 @@ function chunkInstancedMesh(mesh, cell) {
     }
     copyObjectState(chunk, mesh);
     chunk.computeBoundingSphere();
+    // where its copies stand, in x and z (the Xbox culls its big squares by the nearest copy's corner of them)
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const id of ids) {
+      const x = src[id * 16 + 12], z = src[id * 16 + 14];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z;
+    }
+    chunk.userData.spread = [x0, x1, z0, z1];
     chunks.push(chunk);
     // where each instance went, so one can still be moved (a pole knocked over, knockdowns.js)
     const movedTo = mesh.userData.movedTo || (mesh.userData.movedTo = new Array(n));
@@ -136,6 +148,82 @@ function proxyableMaterial(mat) {
   return !!mat && !Array.isArray(mat) && !mat.transparent && !(mat.alphaTest > 0) && !mat.alphaMap &&
     !mat.positionNode && !mat.castShadowPositionNode && !mat.castShadowNode && !mat.alphaTestNode &&
     !mat.maskNode && !mat.maskShadowNode && !mat.depthNode && !mat.displacementMap;
+}
+
+// Only what nothing else holds on to: a plain mesh with a material of its own kind, nothing per object (a callback, a
+// pose, notes other code reads) beyond these
+const PLAIN_NOTES = new Set(['cullDistance', 'shadowStandIn', 'terrain', 'sharesPipelineWith']);
+function bundleable(o) {
+  if (!isStaticMesh(o) || o.isInstancedMesh || o.isBatchedMesh || Array.isArray(o.material) || !o.material) return false;
+  if (Object.prototype.hasOwnProperty.call(o, 'onBeforeRender') || Object.prototype.hasOwnProperty.call(o, 'onAfterRender')) return false;
+  if (o.children.length || o.userData.streamed || o.userData.keepArrays) return false;
+  for (const k in o.userData) if (!PLAIN_NOTES.has(k)) return false;
+  if (o.userData.shadowStandIn && o.userData.shadowStandIn !== true) return false;
+  const g = o.geometry;
+  if (!g?.attributes?.position || g.groups.length || g.morphAttributes && Object.keys(g.morphAttributes).length) return false;
+  if (g.drawRange.start !== 0 || Number.isFinite(g.drawRange.count)) return false;
+  for (const a of Object.values(g.attributes)) if (a.isInstancedBufferAttribute || a.isInterleavedBufferAttribute || !a.array?.length) return false;
+  return !g.index || !!g.index.array?.length;
+}
+
+// The plain meshes of one group under `root` that share a material, attributes, shadows and cull distance, merged
+// into one per BUNDLE_CELL square in that group (so whatever shows or hides the group still does)
+const _toParent = new THREE.Matrix4();
+function bundle(root) {
+  root.updateMatrixWorld(true);
+  const groups = new Map();
+  const uses = new Map();
+  root.traverse((o) => { if (o.geometry) uses.set(o.geometry, (uses.get(o.geometry) || 0) + 1); });
+  root.traverse((o) => {
+    if (!bundleable(o)) return;
+    const g = o.geometry;
+    if (!g.boundingSphere) g.computeBoundingSphere();
+    const c = _a.copy(g.boundingSphere.center).applyMatrix4(o.matrixWorld);
+    const attrs = Object.entries(g.attributes).map(([n, a]) => `${n}:${a.itemSize}:${a.normalized}:${a.array.constructor.name}`).sort().join(',');
+    const key = [o.parent.uuid, o.material.uuid, attrs, !!g.index, o.castShadow, o.receiveShadow, o.layers.mask, o.renderOrder,
+      o.userData.cullDistance || 0, !!o.userData.shadowStandIn, !!o.userData.terrain,
+      Math.floor(c.x / BUNDLE_CELL), Math.floor(c.z / BUNDLE_CELL)].join('|');
+    let list = groups.get(key);
+    if (!list) groups.set(key, (list = []));
+    list.push(o);
+  });
+  let before = 0, after = 0;
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const parent = list[0].parent;
+    const parentInverse = parent.matrixWorld.clone().invert();
+    const geos = list.map((o) => {
+      const g = o.geometry.clone();
+      _toParent.multiplyMatrices(parentInverse, o.matrixWorld);
+      g.applyMatrix4(_toParent);
+      return g;
+    });
+    let merged = null;
+    try { merged = mergeGeometries(geos); } catch { merged = null; }
+    for (const g of geos) if (g !== merged) g.dispose();
+    if (!merged) continue;
+    merged.computeBoundingSphere();
+    merged.computeBoundingBox();
+    const first = list[0];
+    const mesh = new THREE.Mesh(merged, first.material);
+    mesh.name = first.name || first.parent?.name || 'Bundle';
+    mesh.castShadow = first.castShadow;
+    mesh.receiveShadow = first.receiveShadow;
+    mesh.layers.mask = first.layers.mask;
+    mesh.renderOrder = first.renderOrder;
+    mesh.userData = { ...first.userData, bundled: list.length };
+    delete mesh.userData.sharesPipelineWith;
+    for (const o of list) {
+      o.removeFromParent();
+      if (uses.get(o.geometry) === 1) o.geometry.dispose();
+    }
+    parent.add(mesh);
+    mesh.updateMatrixWorld(true);
+    before += list.length; after++;
+  }
+  // (sharing a pipeline with a mesh merged away would point at one no longer drawn)
+  root.traverse((o) => { if (o.userData.sharesPipelineWith && !o.userData.sharesPipelineWith.parent) delete o.userData.sharesPipelineWith; });
+  if (before) console.info(`[bundle] ${root.children[0]?.name || root.name || 'part'}: ${before} meshes into ${after}`);
 }
 
 function replaceWithChunks(mesh, cell) {
@@ -158,6 +246,7 @@ function replaceWithChunks(mesh, cell) {
  */
 function setupSceneCulling(scene, roots, shadow = null) {
   scene.updateMatrixWorld(true);
+  if (XBOX) for (const root of roots) bundle(root);
   const culled = [];
 
   // 1. Small props & pre-chunked decals: chunked & distance culled
@@ -165,7 +254,12 @@ function setupSceneCulling(scene, roots, shadow = null) {
   const largeMeshes = [];
   const pushCulled = (mesh, sphere, cullDist) => {
     const maxDist = cullDist + sphere.radius;
+    // Lamp: on the Xbox, a chunk of small props (its 1200 m square) by the distance to the nearest of its copies' box,
+    // since its sphere's radius (~850 m) would keep it on far beyond its props' own distance: each kind of sign, lens
+    // or drum then draws in the square or two near the player, not the three or four within a kilometre
+    const spread = XBOX && mesh.userData.spread && cullDist < 600 ? mesh.userData.spread : null;
     culled.push({
+      box: spread, near: spread ? (cullDist + 8) ** 2 : 0,
       mesh,
       x: sphere.center.x,
       y: sphere.center.y,
@@ -203,7 +297,7 @@ function setupSceneCulling(scene, roots, shadow = null) {
       continue;
     }
     // big squares: a draw costs far more here than the triangles of the copies just beyond the distance
-    const cell = Math.min(900, Math.max(450, cullDist));
+    const cell = XBOX ? XBOX_CELL : Math.min(900, Math.max(450, cullDist));
     for (const chunk of replaceWithChunks(mesh, cell)) {
       const sphere = chunk.boundingSphere.clone().applyMatrix4(chunk.matrixWorld);
       pushCulled(chunk, sphere, cullDist);
@@ -397,6 +491,12 @@ function updateSceneCulling(cameraPosition) {
     const dx = c.x - x;
     const dy = c.y - y;
     const dz = c.z - z;
+    if (c.box) {
+      const b = c.box;
+      const ex = x < b[0] ? b[0] - x : x > b[1] ? x - b[1] : 0, ez = z < b[2] ? b[2] - z : z > b[3] ? z - b[3] : 0;
+      c.mesh.visible = ex * ex + ez * ez < c.near;
+      continue;
+    }
     c.mesh.visible = dx * dx + dy * dy + dz * dz < c.maxDistSq;
   }
 }

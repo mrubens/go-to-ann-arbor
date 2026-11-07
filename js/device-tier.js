@@ -24,7 +24,7 @@ const TIERS = {
   // (outskirts.js), which shows where the near ground hasn't come in yet rather than the white of the sky. Its edges
   // aren't smoothed: four samples a pixel of the city's bright color and its extra targets held it well short of 30
   // frames a second, as did the things drawn farther out and the traffic
-  xbox: { name: 'phone', stream: 600, ground: 0.35, shadows: false, groundShade: true, mergeTrees: 0, far: 14000, landmarkReach: 1000, spreadLoads: true, warmReach: 700, shadowTile: 768, shadowFar: 110, bloom: false, antialias: false, scale: 1, traffic: 0.22, people: 0.15, farCut: 0.26, outskirts: true }
+  xbox: { name: 'phone', stream: 600, ground: 0.35, shadows: false, groundShade: true, mergeTrees: 60000, far: 14000, landmarkReach: 1000, spreadLoads: true, warmReach: 700, shadowTile: 768, shadowFar: 110, bloom: false, antialias: false, scale: 1, traffic: 0.22, people: 0.15, farCut: 0.26, outskirts: true }
 };
 
 // A phone or a tablet: an iPad says it's a Mac, but has a touch screen

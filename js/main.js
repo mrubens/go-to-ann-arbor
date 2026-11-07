@@ -48,6 +48,8 @@ import { buildAnimals } from './animals.js';
 import { buildCube, CUBE_FOOTPRINT } from './the-cube.js';
 import { buildBandShell } from './band-shell.js';
 import { buildRestrooms } from './restrooms.js';
+import { buildHelipads } from './helipads.js';
+import { speedLimitAt } from './speed-limits.js';
 import { createSeats } from './seats.js';
 import { CityAudioSystem } from './audio-system.js';
 import { fetchWeather, createPrecipitation } from './weather.js';
@@ -428,6 +430,8 @@ async function initApp() {
   allColliders.push(...roadWork.colliders);
   allColliders.push(...airportPart.made.colliders);
   allColliders.push(...bleachersPart.made.colliders);
+  // the town's helipads, painted on the roofs (or ground) where the map has them (helipads.js)
+  const helipadsPart = live.keep('helipads', () => cityPart((g) => buildHelipads(g, allColliders), { still: true }), { inputs: [heights, blocks, landmarks, parkingPart], from: ['js/helipads.js'] });
   // Tree trunks, lamp posts, signal poles and sign posts: thin and solid, so the car crashes into them and the bike
   // throws its rider (`thin`: the helicopter flies through them)
   // and each goes over when a car hits it hard enough (knockdowns.js)
@@ -492,7 +496,7 @@ async function initApp() {
   // Lamp: the Cube on Regents Plaza, which turns when it's pushed or hit (the-cube.js)
   const cubePart = live.keep('cube', () => cityPart((g) => buildCube(g)), { inputs: [heights], from: ['js/the-cube.js'] });
   allColliders.push(cubePart.made.collider);
-  const parts = [grid, bandShellPart, restroomsPart, cascadesPart, riverPeoplePart, animalsPart, cubePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart, moonPart];
+  const parts = [grid, bandShellPart, restroomsPart, cascadesPart, riverPeoplePart, animalsPart, cubePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart, moonPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -561,12 +565,27 @@ async function initApp() {
     car: { x: -23, z: 228, heading: Math.atan2(14.8, -378) },
     // South University's eastbound bike lane, campus on the left
     cyclist: { x: 660, z: 529, heading: Math.PI / 2 },
-    // high over Stadium Blvd south of the Big House, the stadium below and downtown beyond it
-    helicopter: { x: -30, z: 1950, heading: Math.PI, above: 130 },
+    // in a helicopter on the airport's apron, in the row by the FBO (airport.js; `atAirport` takes the middle one)
+    helicopter: { x: 130, z: 6075, heading: 0.15, atAirport: 1, face: { x: -29, z: 1529 } },
     // in the Argo Cascades' channel just above its first drop, facing down it (cascades.js)
     kayak: { ...CASCADE_START }
   };
 
+  // Fly's start: the player's flying machine is that parked helicopter (its spot stands empty while it's theirs, and a
+  // plane taken before goes back to its own spot), at rest on the apron
+  function startInHelicopter(s) {
+    const h = controllerManager.entities.helicopter;
+    const at = airportPart.made.take(s.atAirport);
+    airportPart.made.dress(h, 'helicopter');
+    controllerManager.teleportActiveTo(at.x, at.z, s.face ? Math.atan2(s.face.x - at.x, s.face.z - at.z) : at.heading, groundHeight(at.x, at.z) + 0.25);
+    h.position.set(at.x, groundHeight(at.x, at.z) + 0.25, at.z);
+    // turned to face the Big House, far off up State St
+    h.heading = s.face ? Math.atan2(s.face.x - at.x, s.face.z - at.z) : at.heading;
+    h.speed = h.verticalSpeed = h.pitchAngle = h.rollAngle = 0;
+    h.mesh.position.copy(h.position);
+    h.mesh.rotation.y = h.heading;
+    log('[airport] Fly starts in the parked helicopter by the FBO');
+  }
   // Reuse teleport placement so saved players return at rest, close to their last positions.
   try {
     // Kept with Lamp's save(), which the preview keeps to one play, so every preview starts in the same place.
@@ -576,7 +595,7 @@ async function initApp() {
       for (const [mode, s] of Object.entries(SCENIC_STARTS)) {
         if (!controllerManager.entities[mode]) continue;
         controllerManager.setMode(mode);
-        controllerManager.teleportActiveTo(s.x, s.z, s.heading, s.above ? groundHeight(s.x, s.z) + s.above : null);
+        if (s.atAirport != null) startInHelicopter(s); else controllerManager.teleportActiveTo(s.x, s.z, s.heading, s.above ? groundHeight(s.x, s.z) + s.above : null);
         // the kayak faces the cascades' channel, not the way the pond's water would turn it
         if (mode === 'kayak') { const k = controllerManager.entities.kayak; k.heading = s.heading; k.mesh.rotation.y = s.heading; }
       }
@@ -859,6 +878,7 @@ async function initApp() {
   const elCamera = document.getElementById('hud-active-camera');
   const elSpeed = document.getElementById('hud-speed');
   const elSpeedMeter = document.getElementById('hud-speed-meter');
+  const elLimit = document.getElementById('hud-limit'), elLimitMph = document.getElementById('hud-limit-mph');
   const elAltitude = document.getElementById('hud-altitude');
   const elGear = document.getElementById('hud-gear');
   const elRpm = document.getElementById('hud-rpm');
@@ -1040,7 +1060,7 @@ async function initApp() {
       if (!e) continue;
       cm.setMode(mode);
       e.leftEmpty = false;
-      cm.teleportActiveTo(s.x, s.z, s.heading, s.above ? groundHeight(s.x, s.z) + s.above : null);
+      if (s.atAirport != null) startInHelicopter(s); else cm.teleportActiveTo(s.x, s.z, s.heading, s.above ? groundHeight(s.x, s.z) + s.above : null);
       if (mode === 'kayak') { e.heading = s.heading; e.mesh.rotation.y = s.heading; }
       if (mode === 'car') cm.stopCar(e);
     }
@@ -1064,7 +1084,7 @@ async function initApp() {
   function goToStart(mode) {
     const s = SCENIC_STARTS[mode];
     if (!s) return;
-    controllerManager.teleportActiveTo(s.x, s.z, s.heading, s.above ? groundHeight(s.x, s.z) + s.above : null);
+    if (s.atAirport != null) startInHelicopter(s); else controllerManager.teleportActiveTo(s.x, s.z, s.heading, s.above ? groundHeight(s.x, s.z) + s.above : null);
     touchControls.reset();
     gamepadControls.reset();
     cameraSystem.resetForTeleport();
@@ -1839,11 +1859,13 @@ async function initApp() {
 
   // Lamp: what each frame's work costs on this machine, logged every ten seconds (milliseconds a frame on average, and
   // the draws and triangles a frame), to see what slows it down
-  const prof = { t: 0, n: 0, parts: new Map(), draws: 0, tris: 0, next: 10 };
+  // (and the slowest frame's own parts, to see what a stutter is made of)
+  const prof = { t: 0, n: 0, parts: new Map(), cur: new Map(), worst: 0, worstLine: '', draws: 0, tris: 0, next: 10 };
   let profAt = 0;
   const mark = (name) => {
     const t = performance.now();
     prof.parts.set(name, (prof.parts.get(name) || 0) + (t - profAt));
+    prof.cur.set(name, (prof.cur.get(name) || 0) + (t - profAt));
     profAt = t;
   };
   renderer.info.autoReset = false;
@@ -1883,6 +1905,7 @@ async function initApp() {
 
   const frame = (f) => {
     profAt = performance.now();
+    prof.cur.clear();
     renderer.info.reset();
     const now = f.time * 1000;
     const rawDt = f.dt;
@@ -1962,8 +1985,8 @@ async function initApp() {
     riverPeoplePart.made.update(dt, elapsed, cameraSystem.currentPos);
     liveryPart.made.update(dt, elapsed, cameraSystem.currentPos,
       controllerManager.activeMode === 'person' ? controllerManager.entities.person.position : null);
-    planesPart.made.update(dt);
-    scootersPart.made.update(dt, cameraSystem.currentPos);
+    planesPart.made.update(dt, lightingSystem.lookId);
+    scootersPart.made.update(dt, cameraSystem.currentPos, controllerManager.getActiveEntity(), controllerManager.activeMode, rackCue);
     racksPart.made.update(dt, cameraSystem.currentPos, controllerManager.getActiveEntity(), controllerManager.activeMode, rackCue);
     airportPart.made.update?.(dt, cameraSystem.currentPos);
     {
@@ -1979,7 +2002,9 @@ async function initApp() {
     animalCtx.mode = controllerManager.activeMode;
     animalCtx.look = lightingSystem.lookId;
     animalCtx.paddlers = riverPeoplePart.made.people || animalCtx.paddlers;
-    animalsPart.made.update(dt, elapsed, animalCtx);
+    // Lamp: no animals on the Xbox (their tree lookups stalled frames there by 100-170 ms; the person chose to do without)
+    if (XBOX) animalsPart.group.visible = false;
+    else animalsPart.made.update(dt, elapsed, animalCtx);
     mark('animals');
     cubeCtx.player = animalCtx.player.position;
     cubeCtx.heading = animalCtx.player.heading;
@@ -2087,16 +2112,30 @@ async function initApp() {
     prof.n++;
     prof.draws += renderer.info.render.drawCalls;
     prof.tris += renderer.info.render.triangles;
+    {
+      let t = 0;
+      for (const v of prof.cur.values()) t += v;
+      if (t > prof.worst) {
+        prof.worst = t;
+        prof.worstLine = [...prof.cur].filter(([, v]) => v >= 2).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(', ');
+      }
+    }
     if (elapsed >= prof.next && warmedUp) {
       prof.next = elapsed + 10;
       const parts = [...prof.parts].map(([k, v]) => `${k} ${(v / prof.n).toFixed(1)}`).join(', ');
       let logic = 0;
       for (const [k, v] of prof.parts) if (k !== 'render') logic += v / prof.n;
       const gpu = gpuTime.take();
-      log(`[frame] ms a frame: ${parts}; logic ${logic.toFixed(1)}, render ${((prof.parts.get('render') || 0) / prof.n).toFixed(1)}, GPU ${gpu == null ? 'n/a' : gpu.toFixed(1)}; ${Math.round(prof.draws / prof.n)} draws, ${(prof.tris / prof.n / 1e6).toFixed(2)}M triangles`);
+      log(`[frame] ms a frame: ${parts}; logic ${logic.toFixed(1)}, render ${((prof.parts.get('render') || 0) / prof.n).toFixed(1)}, GPU ${gpu == null ? 'n/a' : gpu.toFixed(1)}; ${Math.round(prof.draws / prof.n)} draws, ${(prof.tris / prof.n / 1e6).toFixed(2)}M triangles; slowest ${prof.worst.toFixed(0)} (${prof.worstLine})`);
+      prof.worst = 0;
+      prof.lastDraws = prof.draws / prof.n;
       prof.parts.clear(); prof.n = prof.draws = prof.tris = 0;
       // once a run, what the camera has in front of it, part by part (triangle-report.js)
-      if (!prof.measured) {
+      // (and on the Xbox again whenever a view draws a lot, at most once a minute, to see what's behind it)
+      const many = XBOX && prof.lastDraws > 350 && elapsed >= (prof.reportAgain || 0);
+      if (!prof.measured || many) {
+        prof.reportAgain = elapsed + 60;
+        if (!prof.measured && renderer.userData.deviceLine) log(renderer.userData.deviceLine + ' (as found when the page opened)');
         prof.measured = true;
         showTriangles.frame = `${parts}; ${renderer.info.render.drawCalls} draws`;
         showTriangles(reportTriangles(scene, cameraSystem.camera, lightingSystem.sunLight.shadow));
@@ -2144,6 +2183,21 @@ async function initApp() {
       if (elSpeed && mph !== hud.shownMph) { hud.shownMph = mph; elSpeed.textContent = String(mph); }
       if (elSpeedMeter && dialScale.max) {
         elSpeedMeter.style.transform = `scaleX(${Math.min(1, mphExact / dialScale.max)})`;
+      }
+      // the street's speed limit beside it, in the car or on the bike, looked up four times a second
+      if (elLimit && hud.clock - (hud.limitAt || 0) >= 0.25) {
+        hud.limitAt = hud.clock;
+        const p = ent.position, road = (dialMode === 'car' || dialMode === 'cyclist');
+        let limit = road ? speedLimitAt(p.x, p.z, ent.heading) : 0;
+        // kept a couple of seconds off the street (cutting a corner, a lawn, a lot) so the sign doesn't blink
+        if (limit) hud.limitSeen = hud.clock;
+        else if (road && hud.shownLimit && hud.clock - (hud.limitSeen || 0) < 2.5) limit = hud.shownLimit;
+        if (limit !== hud.shownLimit) {
+          hud.shownLimit = limit;
+          elLimit.hidden = !limit;
+          if (limit) elLimitMph.textContent = String(limit);
+        }
+        elLimit.classList.toggle('over', !!limit && mphExact > limit + 10);
       }
       if (split.drawn) split.second.drawHud(topSpeedMph[split.second.cm.activeMode]);
       // the gear and revs are worked out ten times a second, which is the rate the engine sound reads them at

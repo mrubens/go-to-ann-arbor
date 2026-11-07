@@ -59,8 +59,10 @@ function createPlanes(group) {
   group.name = 'Planes';
   const paint = new THREE.MeshStandardNodeMaterial({ color: 0xe9edf1, roughness: 0.45, metalness: 0.15, fog: false });
   // a contrail: a long thin white streak behind a cruiser, scaled along z to its length
-  const trailGeo = new THREE.BoxGeometry(3, 1.2, 1).translate(0, 0, -0.5);
-  const trails = new THREE.InstancedMesh(trailGeo, new THREE.MeshBasicNodeMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, fog: false, depthWrite: false }), MAX);
+  // (a spread-out one, tens of metres across: a thin line miles up breaks into dots on screen; and only while the sun
+  // lights it, since an unlit white streak across the night sky isn't a contrail anyone sees)
+  const trailGeo = new THREE.BoxGeometry(28, 5, 1).translate(0, 0, -0.5);
+  const trails = new THREE.InstancedMesh(trailGeo, new THREE.MeshBasicNodeMaterial({ color: 0xffffff, transparent: true, opacity: 0.32, fog: false, depthWrite: false }), MAX);
   trails.count = 0;
   trails.frustumCulled = false;
   trails.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -173,7 +175,8 @@ function createPlanes(group) {
 
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ');
   const pos = new THREE.Vector3(), scl = new THREE.Vector3(1, 1, 1);
-  function update(dt) {
+  function update(dt, look = 'midday') {
+    const sunlit = look === 'midday' || look === 'golden';
     keepSkyFull(dt);
     wait -= dt;
     if (wait <= 0 && !busy) {
@@ -201,7 +204,7 @@ function createPlanes(group) {
       q.setFromEuler(e);
       m4.compose(pos.set(p.x, p.y, p.z), q, scl);
       mesh.setMatrixAt(n[p.kind]++, m4);
-      if (p.y > 7500 && nt < MAX) { // a contrail, a couple of km long, from the engines back
+      if (sunlit && p.y > 7500 && nt < MAX) { // a contrail, a couple of km long, from the engines back
         scl.set(1, 1, 1800);
         m4.compose(pos.set(p.x - Math.sin(p.yaw) * 20, p.y, p.z + Math.cos(p.yaw) * 20), q, scl);
         trails.setMatrixAt(nt++, m4);
