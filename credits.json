@@ -7,7 +7,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "46289e3172223c1e018e81d4894c454c3dc2c632",
+      "commit" : "80f7ce90182c138c182979ff74e43ad35d96a2e7",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"
@@ -63,6 +63,12 @@
       "license" : "LicenseRef-US-Government-Public-Domain",
       "name" : "3D Elevation Program (3DEP) 1 m bare-earth elevation model",
       "url" : "https://www.usgs.gov/3d-elevation-program"
+    },
+    {
+      "author" : "USDA Farm Production and Conservation, via the U.S. Geological Survey's The National Map",
+      "license" : "LicenseRef-US-Government-Public-Domain",
+      "name" : "National Agriculture Imagery Program (NAIP) aerial photos (tree cover past the city line)",
+      "url" : "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer"
     },
     {
       "author" : "City of Ann Arbor",
@@ -193,12 +199,6 @@
       "license" : "CC-BY-4.0",
       "name" : "Snow depth (Open-Meteo)",
       "url" : "https://open-meteo.com"
-    },
-    {
-      "author" : "Mapillary contributors",
-      "license" : "CC-BY-SA-4.0",
-      "name" : "Mapillary street-level imagery (decides house and shopfront looks; no photos ship)",
-      "url" : "https://www.mapillary.com"
     }
   ]
 }

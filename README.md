@@ -15,6 +15,7 @@ The app itself, to open in [Lamp](https://lamp.dev) and change, is on the [main 
 - Uses [MTA Subway Entrances and Exits](https://data.ny.gov/Transportation/MTA-Subway-Entrances-and-Exits-2024/i9wp-a4ja) by Metropolitan Transportation Authority, LicenseRef-NY-Open-Data
 - Uses [ambientCG materials](https://ambientcg.com) by ambientCG (Lennart Demes), CC0-1.0
 - Uses [3D Elevation Program (3DEP) 1 m bare-earth elevation model](https://www.usgs.gov/3d-elevation-program) by U.S. Geological Survey, LicenseRef-US-Government-Public-Domain
+- Uses [National Agriculture Imagery Program (NAIP) aerial photos (tree cover past the city line)](https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer) by USDA Farm Production and Conservation, via the U.S. Geological Survey's The National Map, LicenseRef-US-Government-Public-Domain
 - Uses [AAGIS Building Footprints](https://ckan.a2gov.org/dataset/building-footprints) by City of Ann Arbor, None
 - Uses [Street Trees](https://a2gov.org/services/data-catalog) by City of Ann Arbor, None
 - Uses [2023 Impervious Surfaces](https://a2maps.a2gov.org/a2arcgis/rest/services/ImperviousSurfaces/MapServer/7) by City of Ann Arbor, None
@@ -38,7 +39,6 @@ The app itself, to open in [Lamp](https://lamp.dev) and change, is on the [main 
 - Uses [OpenSky Network live aircraft states](https://opensky-network.org) by The OpenSky Network
 - Uses [Ann Arbor scooter locations (GBFS)](https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs) by Bird Rides (Spin), LicenseRef-Bird-GBFS-Data-License
 - Uses [Snow depth (Open-Meteo)](https://open-meteo.com) by Open-Meteo.com, CC-BY-4.0
-- Uses [Mapillary street-level imagery (decides house and shopfront looks; no photos ship)](https://www.mapillary.com) by Mapillary contributors, CC-BY-SA-4.0
 
 Map data is ODbL-1.0: it stays under that license, credited, in this remix.
 
@@ -49,6 +49,8 @@ Terrain Tiles is used under its own terms (LicenseRef-USGS-Public-Domain).
 MTA Subway Entrances and Exits is used under its own terms (LicenseRef-NY-Open-Data).
 
 3D Elevation Program (3DEP) 1 m bare-earth elevation model is used under its own terms (LicenseRef-US-Government-Public-Domain).
+
+National Agriculture Imagery Program (NAIP) aerial photos (tree cover past the city line) is used under its own terms (LicenseRef-US-Government-Public-Domain).
 
 AAGIS Building Footprints is used under its own terms (None).
 
@@ -81,8 +83,6 @@ Huron River at Ann Arbor gauge (04174500), live flow is used under its own terms
 Amtrak GTFS timetable (Wolverine stops at Ann Arbor) is used under its own terms (None).
 
 Ann Arbor scooter locations (GBFS) is used under its own terms (LicenseRef-Bird-GBFS-Data-License).
-
-Mapillary street-level imagery (decides house and shopfront looks; no photos ship) is CC-BY-SA-4.0, so this remix is too: anyone may share it on under the same license.
 
 Remixed from [New York](https://github.com/lampdotdev/newyork) (a Lamp starter).
 
