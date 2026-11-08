@@ -37,7 +37,7 @@ function strew() {
         const cx = a.x + ux * t, cz = a.z + uz * t;
         if (h(cx, cz, 2) > CHANCE) continue;
         const side = h(cx, cz, 3) < 0.5 ? -1 : 1, nx = -uz * side, nz = ux * side;
-        const out0 = r.w / 2 + (h(cx, cz, 4) < 0.5 ? 1.2 : 2.6);
+        const out0 = r.w / 2 + (h(cx, cz, 4) < 0.25 ? 1.2 : 2.6); // mostly on the sidewalk, now and then the tree lawn
         const x = cx + nx * out0, z = cz + nz * out0;
         if (blockAt(cx + nx * (r.w / 2 - 0.6), cz + nz * (r.w / 2 - 0.6)) || !kerb(x, z) || !kerb(x + nx * 0.6, z + nz * 0.6)) continue;
         out.push({ x, z, yaw: h(cx, cz, 5) * Math.PI * 2, g: groundHeight(x, z), lean: -0.12, strewn: true });
@@ -47,6 +47,49 @@ function strew() {
   }
   log(`[scooters] ${out.length} left about town on tree lawns and sidewalks`);
   return out;
+}
+
+// The feed's spots are a phone's GPS, often a few metres out in the street: one that lands in a roadway is moved to the
+// sidewalk on its side of the nearest street (else its tree lawn), where a rider would really have left it
+const CELL = 40;
+let segGrid = null;
+function segments() {
+  if (segGrid) return segGrid;
+  segGrid = new Map();
+  for (const r of ROADS) {
+    if (r.highway || !(r.w > 0)) continue;
+    for (let i = 1; i < r.pts.length; i++) {
+      const a = r.pts[i - 1], b = r.pts[i];
+      const x0 = Math.floor((Math.min(a.x, b.x) - r.w) / CELL), x1 = Math.floor((Math.max(a.x, b.x) + r.w) / CELL);
+      const z0 = Math.floor((Math.min(a.z, b.z) - r.w) / CELL), z1 = Math.floor((Math.max(a.z, b.z) + r.w) / CELL);
+      for (let cx = x0; cx <= x1; cx++) for (let cz = z0; cz <= z1; cz++) {
+        const k = cx + ',' + cz;
+        if (!segGrid.has(k)) segGrid.set(k, []);
+        segGrid.get(k).push([a, b, r.w]);
+      }
+    }
+  }
+  return segGrid;
+}
+function onSidewalk(x, z) {
+  let best = null, bestD = Infinity;
+  for (const [a, b, w] of segments().get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL)) || []) {
+    const dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz;
+    if (L2 < 0.01) continue;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / L2));
+    const px = a.x + dx * t, pz = a.z + dz * t, d = Math.hypot(x - px, z - pz);
+    if (d < bestD) { bestD = d; best = { px, pz, dx, dz, L: Math.sqrt(L2), w }; }
+  }
+  // not in a street: a block's own ground, a plaza, a lot
+  if (!best || (bestD > best.w / 2 + 0.4 && blockAt(x, z))) return { x, z };
+  const ux = best.dx / best.L, uz = best.dz / best.L;
+  const side = (x - best.px) * -uz + (z - best.pz) * ux >= 0 ? 1 : -1, nx = -uz * side, nz = ux * side;
+  for (const out of [2.6, 3.2, 1.2]) {
+    const sx = best.px + nx * (best.w / 2 + out), sz = best.pz + nz * (best.w / 2 + out);
+    const b = blockAt(sx, sz);
+    if (b && !b.median) return { x: sx, z: sz };
+  }
+  return { x, z };
 }
 
 function createScooters(group) {
@@ -71,8 +114,10 @@ function createScooters(group) {
     // one flying or lying knocked over keeps on as it is, though the feed has it where it stood
     const kept = new Map(feed.filter((s) => s.fly || s.down).map((s) => [s.key, s]));
     feed = list.map(([lat, lon]) => {
-      const { x, z } = toWorld(lat, lon), key = keyOf(x, z);
-      return kept.get(key) || { key, x, z, yaw: hash(x, z) * Math.PI * 2, g: groundHeight(x, z), lean: -0.12 };
+      const w = toWorld(lat, lon), key = keyOf(w.x, w.z);
+      if (kept.has(key)) return kept.get(key);
+      const { x, z } = onSidewalk(w.x, w.z);
+      return { key, x, z, yaw: hash(x, z) * Math.PI * 2, g: groundHeight(x, z), lean: -0.12 };
     }).filter((s) => !ridden.has(s.key));
     spots = feed.concat(strewn);
     regather = 0;

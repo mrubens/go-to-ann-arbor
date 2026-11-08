@@ -343,7 +343,7 @@ function setupSceneCulling(scene, roots, shadow = null) {
           return;
         }
         const tris = triangleCount(o.geometry) * (o.isInstancedMesh ? o.count : 1);
-        if (tris < 20000) return;
+        if (tris < 8000) return;
         let radius;
         if (o.isInstancedMesh) {
           if (!o.boundingSphere) o.computeBoundingSphere();
@@ -352,7 +352,7 @@ function setupSceneCulling(scene, roots, shadow = null) {
           if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
           radius = o.geometry.boundingSphere.radius * o.matrixWorld.getMaxScaleOnAxis();
         }
-        if (radius > 600) sources.push(o);
+        if (radius > 350) sources.push(o);
       });
     }
 

@@ -10,8 +10,11 @@ const PARK_W = 2.4;
 const STALL = 6.5; // a parallel-parking stall's length
 const CORNER = 12; // no stalls this close to a street's ends (the corners and their crosswalks)
 
-// The parking lane's width on the street's right and left as drawn, from the link's bits (1 right, 2 left)
-function curbParking(bits) {
+// The parking lane's width on the street's right and left as drawn, from the link's bits (1 right, 2 left). A side whose
+// bike lane is separated from traffic (flex posts 32, a curb 64; its bike bits 1 right, 2 left) has no parking: cars
+// would have to cross the lane and its posts to park there
+function curbParking(bits, bike = 0) {
+  if (bike & 96) bits &= ~(bike & 3);
   return { right: bits & 1 ? PARK_W : 0, left: bits & 2 ? PARK_W : 0 };
 }
 
@@ -23,8 +26,8 @@ function curbStalls() {
   stalls = [];
   const G = GEO.roadGraph;
   const N = G.nodes;
-  for (const [a, b, , w, , , flat, , , , , , bits = 0] of G.links) {
-    const park = curbParking(bits);
+  for (const [a, b, , w, , , flat, , bike = 0, , , , bits = 0] of G.links) {
+    const park = curbParking(bits, bike);
     if (!park.right && !park.left) continue;
     const pts = [[N[a * 2], N[a * 2 + 1]]];
     for (let i = 0; i < flat.length; i += 2) pts.push([flat[i], flat[i + 1]]);

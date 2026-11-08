@@ -223,7 +223,6 @@ const LANDMARKS = [
   ['hill', 'Hill Auditorium', 'Hill Auditorium', 'Hill Auditorium'],
   ['union', 'Michigan Union', 'Michigan Union', 'Michigan Union'],
   ['league', 'Michigan League', 'Michigan League', 'Michigan League'],
-  ['theater', 'Michigan Theater', 'Michigan Theater', 'Michigan Theater'],
   ['umma', 'Museum of Art', 'UMMA', 'University of Michigan Museum of Art'],
   ['rackham', 'Rackham Building', 'Rackham', 'Rackham Building'],
   ['crisler', 'Crisler Center', 'Crisler Center', 'Crisler Center'],
@@ -254,8 +253,6 @@ LANDMARKS.push({ id: 'graffiti', name: 'Graffiti Alley', short: 'Graffiti Alley'
 LANDMARKS.push({ id: 'huron', name: 'Huron High School', short: 'Huron High', x: 3746, z: -205, district: districtLabel(districtAt(3746, -205)) });
 // The Argo Cascades beside Argo Dam: the middle of their channel (cascades.js)
 LANDMARKS.push({ id: 'cascades', name: 'Argo Cascades', short: 'Argo Cascades', x: 419, z: -1228, district: districtLabel(districtAt(419, -1228)) });
-// The Cube (Tony Rosenthal's "Endover") on Regents Plaza, by OpenStreetMap's point for it (the-cube.js)
-LANDMARKS.push({ id: 'cube', name: 'The Cube', short: 'The Cube', x: 535.3, z: 416.2, district: districtLabel(districtAt(535.3, 416.2)) });
 
 // Authored arrivals: [x, z] where you land, the heading facing the landmark (heading 0 faces south, +z), and how far
 // the camera looks up (each checked by eye for a clear view of its model)
@@ -286,6 +283,13 @@ const TELEPORT_LOCATIONS = {
   cube: { ...view(536.5, 424.5, 535.3, 416.2, 1.5), foot: true }, // the Cube on foot, from the Union's side, to push it
   skatepark: { ...view(-2566, -536, -2546, -570, 0), foot: true }, // on the plaza at Veterans Memorial Park's skate park, looking at the bowl
   westparkdiamond: { ...view(-532.4, -492.8, -553.6, -458.9, 0), foot: true }, // behind home plate at West Park's ball field
+  // public art (art-places.js), on foot, each checked clear of the buildings
+  bookstoremural: { ...view(602, 26, 602, 43, 1.5), foot: true }, // the Bookstore Mural from across Liberty
+  challengemural: { ...view(64, -200, 64, -181, 8), foot: true }, // "Challenge Everything" from Huron St, looking up its ten stories
+  orion: { ...view(636, 438, 656, 415, 5), foot: true }, // Orion from the State St side, looking up its beams
+  millesfountain: { ...view(834, 14, 834, 38, 1), foot: true }, // the Milles fountain from the League's side
+  wavefield: { ...view(3046, -1485, 3018, -1485, 0), foot: true }, // across the Wave Field's grass waves
+  therock: { ...view(1624, 770, 1638, 783, 0.5), foot: true }, // the Rock at Hill and Washtenaw
   // the outer neighborhoods (places, not modelled landmarks: their buildings are the city's survey)
   briarwood: view(97, 4508, 140, 4365, 2), // Briarwood Mall from its south lot
   pioneer: view(-686, 2059, -583, 2132, 2), // Pioneer High from its lot on Seventh St
@@ -330,7 +334,19 @@ function buildingNameAt(x, z) {
  * its street, else the nearest two named roads
  */
 function getLocationLabel(x, z) {
+  // a mural or sculpture you're right beside names the place before the big landmark it's at
+  let art = null, artD = 22;
   for (const l of LANDMARKS) {
+    if (!l.art) continue;
+    const d = Math.hypot(x - l.x, z - l.z);
+    if (d < artD) { art = l; artD = d; }
+  }
+  if (art) {
+    const near = nearestRoads(x, z, 120);
+    return `${art.short}${near.length ? ` · ${near[0].road.name}` : ''}`;
+  }
+  for (const l of LANDMARKS) {
+    if (l.art) continue;
     if (Math.hypot(x - l.x, z - l.z) < 90) {
       const near = nearestRoads(x, z, 120);
       return `${l.name}${near.length ? ` · ${near[0].road.name}` : ''}`;

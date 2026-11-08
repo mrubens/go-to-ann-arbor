@@ -33,7 +33,10 @@ async function fetchWeather() {
   try {
     // A browser sends its own User-Agent, which the service accepts from a page; nothing of the player's goes with it
     const res = await fetch(`https://api.weather.gov/stations/${STATION}/observations/latest`, {
-      headers: { Accept: 'application/geo+json' }
+      headers: { Accept: 'application/geo+json' },
+      // never an earlier answer kept by the web view: "latest" changes every few minutes, and a kept one showed this
+      // morning's 28°F at noon
+      cache: 'no-store'
     });
     if (!res.ok) return FAIR;
     const props = (await res.json()).properties || {};

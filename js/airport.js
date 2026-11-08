@@ -375,9 +375,7 @@ function truckGeometries(t, g, out) {
   return { half: [0.9, 1.4 + 3 * 2.9 + 1.2], h: 1.6, back: true };
 }
 const TRUCKS = [
-  { kind: 'fuel', x: 130, z: 6060, heading: Math.PI / 2 },
   { kind: 'tug', x: 255, z: 6080, heading: 0 },
-  { kind: 'fuel', x: 618, z: 5920, heading: Math.PI / 2 },
   { kind: 'tug', x: 225, z: 6089, heading: Math.PI }
 ];
 
@@ -416,6 +414,21 @@ function createAirport(group) {
     along(t.line, 0.32, yellow);
   }
   for (const a of AIRPORT.aprons) concrete.push(flatShape(pts(a)));
+  // a parking pad under each parked helicopter: a yellow square on the apron with a white H in it, turned with the
+  // helicopter (its nose along (sin h, cos h))
+  for (let i = 0; i < AIRPORT.helis.length; i += 3) {
+    const hx = AIRPORT.helis[i], hz = AIRPORT.helis[i + 1], h = AIRPORT.helis[i + 2];
+    const fx = Math.sin(h), fz = Math.cos(h); // along the nose; across is (fz, -fx)
+    const at = (a, c) => [hx + fx * a + fz * c, hz + fz * a - fx * c];
+    const S = 15, L = 0.4;
+    for (const [a, c, len, w, along] of [[S / 2, 0, S, L, false], [-S / 2, 0, S, L, false], [0, S / 2, S, L, true], [0, -S / 2, S, L, true]]) {
+      const [x, z] = at(a, c);
+      yellow.push(flatShape(along ? rect(x, z, fx, fz, len + L, w) : rect(x, z, fz, -fx, len + L, w)));
+    }
+    // the H: its two legs along the nose, the bar across
+    for (const c of [-1.6, 1.6]) { const [x, z] = at(0, c); white.push(flatShape(rect(x, z, fx, fz, 5, 0.6))); }
+    { const [x, z] = at(0, 0); white.push(flatShape(rect(x, z, fz, -fx, 3.2, 0.6))); }
+  }
   layer(group, grass, 0x5d7b38, 0, 'AirportGrassStrip', 1);
   layer(group, concrete, 0x9a968e, 0.02, 'AirportAprons');
   layer(group, asphalt, 0x3b3c3e, 0.04, 'AirportRunwaysTaxiways');

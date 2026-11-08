@@ -8,11 +8,14 @@ import { curbStalls } from './curb-parking.js';
 // actually drives and stops: dashed lane lines, double yellow centre lines on two-way roads (Lamp: not on residential
 // streets, as in Ann Arbor), a centre turn lane's yellow lines, a one-way's yellow left edge, stop bars at the stop
 // lines, continental crosswalks where OpenStreetMap maps a painted crossing (and at traffic lights where it says nothing),
-// and the city's painted bike lanes (OpenStreetMap).
+// and the city's bike lanes (its Non-Motorized Routes over OpenStreetMap's tags, build-annarbor.py): a solid white
+// line with a bike and an arrow every so often; buffered ones with a hatched buffer of two lines; protected ones the
+// same with flex posts in the buffer, or a low curb (bike-routes.js); two-way ones with a dashed yellow centre;
+// advisory ones dashed on both sides of a street with no centre line; and shared-lane arrows (a bike under two
+// chevrons) in the travel lane every 50 m.
 
 const WHITE = new THREE.Color(0xe6e2d6);
 const YELLOW = new THREE.Color(0xe8ad22);
-const GREEN = new THREE.Color(0x2a8a4e);
 const STEP = 6; // Lamp: metres between a strip's vertices along it, so it follows the ground
 const HEIGHT = LIFT.paint; // above the asphalt (ground-lifts.js)
 import { LIFT } from './ground-lifts.js';
@@ -101,6 +104,28 @@ function createRoadPaintChunkBuilder(name, { cellSize = PAINT_CELL_SIZE, cullDis
   return { strip3D, build };
 }
 
+// Lamp: the bike lane's bicycle and rider (as the MUTCD draws it, upright to the rider coming up to it: wheels across
+// the lane, the rider's head ahead) and its arrow beyond, and the shared-lane marking's bicycle under two chevrons, as
+// strips [u ahead, v to the right, u, v, width] in metres
+function ring(cu, cv, r, w, n = 8) {
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * Math.PI * 2, b = ((k + 1) / n) * Math.PI * 2;
+    out.push([cu + Math.cos(a) * r, cv + Math.sin(a) * r, cu + Math.cos(b) * r, cv + Math.sin(b) * r, w]);
+  }
+  return out;
+}
+const BICYCLE = [
+  ...ring(0, -0.5, 0.3, 0.08), ...ring(0, 0.5, 0.3, 0.08),
+  [0, -0.5, 0, -0.05, 0.08], [0, -0.05, 0.45, -0.2, 0.08], [0.45, -0.2, 0.45, 0.35, 0.08], [0, -0.05, 0.45, 0.35, 0.08],
+  [0.45, 0.35, 0, 0.5, 0.08], [0.45, 0.35, 0.6, 0.3, 0.08], // fork and bars
+  [0.5, -0.2, 1.0, 0.05, 0.14], [1.0, 0.05, 0.6, 0.32, 0.08], [0.5, -0.2, 0, -0.05, 0.1], // body, arm, leg
+  [1.12, 0.08, 1.34, 0.08, 0.22], // head
+];
+const BIKE = [...BICYCLE, [1.9, 0, 2.8, 0, 0.15], [3.15, 0, 2.75, -0.32, 0.15], [3.15, 0, 2.75, 0.32, 0.15]];
+const SHARROW = [...BICYCLE,
+  [1.7, -0.5, 2.15, 0, 0.22], [2.15, 0, 1.7, 0.5, 0.22], [2.3, -0.5, 2.75, 0, 0.22], [2.75, 0, 2.3, 0.5, 0.22]];
+
 function buildRoadPaint(scene, network, sharedBuilder = null) {
   const builder = sharedBuilder || createRoadPaintChunkBuilder('RoadMarkings');
   const lines = [];
@@ -177,7 +202,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
     // Dashed white between lanes going the same way, double yellow between opposing ones
     // (nothing across a median or a lane closed off by an obstacle). Lamp: a residential street (class 4) or one marked
     // without lines (6) has no centre line, a street with a centre turn lane its solid and dashed yellow either side
-    const lined = (e.cls ?? 4) <= 3 || e.cls === 5 || lanes.length > 2;
+    const lined = ((e.cls ?? 4) <= 3 || e.cls === 5 || lanes.length > 2) && !(e.bk & 128);
     for (let k = 0; k + 1 < lanes.length; k++) {
       const p = lanes[k];
       const q = lanes[k + 1];
@@ -201,23 +226,68 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
     // Lamp: a one-way main street's left edge, solid yellow
     if (!back && lanes.length >= 2 && (e.cls ?? 4) <= 3 && !e.divided) along(e, lanes[0].o - 1.75, 0.12, YELLOW);
 
-    // Lamp: painted bike lanes along the curb (offsets in e's frame): a solid white line on the traffic side (a second
-    // one where it's buffered) and the lane itself in green
-    const bikeLane = (curb, width) => {
+    // Lamp: a picture painted on the street at e's s, o, facing f (1 along e, -1 against it), from strips given in
+    // metres as [u ahead, v to the right, u, v, width]
+    const picture = (s, o, f, parts) => {
+      for (const [u0, v0, u1, v1, w] of parts) strip(...at(e, s + f * u0, o + f * v0), ...at(e, s + f * u1, o + f * v1), w, WHITE);
+    };
+    // pictures every `every` m along e (from 10 m in), where the edge is long enough to hold one clear of its ends
+    const pictures = (o, f, every, parts) => {
+      if (e.len < 22) return;
+      const n = Math.max(1, Math.floor((e.len - 20) / every) + 1);
+      const gap = n > 1 ? (e.len - 20) / (n - 1) : 0;
+      for (let k = 0; k < n; k++) {
+        const s = n > 1 ? 10 + gap * k : e.len / 2;
+        picture(f > 0 ? s - 1.6 : s + 1.6, o, f, parts);
+      }
+    };
+
+    // Lamp: bike lanes along the curb (offsets in e's frame), `width` the lane and any buffer, `bk` its kind:
+    // a solid white line on the traffic side; a buffer's second line and hatching (16, 32), or a curb's line (64);
+    // a two-way lane's dashed yellow centre (512); and the bike and arrow in each direction it's ridden
+    const bikeLane = (curb, width, bk, f) => {
       const sgn = Math.sign(curb);
-      const inner = curb - sgn * width;
+      const lane = bk & 512 ? 3 : 1.7;
+      const inner = curb - sgn * lane;
       along(e, inner, 0.15, WHITE);
-      if (width > 2) along(e, inner + sgn * 0.6, 0.15, WHITE);
-      along(e, curb - sgn * Math.min(1.7, width) / 2 - sgn * 0.1, Math.min(1.7, width) - 0.45, GREEN);
+      if (width > lane + 0.3) {
+        const outer = curb - sgn * width;
+        along(e, outer, 0.15, WHITE);
+        if (bk & 48) { // 45° hatching every 3 m, between the two lines
+          const B = width - lane;
+          for (let s = 3; s + B < e.len - 2; s += 3) strip(...at(e, s, inner - sgn * 0.08), ...at(e, s + B, outer + sgn * 0.08), 0.12, WHITE);
+        }
+      }
+      if (bk & 512) {
+        along(e, curb - sgn * lane / 2, 0.1, YELLOW, 6, 0.5);
+        pictures(curb - sgn * lane * 0.25, f, 130, BIKE);
+        pictures(curb - sgn * lane * 0.75, -f, 130, BIKE);
+      } else pictures(curb - sgn * lane / 2, f, 130, BIKE);
     };
     // (not on a divided road's two halves, whose half-width spans both: their curbs aren't known here)
     // Lamp: a parking lane along each curb (curb-parking.js) ends in a solid white line, any bike lane beside it
     const pR = e.divided ? 0 : e.parkR || 0, pL = e.divided ? 0 : e.parkL || 0;
     if (pR) along(e, e.half - pR, 0.12, WHITE);
     if (pL) along(e, -e.half + pL, 0.12, WHITE);
-    if (e.bikeR && !e.divided) bikeLane(e.half - pR, e.bikeR);
-    if (!back && e.bikeL && !e.divided) bikeLane(-e.half + pL, e.bikeL);
-    if (back && back.bikeR && !back.divided) bikeLane(-e.half + pL, back.bikeR);
+    const bk = e.bk || 0;
+    if (!e.divided) {
+      if (bk & 128) { // advisory lanes: dashed, inside the street's width, either side
+        for (const sgn of [1, -1]) {
+          const curb = sgn > 0 ? e.half - pR : -e.half + pL;
+          if (e.half - pR - pL < 4.5) continue;
+          along(e, curb - sgn * 1.5, 0.15, WHITE, 6, 0.5);
+          pictures(curb - sgn * 0.8, back ? sgn : 1, 130, BIKE);
+        }
+      }
+      if (e.bikeR) bikeLane(e.half - pR, e.bikeR, bk, 1);
+      if (!back && e.bikeL) bikeLane(-e.half + pL, e.bikeL, bk, 1);
+      if (back && back.bikeR) bikeLane(-e.half + pL, back.bikeR, back.bk || 0, -1);
+      // shared-lane arrows in the outermost travel lane, a little toward the curb, every 50 m
+      const rightLane = (f) => f.lanes.length ? f.lanes[f.lanes.length - 1] : null;
+      if (e.share && rightLane(e) != null) pictures(Math.min(rightLane(e) + 0.3, e.half - pR - 1.2), 1, 50, SHARROW);
+      if (!back && e.shareL && e.lanes.length) pictures(Math.max(e.lanes[0] - 0.3, -e.half + pL + 1.2), 1, 50, SHARROW);
+      if (back && back.share && rightLane(back) != null) pictures(-Math.min(rightLane(back) + 0.3, back.half - pL - 1.2), -1, 50, SHARROW);
+    }
 
     // Stop bars across the lanes arriving at each stop line, from the centre line (or median) to the curb (none where a
     // street merely bends: a shape node of the centreline streets)

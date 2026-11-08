@@ -45,7 +45,6 @@ import { loadYardData, allYards } from './yards.js';
 import { buildCascades, CASCADE_START } from './cascades.js';
 import { buildRiverPeople } from './river-people.js';
 import { buildAnimals } from './animals.js';
-import { buildCube, CUBE_FOOTPRINT } from './the-cube.js';
 import { buildBandShell } from './band-shell.js';
 import { buildRestrooms } from './restrooms.js';
 import { buildDraftedHouses } from './drafted-houses.js';
@@ -69,6 +68,7 @@ import { buildBoatDocks } from './boat-docks.js';
 import { buildSkatePark } from './skate-park.js';
 import { buildParkingStructures } from './parking-structures.js';
 import { buildMtbTrails } from './mtb-trails.js';
+import { buildBikeRoutes } from './bike-routes.js';
 import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
 import { waterDisturb } from './tsl-materials.js';
@@ -307,7 +307,7 @@ async function initApp() {
   const outskirts = outskirtsPart.made;
   markInit('outskirts');
   await showLoadingStage('Building the Big House...');
-  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/stadium-geodata.js', 'js/campus-landmarks.js', 'js/merge-static.js'] });
+  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/stadium-geodata.js', 'js/campus-landmarks.js', 'js/merge-static.js', 'js/landmarks.js'] });
   // the parking structures, to drive up floor by floor; they stand in for the survey's blocks (parking-structures.js)
   const parkingPart = await live.keep('parkingStructures', () => cityPart((g) => buildParkingStructures(g), { cull: setupSceneCulling, still: true }),
     { inputs: [heights], from: ['js/parking-structures.js', 'data/parking-structures.json'] });
@@ -362,13 +362,12 @@ async function initApp() {
   const traffic = live.keep('traffic', () => cityPart((g) => createTrafficSystem(g, grid.made.sidewalks, [
     ...grid.made.footprints,
     ...details.made.footprints,
-    CUBE_FOOTPRINT,
     ...parkingPart.made.footprints,
     bandShellPart.made.footprint,
     ...restroomsPart.made.footprints,
     ...allColliders.filter((c) => !c.obb
       && (c.minY ?? 0) - groundHeight((c.minX + c.maxX) * 0.5, (c.minZ + c.maxZ) * 0.5) < 3.5)
-  ], details.made.signalIntersections, cityClosures)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details], from: [CITY_MAP, 'data/city-closures.json', 'js/pedestrian-system.js'] });
+  ], details.made.signalIntersections, cityClosures)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details], from: [CITY_MAP, 'data/city-closures.json', 'js/pedestrian-system.js', 'js/road-network.js', 'js/curb-parking.js'] });
   const trafficSystem = traffic.made;
   markInit('traffic');
   const highway = live.keep('highwayTraffic', () => cityPart((g) => createHighwayTraffic(g, grid.made.highwayLanes)), { inputs: [grid], from: [CITY_MAP] });
@@ -385,8 +384,10 @@ async function initApp() {
       o.geometry.boundingSphere.radius += 16;
     });
     return made;
-  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic], from: [CITY_MAP, 'js/road-network.js'] });
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic], from: [CITY_MAP, 'js/road-network.js', 'js/road-paint.js', 'js/curb-parking.js'] });
   markInit('roadPaint');
+  // the protected bike lanes' flex posts and curbs, the boardwalks and steps, and the BIKE ROUTE signs (bike-routes.js)
+  const bikeRoutesPart = await live.keep('bikeRoutes', () => cityPart((g) => buildBikeRoutes(g, traffic.made.network), { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic], from: [CITY_MAP, 'js/bike-routes.js'] });
   // Traffic lights and stop & yield signs where the road network put them (traffic-controls.js)
   const controlsPart = live.keep('trafficControls', () => cityPart((g) => buildTrafficControls(g, traffic.made.network), { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic, details], from: ['js/traffic-controls.js'] });
   // Signs over the real shops, restaurants and cafes (shop-signs.js, from OpenStreetMap)
@@ -402,7 +403,7 @@ async function initApp() {
   const railPart = live.keep('railways', () => cityPart((g) => buildRailways(g, railCrossings, wolverine), { still: true }), { inputs: [heights], from: ['data/rail-crossings.json', 'data/wolverine.json'] });
   const railways = railPart.made;
   // Cars parked in the lots and along the main streets downtown, solid to the player (parked-cars.js)
-  const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack, parkingPart.made.stalls)), { inputs: [heights, parkingPart], from: ['js/parked-cars.js', 'js/railways.js', 'data/curb-cuts.bin.gz'] });
+  const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack, parkingPart.made.stalls)), { inputs: [heights, parkingPart], from: ['js/parked-cars.js', 'js/curb-parking.js', 'js/railways.js', 'data/curb-cuts.bin.gz'] });
   const parkedCars = parkedPart.made;
   // Kayaks pulled up on the river's banks at the parks, to get into there (kayak-launches.js)
   const launchesPart = live.keep('kayakLaunches', () => cityPart((g) => buildKayakLaunches(g)), { inputs: [heights], from: ['js/kayak-launches.js'] });
@@ -496,10 +497,7 @@ async function initApp() {
   });
   // Lamp: Ann Arbor's animals, near the player only; never anyone's obstacle (animals.js)
   const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
-  // Lamp: the Cube on Regents Plaza, which turns when it's pushed or hit (the-cube.js)
-  const cubePart = live.keep('cube', () => cityPart((g) => buildCube(g)), { inputs: [heights], from: ['js/the-cube.js'] });
-  allColliders.push(cubePart.made.collider);
-  const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, cubePart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart, moonPart, helipadsPart];
+  const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -541,6 +539,7 @@ async function initApp() {
   controllerManager.skatePark = skatePart.made;
   controllerManager.bleachers = bleachersPart.made;
   controllerManager.mtbTrails = mtbPart.made;
+  controllerManager.bikeRoutes = bikeRoutesPart.made;
   controllerManager.parking = parkingPart.made;
   controllerManager.bikeRacks = racksPart.made;
   controllerManager.pools = poolsPart.made;
@@ -1453,7 +1452,7 @@ async function initApp() {
 
   // Where you are: the place's name over its street corner, drawn as a pair of green street-name signs
   const roadNames = new Set(ROADS.map((r) => r.name));
-  const placeNames = new Set(LANDMARKS.map((l) => l.name));
+  const placeNames = new Set(LANDMARKS.flatMap((l) => (l.art ? [l.name, l.short] : [l.name])));
   let locationText = '';
   function renderLocation(label) {
     if (!elLocation || label === locationText) return;
@@ -1854,7 +1853,6 @@ async function initApp() {
   let fpsTimer = 0;
   let nextPlayerSave = 0;
   let heardStrokes = 0;
-  const cubeCtx = { keys: controllerManager.keys, player: null, heading: 0, cue: (k, at, i) => audioSystem?.cue(k, at, i), grind: (w, at) => audioSystem?.cubeGrind(w, at) };
   const animalCtx = { camera: cameraSystem.camera, player: null, mode: 'car', look: 'midday', cars: trafficSystem.cars, buses: trafficSystem.buses, paddlers: riverPeoplePart.made.people || [], colliders: allColliders, cue: (k, at, i) => audioSystem?.cue(k, at, i) };
   let warmedUp = false; // see the first frame below
 
@@ -1886,7 +1884,7 @@ async function initApp() {
     const cm = controllerManager;
     split.second = createSecondPlayer({ scene, colliders: allColliders, beside: cm, map: mapSystem, kept: split.kept,
       share: { knockdowns: cm.knockdowns, parkedCars: cm.parkedCars, railways: cm.railways, potholes: cm.potholes, parking: cm.parking,
-        playTop: cm.playTop, skatePark: cm.skatePark, bleachers: cm.bleachers, mtbTrails: cm.mtbTrails, pools: cm.pools, riverScale: cm.riverScale } });
+        playTop: cm.playTop, skatePark: cm.skatePark, bleachers: cm.bleachers, mtbTrails: cm.mtbTrails, bikeRoutes: cm.bikeRoutes, pools: cm.pools, riverScale: cm.riverScale } });
     split.kept = null;
     dynamicRoots.push(...Object.values(split.second.cm.entities).flatMap((e) => [e.mesh, e.helmet]).filter(Boolean));
   }
@@ -1931,6 +1929,15 @@ async function initApp() {
         own: Boolean(look && isOwnLook(look)), phones: !inCar && mode !== 'helicopter', soundOn: audioSystem.enabled });
       cm.earbuds = carRadio.earbuds; // white earbuds on the player while one plays (controllers.js)
     }
+    // the protected bike lanes' flex posts fold under the car and spring back, and their curbs jolt it (bike-routes.js)
+    {
+      const cm = controllerManager, car = cm.activeMode === 'car' ? cm.entities.car : null;
+      bikeRoutesPart.made.update?.(dt, car, (kind, x, z, strength) => {
+        audioSystem?.cue('thud', { x, y: groundHeight(x, z), z }, kind === 'curb' ? 0.5 + strength * 0.5 : 0.25 + strength * 0.35);
+        rumble(0, kind === 'curb' ? 0.4 + strength * 0.5 : 0.15 + strength * 0.2, kind === 'curb' ? 0.3 + strength * 0.4 : 0.2, kind === 'curb' ? 0.2 : 0.1);
+        if (kind === 'curb' && strength > 0.7) log('[bike routes] hit a lane curb hard');
+      });
+    }
     // parked cars a crash shoved, sliding to a stop (parked-cars.js), and found where they are now
     for (const col of parkedCars.step(dt, (p) => controllerManager.settleParked(p))) controllerManager.refreshCollider(col);
     {
@@ -1957,7 +1964,7 @@ async function initApp() {
       if (split.drawn) split.second.update(dt, elapsed, f.pads[1], !mapSystem.isFullMapOpen);
     }
     tickRecording(dt);
-    // the camera under the river's surface: murky green fog and a tint over the view
+// the camera under the river's surface: murky green fog and a tint over the view
     {
       const cp = cameraSystem.camera.position, level = waterLevel(cp.x, cp.z);
       // (the river's level runs on over the land beside it, so only where the river really is: not in the stadium's bowl)
@@ -2009,9 +2016,6 @@ async function initApp() {
     if (XBOX) animalsPart.group.visible = false;
     else animalsPart.made.update(dt, elapsed, animalCtx);
     mark('animals');
-    cubeCtx.player = animalCtx.player.position;
-    cubeCtx.heading = animalCtx.player.heading;
-    cubePart.made.update(dt, cubeCtx);
     // the dial's name follows whatever the player is in, however they got into it
     const dialLabel = controllerManager.getActiveEntity()?.label;
     if (elMode && dialLabel && dialLabel !== elMode.dataset.label) setDialName(dialLabel);

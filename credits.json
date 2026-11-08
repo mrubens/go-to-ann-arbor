@@ -1,4 +1,9 @@
 {
+  "generated" : [
+    {
+      "file" : "Assets/bookstore-mural.png"
+    }
+  ],
   "remixOf" : [
     {
       "commit" : "99efbab0a38a6010592015469f5d9912ba14b784",
@@ -7,7 +12,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "80f7ce90182c138c182979ff74e43ad35d96a2e7",
+      "commit" : "c10e1a4ef412666d3f9cfd6a8a0ff68c9680dc96",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"
@@ -115,6 +120,12 @@
     {
       "author" : "City of Ann Arbor",
       "license" : "None",
+      "name" : "City of Ann Arbor, Non-Motorized Routes",
+      "url" : "https://ckan.a2gov.org/dataset/de971a58-43e3-40f9-b8e0-ee3e77afd711"
+    },
+    {
+      "author" : "City of Ann Arbor",
+      "license" : "None",
       "name" : "Fire Hydrants",
       "url" : "https://ckan.a2gov.org/dataset/fire-hydrants"
     },
@@ -193,12 +204,6 @@
       "license" : "LicenseRef-Bird-GBFS-Data-License",
       "name" : "Ann Arbor scooter locations (GBFS)",
       "url" : "https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs"
-    },
-    {
-      "author" : "Open-Meteo.com",
-      "license" : "CC-BY-4.0",
-      "name" : "Snow depth (Open-Meteo)",
-      "url" : "https://open-meteo.com"
     }
   ]
 }

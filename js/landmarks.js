@@ -2,7 +2,6 @@ import * as THREE from 'three/webgpu';
 import { stadiumGround, groundHeight } from './terrain.js';
 import { GEO } from './city-geodata.js';
 import { buildCampusLandmarks } from './campus-landmarks.js';
-import { buildMichiganTheater } from './michigan-theater.js';
 import { buildMoreLandmarks } from './more-landmarks.js';
 import { buildDiagM } from './diag-m.js';
 import { buildGraffitiAlley } from './graffiti-alley.js';
@@ -351,8 +350,7 @@ function buildLandmarks(scene) {
   buildBigHouse(group, colliders);
   // Burton Tower, Hill Auditorium and the Union, modelled by hand in place of the survey's blocks
   const campus = buildCampusLandmarks(group, colliders, GEO.landmarks || {});
-  // the Michigan Theater on Liberty, its marquee and blade sign
-  if (buildMichiganTheater(group, colliders, (GEO.landmarks || {})['Michigan Theater'])) campus.push('Michigan Theater');
+  // (the Michigan Theater's own model is left out at the person's wish: the survey's building stands there)
   // the rest, on the survey's own outlines
   campus.push(...buildMoreLandmarks(group, colliders));
   // the bronze block M where the Diag's walks meet

@@ -1388,7 +1388,15 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     pathPoint(v, v.conn ? v.cs : v.s, at);
     v.tx = at.dx;
     v.tz = at.dz;
-    const dl = v.curb ? v.dl + CURB_OFFSET : v.dl;
+    let dl = v.curb ? v.dl + CURB_OFFSET : v.dl;
+    // Lamp: a bicycle or scooter in the outermost lane of a street with a bike lane rides in the bike lane (the right
+    // half of a two-way one), easing over from the curb side of the lane in the first and last 8 m of the street
+    const e = v.edge;
+    if (v.curb && !v.conn && e.bikeR > 0 && v.lane === e.lanes.length - 1) {
+      const want = e.half - (e.parkR || 0) - (e.bk & 512 ? 0.75 : 0.85) - e.lanes[v.lane];
+      const t = Math.max(0, Math.min(1, v.s / 8, (e.len - v.s) / 8));
+      dl += (want - CURB_OFFSET) * t;
+    }
     v.x = at.x - at.dz * dl;
     v.z = at.z + at.dx * dl;
     const nose = Math.atan2(at.dx, at.dz) - v.yaw;

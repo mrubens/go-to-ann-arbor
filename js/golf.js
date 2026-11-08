@@ -284,19 +284,22 @@ function buildGolf(group, golf, flatGeo, toRing, y) {
 }
 
 // Trails through the parks, woods and campus lawns (GEO.trails from build-annarbor.py, OpenStreetMap's paths and
-// footways): packed dirt or gravel on the woodland paths, pale gray paving on the park walks and bike paths
+// footways with the city's Non-Motorized Routes' materials, and the city's trails and shared-use paths OSM is missing):
+// packed dirt or gravel on the woodland paths (kind 1), pale gray concrete on the park walks (0), dark asphalt on the
+// bike paths and shared-use paths (2). The boardwalks (3) and steps (4) are bike-routes.js's
 function buildTrails(group, trails, y) {
   if (!trails) return;
-  const dirt = [], paved = [];
+  const dirt = [], paved = [], asphalt = [];
   for (const t of trails) {
-    if (t.length < 6) continue;
-    (t[0] ? dirt : paved).push(ribbon(t.slice(2), t[1], t[0] ? y : y + 0.004));
+    if (t.length < 6 || t[0] > 2) continue;
+    (t[0] === 1 ? dirt : t[0] === 2 ? asphalt : paved).push(ribbon(t.slice(2), t[1], t[0] === 1 ? y : y + (t[0] === 2 ? 0.008 : 0.004)));
   }
   // Lamp: in front of the lawn but behind the city's own paving (driveways and the campus's walks, drawn over the lawn
   // as if 6 cm up): the map's footpaths run a little off the surveyed walks, so where the two overlap the walk wins,
   // and a paved path is the walks' own concrete, so it carries on from them seamlessly where the survey has none
   addMerged(group, dirt, drawOver(overlay(0x8f7c5e), 0.03), 'TrailsDirt');
   addMerged(group, paved, drawOver(overlay(0xa29e96), 0.03), 'TrailsPaved');
+  addMerged(group, asphalt, drawOver(overlay(0x55575a), 0.07), 'TrailsAsphalt');
 }
 
 export { buildGolf, buildTrails, layOutHoles };

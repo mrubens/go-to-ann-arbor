@@ -164,7 +164,8 @@ const WALK_CAMERA = { d: 4.8, h: 2.4, y: -0.35 };
 
 const BICYCLE_DRIVE = {
   speed: 12.5, reverseSpeed: 4.5, acceleration: 9, // about 28 mph flat out on a road bike
-  rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
+  powerSpeed: 10.5, // Above 38 km/h, rider power limits acceleration.
+  rolling: 0.08, drag: 0.004, coast: 0.45, brake: 10.5
 };
 
 function driveSpeed(speed, throttle, dt, drive) {
@@ -570,6 +571,14 @@ class ThirdPersonControllerManager {
     ent.airborne = false; ent.vy = 0;
     if (this.activeMode === 'person') {
       ent.verticalVel = 0;
+      ent.jumping = false;
+      ent.jumpPrep = 0;
+      ent.prevX = ent.position.x;
+      ent.prevZ = ent.position.z;
+      if (ent.shadow) {
+        ent.shadow.position.y = 0.02;
+        ent.shadow.scale.set(1, 1, 1);
+      }
       ent._charHidden = false;
       if (ent.mesh) ent.mesh.visible = true;
       ent.fallen = null;
@@ -591,6 +600,7 @@ class ThirdPersonControllerManager {
       if (ent.carState) ent.carState.value.x = ent.carState.value.w = 0;
     } else if (this.activeMode === 'cyclist') {
       ent.leanAngle = ent.leanPivot.rotation.z = 0;
+      ent._brakeHold = 0;
       ent._riderHidden = false;
       ent._posedX = NaN;
       if (ent.helmet) ent.helmet.visible = true;
@@ -694,13 +704,18 @@ class ThirdPersonControllerManager {
       type: 'person',
       label: 'Pedestrian',
       mesh: root,
+      shadow: pedShadow,
       crowd,
       rig,
       earbuds: makeEarbuds(this.scene, 'person'),
       position: new THREE.Vector3(-30.2, TOWN_BOUNDS.sidewalkHeight, SPAWN_Z + 12),
+      prevX: -30.2,
+      prevZ: SPAWN_Z + 12,
       heading: Math.PI,
       speed: 0,
       verticalVel: 0,
+      jumping: false,
+      jumpPrep: 0,
       cameraTargetOffset: new THREE.Vector3(0, WALK_CAMERA.y, 0),
       chaseDistance: WALK_CAMERA.d,
       chaseHeight: WALK_CAMERA.h
@@ -1566,10 +1581,10 @@ class ThirdPersonControllerManager {
     // and the river's footbridges (terrain.js footbridgeTop), walked and ridden over
     // and the Gallup Park livery's docks (gallup-livery.js dockTop), and the river's other docks (boat-docks.js)
     // and the skate park's bowl, quarter pipes, funbox and blocks (skate-park.js), and the mountain bike trails' berms,
-    // logs and tabletops (mtb-trails.js)
+    // logs and tabletops (mtb-trails.js), and the boardwalks (bike-routes.js)
     const pile = Math.max(this.roadWork?.pileTop(x, z) ?? -Infinity, this.airport?.stairTop?.(x, z) ?? -Infinity, footbridgeTop(x, z),
       this.livery?.dockTop(x, z) ?? -Infinity, this.docks?.dockTop(x, z) ?? -Infinity, this.skatePark?.top(x, z) ?? -Infinity,
-      this.mtbTrails?.top(x, z) ?? -Infinity);
+      this.mtbTrails?.top(x, z) ?? -Infinity, this.bikeRoutes?.top(x, z) ?? -Infinity);
     const play = this.playTop ? this.playTop(x, z) : -Infinity;
     return play > -Infinity ? Math.max(pile, groundHeight(x, z) + 0.19 + play) : pile;
   }
@@ -1657,14 +1672,15 @@ class ThirdPersonControllerManager {
 
   resolveHorizontalCollision(pos, radius, carEntity = null, entity = carEntity) {
     // The detailed town (the helicopter may roam out over the countryside around it)
-    const heli = this.activeMode === 'helicopter';
+    const mode = entity?.type || this.activeMode;
+    const heli = mode === 'helicopter';
     const m = heli ? 6000 : 0;
     pos.x = Math.max(TOWN_BOUNDS.minX - m, Math.min(TOWN_BOUNDS.maxX + m, pos.x));
     pos.z = Math.max(TOWN_BOUNDS.minZ + (heli ? -6000 : 30), Math.min(TOWN_BOUNDS.maxZ + (heli ? m : 800), pos.z)); // (the airport's south of the edge)
     // inside Ann Arbor Municipal's fence (airport.js), past the town's edge: that's walked and driven on too
-    const field = this.activeMode !== 'helicopter' && onAirfield(pos.x, pos.z);
+    const field = !heli && onAirfield(pos.x, pos.z);
     if (field) { const kept = (this._lastInTown ??= new Map()), key = entity || this.activeMode, last = kept.get(key); if (last) { last.x = pos.x; last.z = pos.z; } else kept.set(key, { x: pos.x, z: pos.z }); }
-    if (this.activeMode !== 'helicopter' && getTownBoundsAtZ && !field) {
+    if (!heli && getTownBoundsAtZ && !field) {
       const shore = getTownBoundsAtZ(pos.z);
       const minShoreX = shore.westX + 8.0;
       const maxShoreX = shore.eastX - 8.0;
@@ -1688,7 +1704,7 @@ class ThirdPersonControllerManager {
       if (inTown(pos.x, pos.z)) { if (last) { last.x = pos.x; last.z = pos.z; } else kept.set(key, { x: pos.x, z: pos.z }); }
     }
 
-    const body = collisionBody(this.activeMode, radius, carEntity ? carEntity.heading : 0);
+    const body = collisionBody(mode, radius, carEntity ? carEntity.heading : 0);
     const { sin: sinH, cos: cosH, extX, extZ } = body;
     const contact = this._buildingContact ??= { nx: 0, nz: 0, depth: 0 };
 
@@ -1911,12 +1927,14 @@ class ThirdPersonControllerManager {
       } else if (!p.riding && !p.onBus && (this.activeMode === 'person' || dx * dx + dz * dz <= maxDistSq)) {
         p._charHidden = false;
         if (p.mesh) p.mesh.visible = true;
-        const air = p.position.y - this.getGroundHeight(p.position.x, p.position.z, 'person');
+        const groundY = this.getGroundHeight(p.position.x, p.position.z, 'person');
+        const air = p.position.y - groundY;
+        const jumpAir = p.jumping ? Math.max(0.006, air) : p.jumpPrep > 0 ? -(1 - p.jumpPrep / 0.085) : air > 0.3 ? air : 0;
         if (p.sitting) p.rig.perch(this._sitRoot(p), this._sitPose(p.sitting));
         else if (p.chute) p.rig.skydive(dt, p.position.x, p.position.y + 0.5 + 0.45 * p.chute.open, p.position.z, p.heading, p.chute.flat || 0, p.chute.bank || 0, p.chute.track || 0, p.chute.open);
         else if (p.fallen?.getUp >= 0) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, 0, true, DIVE_GET_UP + p.fallen.getUp);
         else if (p.swimming) p.rig.swim(dt, p.position.x, (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1) + Math.min(0, p.position.y + 1 - (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1)), p.position.z, p.heading, Math.min(1, Math.abs(p.speed) / 1.8));
-        else if (!p.fallen) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, air > 0.02 ? air : 0);
+        else if (!p.fallen) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, jumpAir);
         p.crowd.begin();
         p.crowd.add(p.rig, 0);
         p.crowd.end();
@@ -2011,12 +2029,19 @@ class ThirdPersonControllerManager {
       p.position.copy(this.entities[p.riding].position);
       p.speed = 0;
     } else {
-      // Keep the sidewalk pedestrian walking naturally when not actively controlled
+      // Keep the sidewalk pedestrian walking naturally on the ground when not actively controlled
       const p = this.entities.person;
       const walkSpeed = 1.48;
+      p.prevX = p.position.x;
+      p.prevZ = p.position.z;
       p.speed = walkSpeed;
+      p.jumping = false;
+      p.jumpPrep = 0;
+      p.verticalVel = 0;
       p.position.x += Math.sin(p.heading) * walkSpeed * dt;
       p.position.z += Math.cos(p.heading) * walkSpeed * dt;
+      this.resolveHorizontalCollision(p.position, 0.48, null, p);
+      p.position.y = this.getGroundHeight(p.position.x, p.position.z, 'person');
       if (p.position.z < -340) p.heading = 0;
       else if (p.position.z > 340) p.heading = Math.PI;
       p.position.y = this.getGroundHeight(p.position.x, p.position.z, 'person');
@@ -2442,6 +2467,7 @@ class ThirdPersonControllerManager {
   }
 
   updatePerson(dt) {
+    if (dt <= 0) return;
     const p = this.entities.person;
     if (p.sitting) {
       const st = p.sitting, seat = st.seat;
@@ -2500,9 +2526,24 @@ class ThirdPersonControllerManager {
     const acceleration = accelerating ? 5.5 * Math.abs(targetSpeed) / maxSpeed : 12;
     p.speed += Math.max(-acceleration * dt, Math.min(acceleration * dt, targetSpeed - p.speed));
 
-    p.position.x += Math.sin(p.heading) * p.speed * dt;
-    p.position.z += Math.cos(p.heading) * p.speed * dt;
-    this.resolveHorizontalCollision(p.position, 0.48);
+    const prevX = p.position.x;
+    const prevZ = p.position.z;
+    p.prevX = prevX;
+    p.prevZ = prevZ;
+    const sinH = Math.sin(p.heading);
+    const cosH = Math.cos(p.heading);
+    const nextX = prevX + sinH * p.speed * dt;
+    const nextZ = prevZ + cosH * p.speed * dt;
+    p.position.x = nextX;
+    p.position.z = nextZ;
+    this.resolveHorizontalCollision(p.position, 0.48, null, p);
+
+    // Prevent phantom speed buildup when blocked head-on by a building or shoreline boundary
+    if (Math.abs(p.position.x - nextX) > 1e-6 || Math.abs(p.position.z - nextZ) > 1e-6) {
+      const actualFwd = ((p.position.x - prevX) * sinH + (p.position.z - prevZ) * cosH) / dt;
+      if (p.speed > 0 && actualFwd < p.speed) p.speed = Math.max(0, actualFwd);
+      else if (p.speed < 0 && actualFwd > p.speed) p.speed = Math.min(0, actualFwd);
+    }
 
     const groundY = this.getGroundHeight(p.position.x, p.position.z, 'person');
     const level = riverDepth(p.position.x, p.position.z) > 0.08 ? waterLevel(p.position.x, p.position.z) : null;
@@ -2519,21 +2560,40 @@ class ThirdPersonControllerManager {
       return;
     }
     if (swimming) { p.swimming = false; p.position.y = Math.max(p.position.y, groundY); log('[swim] the player stood up in the shallows'); }
-    const grounded = p.grounded ?? true;
-    if (this.keys.up && grounded) {
-      p.verticalVel = 5.2;
+    const JumpLeadTime = 0.085;
+    if (this.keys.up && p.position.y <= groundY + 0.02 && !p.jumping && !(p.jumpPrep > 0)) {
+      p.jumpPrep = JumpLeadTime;
     }
-    p.verticalVel -= 14.5 * dt;
-    p.position.y += p.verticalVel * dt;
-    // Lamp: walking downhill, or off a curb, keeps the feet on the ground rather than stepping into the air
-    this.groundShadow(p, groundY);
-    if (p.position.y < groundY || (grounded && p.verticalVel <= 0 && p.position.y - groundY < 0.4)) {
-      p.position.y = groundY;
+    if (p.jumpPrep > 0) {
+      p.jumpPrep = Math.max(0, p.jumpPrep - dt);
+      p.position.y += (groundY - p.position.y) * (1 - Math.exp(-dt * 18));
+      if (Math.abs(groundY - p.position.y) < 1e-3) p.position.y = groundY;
+      if (p.jumpPrep === 0) {
+        p.verticalVel = 5.2;
+        p.jumping = true;
+      }
+    }
+    if (p.jumping || p.position.y > groundY + 0.3) {
+      if (p.position.y > groundY + 0.3) {
+        p.jumping = true;
+        p.jumpPrep = 0;
+      }
+      p.verticalVel -= 14.5 * dt;
+      p.position.y += p.verticalVel * dt;
+      if (p.position.y <= groundY) {
+        p.position.y = groundY;
+        p.verticalVel = 0;
+        p.jumping = false;
+      }
+    } else if (!(p.jumpPrep > 0)) {
+      // Stepping up or down ordinary 0.22 m curbs stays grounded so the IK footsteps carry the body smoothly
+      p.position.y += (groundY - p.position.y) * (1 - Math.exp(-dt * 18));
+      if (Math.abs(groundY - p.position.y) < 1e-3) p.position.y = groundY;
       p.verticalVel = 0;
-      p.grounded = true;
-    } else {
-      p.grounded = false;
+      p.jumping = false;
     }
+    this.groundShadow(p, groundY);
+    p.grounded = !p.jumping && !(p.jumpPrep > 0);
   }
 
   updateCar(dt) {
@@ -2760,13 +2820,29 @@ class ThirdPersonControllerManager {
   }
 
   updateCyclist(dt) {
+    if (dt <= 0) return;
     const b = this.entities.cyclist;
 
+    const handbrake = b.speed > 0 ? +this.keys.up : 0;
     let throttle = 0;
-    if (this.keys.forward) throttle = this.keys.forward;
-    else if (this.keys.backward) throttle = -0.6 * this.keys.backward;
+    if (handbrake) throttle = -handbrake;
+    else if (this.keys.forward) throttle = +this.keys.forward;
+    else if (this.keys.backward) throttle = b.speed > 0 ? -this.keys.backward : -0.6 * this.keys.backward;
 
-    b.speed = driveSpeed(b.speed, throttle, dt, BICYCLE_DRIVE);
+    // Pause briefly at zero after braking from forward travel so holding S stops cleanly before backing up
+    if (b.speed > 0 && throttle < 0) {
+      b.speed = driveSpeed(b.speed, throttle, dt, BICYCLE_DRIVE);
+      if (b.speed < 0.05) {
+        b.speed = 0;
+        if (!handbrake) b._brakeHold = 0.25;
+      }
+    } else if (!handbrake && b._brakeHold > 0 && throttle < 0) {
+      b._brakeHold = Math.max(0, b._brakeHold - dt);
+      b.speed = 0;
+    } else {
+      b._brakeHold = 0;
+      b.speed = driveSpeed(b.speed, throttle, dt, BICYCLE_DRIVE);
+    }
 
     let turnInput = 0;
     if (this.keys.left) turnInput = this.keys.left;
@@ -2777,9 +2853,22 @@ class ThirdPersonControllerManager {
       b.heading += turnInput * 2.15 * dirSign * dt;
     }
 
-    b.position.x += Math.sin(b.heading) * b.speed * dt;
-    b.position.z += Math.cos(b.heading) * b.speed * dt;
+    const prevX = b.position.x;
+    const prevZ = b.position.z;
+    const sinH = Math.sin(b.heading);
+    const cosH = Math.cos(b.heading);
+    const nextX = prevX + sinH * b.speed * dt;
+    const nextZ = prevZ + cosH * b.speed * dt;
+    b.position.x = nextX;
+    b.position.z = nextZ;
     this.resolveHorizontalCollision(b.position, 0.65, null, b);
+
+    // Prevent phantom speed buildup when blocked head-on by a building or shoreline boundary
+    if (Math.abs(b.position.x - nextX) > 1e-6 || Math.abs(b.position.z - nextZ) > 1e-6) {
+      const actualFwd = ((b.position.x - prevX) * sinH + (b.position.z - prevZ) * cosH) / dt;
+      if (b.speed > 0 && actualFwd < b.speed) b.speed = Math.max(0, actualFwd);
+      else if (b.speed < 0 && actualFwd > b.speed) b.speed = Math.min(0, actualFwd);
+    }
     b.position.y = this.getGroundHeight(b.position.x, b.position.z, 'cyclist');
 
     const targetLean = -turnInput * Math.min(1.0, Math.abs(b.speed) / 9.0) * 0.34;

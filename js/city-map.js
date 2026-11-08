@@ -17,7 +17,47 @@ import { groundHeight } from './terrain.js';
 import { layOutHoles } from './golf.js';
 import { AIRPORT } from './airport-data.js';
 import { onAirfield } from './airport.js';
-import { hot, BUTTON, STICK, TRIGGER, glyph, onInput } from '../lamp-game.js';
+import { hot, BUTTON, STICK, TRIGGER, glyph, onInput, asset, log } from '../lamp-game.js';
+
+// The city's street addresses (build-address-search.py), loaded the first time a search starts with a house number
+let addressBook = null;
+function loadAddressBook() {
+  addressBook ??= (async () => {
+    try {
+      const packed = await asset('data/address-search.json.gz');
+      const head = new Uint8Array(packed, 0, 2);
+      const bytes = head[0] === 0x1f && head[1] === 0x8b
+        ? await new Response(new Response(packed).body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
+        : packed;
+      const data = JSON.parse(new TextDecoder().decode(bytes));
+      data.lower = data.streets.map((n) => n.toLowerCase());
+      log(`[map] ${data.a.length / 4} addresses for search`);
+      return data;
+    } catch (error) {
+      console.warn('[map] no addresses:', error);
+      return null;
+    }
+  })();
+  return addressBook;
+}
+// "918 hutchins" → the house, or null: the number exactly, the street by its words ("n main", "hutchins ave")
+function findAddress(book, q) {
+  const m = /^(\d+)\s+(.+)$/.exec(q);
+  if (!book || !m) return null;
+  const num = +m[1];
+  const words = m[2].replace(/[.,]/g, ' ').split(/\s+/).filter(Boolean);
+  let best = null, bestScore = -1;
+  for (let i = 0; i < book.a.length; i += 4) {
+    if (book.a[i + 2] !== num) continue;
+    const name = book.lower[book.a[i + 3]], parts = name.split(' ');
+    // every word typed starts a word of the street's name; a name that starts with the first one scores higher
+    if (!words.every((w) => parts.some((p) => p.startsWith(w)))) continue;
+    const score = (parts.some((p) => p === words[0]) ? 2 : 0) + (parts.length <= words.length + 1 ? 1 : 0);
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  if (best === null) return null;
+  return { x: book.a[best], z: book.a[best + 1], name: `${num} ${book.streets[book.a[best + 3]]}` };
+}
 
 // Lamp: the map systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so a
 // change to how the map is drawn shows at once rather than after the player moves (the end of this file).
@@ -58,6 +98,7 @@ const MAP = {
   highway: '#b27a35',
   route: '#ffc21a',
   bike: '#43d17f', // bike lanes, shown while cycling
+  bikeStrong: '#0fa04f', // protected and buffered bike lanes
   bikePath: '#2fa565',
   search: '#5fd0ff',
   halo: 'rgba(8, 11, 15, 0.9)',
@@ -66,6 +107,8 @@ const MAP = {
 
 // Landmarks modelled by landmarks.js on their real OpenStreetMap lots (outlined in amber)
 const MODELLED_LANDMARKS = ['Michigan Stadium'];
+// the murals' and sculptures' pins (art-places.js), smaller than the big landmarks' white ones
+const ART_PIN = { mural: '#ff8fc7', sculpture: '#ffcb05' };
 
 // Town (0), waterway (1) & neighborhood (2) names at their real places (world metres)
 const AREA_LABELS = [
@@ -234,8 +277,11 @@ function mapLayers() {
     } else if (r.w >= 15) L.mainRoads.line(r.pts);
   }
 
-  // Bike lanes painted on the streets (OpenStreetMap cycleway*: GEO.roadGraph links' bike bits, 1 and 2 a lane, 4 and 8
-  // shared-lane arrows) and the paved paths and trails a bike can ride (GEO.trails, not the dirt ones), shown while cycling
+  // Bike routes by kind (the city's Non-Motorized Routes over OpenStreetMap's cycleway*: GEO.roadGraph links' bike
+  // bits): protected and buffered lanes (16, 32, 64) solid in a stronger green, other lanes (1, 2) solid, shared-lane
+  // arrows (4, 8) and signed bike routes (256) dashed, and the paved paths, boardwalks and trails a bike can ride
+  // (GEO.trails, not the dirt ones) thin, shown while cycling
+  L.bikeStrong = new TiledLayer(1000);
   L.bikeLanes = new TiledLayer(1000);
   L.bikeShared = new TiledLayer(1000);
   L.bikePaths = new TiledLayer(1000);
@@ -243,15 +289,15 @@ function mapLayers() {
   if (RG) {
     const at = (i) => ({ x: RG.nodes[i * 2], z: RG.nodes[i * 2 + 1] });
     for (const [a, b, , , , , inner, , bike = 0] of RG.links) {
-      if (!(bike & 15)) continue;
+      if (!(bike & (15 | 128 | 256))) continue;
       const pts = [at(a)];
       for (let k = 0; k < inner.length; k += 2) pts.push({ x: inner[k], z: inner[k + 1] });
       pts.push(at(b));
-      (bike & 3 ? L.bikeLanes : L.bikeShared).line(pts);
+      (bike & 3 ? (bike & 112 ? L.bikeStrong : L.bikeLanes) : L.bikeShared).line(pts);
     }
   }
   for (const t of GEO.trails || []) {
-    if (t[0] || t[1] < 2.4) continue; // dirt, or a footpath
+    if (t[0] === 1 || t[0] === 4 || (t[0] === 0 && t[1] < 2.4)) continue; // dirt, steps, or a footpath
     const pts = [];
     for (let k = 2; k + 1 < t.length; k += 2) pts.push({ x: t[k], z: t[k + 1] });
     L.bikePaths.line(pts);
@@ -696,6 +742,25 @@ class CityMapSystem {
     const q = String(text || '').trim().toLowerCase();
     this.searchHighlight = q;
     this.searchPath = null;
+    // a house number and a street: fly to that house and route there, once the addresses are in
+    if (/^\d+\s+\S/.test(q)) {
+      loadAddressBook().then((book) => {
+        if (String(this.elSearchInput?.value || '').trim().toLowerCase() !== q) return; // typed on since
+        const hit = findAddress(book, q);
+        if (!hit) {
+          this.search(q.replace(/^\d+\s+/, '')); // no such house: show the street
+          return;
+        }
+        this.searchHighlight = q.replace(/^\d+\s+/, '');
+        this.searchPath = null;
+        this.waypoint = { x: hit.x, z: hit.z, name: hit.name };
+        this.viewCenterX = hit.x;
+        this.viewCenterZ = hit.z;
+        this.viewZoom = Math.max(this.viewZoom, 1.6);
+        this.renderFullMap();
+      });
+      return;
+    }
     if (q.length > 0) {
       const lmMatch = LANDMARKS.find((l) => l.name.toLowerCase().includes(q) || l.short.toLowerCase().includes(q));
       const roads = ROAD_LABELS.filter((l) => l.lower.includes(q) || l.raw.includes(q));
@@ -714,7 +779,7 @@ class CityMapSystem {
       if (lmMatch) {
         this.viewCenterX = lmMatch.x;
         this.viewCenterZ = lmMatch.z;
-        this.viewZoom = Math.max(this.viewZoom, 0.9);
+        this.viewZoom = Math.max(this.viewZoom, lmMatch.art ? 1.2 : 0.9);
       } else if (roads.length) {
         const b = this.searchBounds;
         const { w, h } = this.fullSize();
@@ -1018,7 +1083,8 @@ class CityMapSystem {
       L.mainRoads.each(v, (p) => ctx.stroke(p));
     }
 
-    // 7b. On the bike: the bike lanes (solid), shared lanes (dashed) and the paved paths (thin)
+    // 7b. On the bike: the protected and buffered lanes (solid, stronger), bike lanes (solid), shared lanes and signed
+    // routes (dashed) and the paved paths (thin)
     if (this.controllerManager?.activeMode === 'cyclist') {
       ctx.strokeStyle = MAP.bikePath;
       ctx.lineWidth = Math.max(px(1.4), 2.5);
@@ -1030,6 +1096,9 @@ class CityMapSystem {
       ctx.setLineDash([]);
       ctx.lineWidth = Math.max(px(2.6), 4.5);
       L.bikeLanes.each(v, (p) => ctx.stroke(p));
+      ctx.strokeStyle = MAP.bikeStrong;
+      ctx.lineWidth = Math.max(px(3.2), 5.5);
+      L.bikeStrong.each(v, (p) => ctx.stroke(p));
     }
 
     // 8. Freeways
@@ -1240,13 +1309,14 @@ class CityMapSystem {
       const lx = toX(lm.x);
       const ly = toY(lm.z);
       if (Math.abs(lx) < w * 0.48 && Math.abs(ly) < h * 0.48) {
+        const r = lm.art ? 0.7 : 1;
         ctx.fillStyle = MAP.halo;
         ctx.beginPath();
-        ctx.arc(lx, ly, 4.5, 0, Math.PI * 2);
+        ctx.arc(lx, ly, 4.5 * r, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = ART_PIN[lm.art] || '#ffffff';
         ctx.beginPath();
-        ctx.arc(lx, ly, 2.8, 0, Math.PI * 2);
+        ctx.arc(lx, ly, 2.8 * r, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -1462,7 +1532,9 @@ class CityMapSystem {
     ctx.font = `700 11px ${FONT}`;
     const placed = [];
     const pins = [];
-    for (const lm of LANDMARKS) {
+    // the big landmarks first, then the murals and sculptures, whose names show only once zoomed in
+    const ordered = [...LANDMARKS.filter((l) => !l.art), ...(s >= 0.6 ? LANDMARKS.filter((l) => l.art) : [])];
+    for (const lm of ordered) {
       const lx = toX(lm.x);
       const ly = toY(lm.z);
       if (Math.abs(lx) > w * 0.48 || Math.abs(ly) > h * 0.48) continue;
@@ -1513,13 +1585,14 @@ class CityMapSystem {
     ctx.font = `700 11px ${FONT}`;
     ctx.textAlign = 'left';
     for (const { lm, lx, ly, showLabel } of pins) {
+      const r = lm.art ? 0.7 : 1;
       ctx.fillStyle = MAP.halo;
       ctx.beginPath();
-      ctx.arc(lx, ly, 6.5, 0, Math.PI * 2);
+      ctx.arc(lx, ly, 6.5 * r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = ART_PIN[lm.art] || '#ffffff';
       ctx.beginPath();
-      ctx.arc(lx, ly, 4.2, 0, Math.PI * 2);
+      ctx.arc(lx, ly, 4.2 * r, 0, Math.PI * 2);
       ctx.fill();
       if (showLabel) {
         ctx.lineWidth = 3;

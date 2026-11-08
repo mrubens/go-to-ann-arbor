@@ -23,6 +23,7 @@ The app itself, to open in [Lamp](https://lamp.dev) and change, is on the [main 
 - Uses [Current weather at Ann Arbor Municipal Airport (KARB)](https://www.weather.gov/documentation/services-web-api) by National Weather Service (NOAA), LicenseRef-US-Government-Public-Domain
 - Uses [TheRide GTFS timetable](https://www.theride.org/business/software-developers) by Ann Arbor Area Transportation Authority (TheRide), None
 - Uses [Road Centerlines (speed limits)](https://a2maps.a2gov.org/a2arcgis/rest/services/RoadsSpeedlimitCrash/MapServer/1) by City of Ann Arbor, None
+- Uses [City of Ann Arbor, Non-Motorized Routes](https://ckan.a2gov.org/dataset/de971a58-43e3-40f9-b8e0-ee3e77afd711) by City of Ann Arbor, None
 - Uses [Fire Hydrants](https://ckan.a2gov.org/dataset/fire-hydrants) by City of Ann Arbor, None
 - Uses [Park Amenities](https://ckan.a2gov.org/dataset/park-amenities) by City of Ann Arbor, None
 - Uses [Address Points](https://ckan.a2gov.org/dataset/address-points) by City of Ann Arbor, None
@@ -38,7 +39,6 @@ The app itself, to open in [Lamp](https://lamp.dev) and change, is on the [main 
 - Uses [MiDrive construction and closures](https://mdotjboss.state.mi.us/MiDrive/map) by Michigan Department of Transportation
 - Uses [OpenSky Network live aircraft states](https://opensky-network.org) by The OpenSky Network
 - Uses [Ann Arbor scooter locations (GBFS)](https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs) by Bird Rides (Spin), LicenseRef-Bird-GBFS-Data-License
-- Uses [Snow depth (Open-Meteo)](https://open-meteo.com) by Open-Meteo.com, CC-BY-4.0
 
 Map data is ODbL-1.0: it stays under that license, credited, in this remix.
 
@@ -66,6 +66,8 @@ TheRide GTFS timetable is used under its own terms (None).
 
 Road Centerlines (speed limits) is used under its own terms (None).
 
+City of Ann Arbor, Non-Motorized Routes is used under its own terms (None).
+
 Fire Hydrants is used under its own terms (None).
 
 Park Amenities is used under its own terms (None).
@@ -83,6 +85,8 @@ Huron River at Ann Arbor gauge (04174500), live flow is used under its own terms
 Amtrak GTFS timetable (Wolverine stops at Ann Arbor) is used under its own terms (None).
 
 Ann Arbor scooter locations (GBFS) is used under its own terms (LicenseRef-Bird-GBFS-Data-License).
+
+1 picture made with AI, each marked as such in the file itself: `Assets/bookstore-mural.png`.
 
 Remixed from [New York](https://github.com/lampdotdev/newyork) (a Lamp starter).
 

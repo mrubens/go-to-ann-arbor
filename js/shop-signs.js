@@ -2,6 +2,17 @@ import * as THREE from 'three/webgpu';
 import { GEO } from './city-geodata.js';
 import { groundHeight } from './terrain.js';
 import { TIER } from './device-tier.js';
+import { MURALS } from './art-places.js';
+
+// walls a mural covers whole: no sign hangs over the painting
+const COVERED = MURALS.filter((m) => m.picture?.fill).map((m) => {
+  const [ax, az] = m.a, [bx, bz] = m.b, len = Math.hypot(bx - ax, bz - az);
+  return { ax, az, dx: (bx - ax) / len, dz: (bz - az) / len, len };
+});
+const underMural = (x, z) => COVERED.some((w) => {
+  const t = (x - w.ax) * w.dx + (z - w.az) * w.dz, d = Math.abs((x - w.ax) * w.dz - (z - w.az) * w.dx);
+  return t > -1 && t < w.len + 1 && d < 4;
+});
 
 // Lamp: a sign over each named shop, restaurant, cafe and bar from OpenStreetMap (GEO.signs, placed by the generator on
 // the wall of its building that faces the street): a painted board in its category's color with the name in cream
@@ -42,6 +53,7 @@ function buildShopSigns(group) {
 
   for (let i = 0; i < count; i++) {
     const [x, z, deg, w, y, ni, cat] = list.slice(i * 7, i * 7 + 7);
+    if (underMural(x, z)) continue;
     const name = names[ni];
     // the board, painted into its cell, its letters squeezed so they read right once stretched over the board
     const cx = (i % COLS) * CELL_W, cy = Math.floor(i / COLS) * CELL_H;
