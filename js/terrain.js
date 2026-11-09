@@ -1193,7 +1193,7 @@ async function buildTiles(list) {
 
 // Every frame: the tiles the player has come near are drawn (a few at a time, one batch in hand), and those left more
 // than 400 m beyond the radius let go. Answers whether any were drawn or let go.
-const AWAY = 300, BATCH = 6;
+const AWAY = TIER.keepBeyond ?? 300, BATCH = 6; // (a phone lets go sooner: device-tier.js)
 // (a second player's place, in split screen, keeps and fills the tiles around them too)
 function updateGroundStreaming(x, z, x2 = NaN, z2 = NaN) {
   if (!stream.radius || !stream.layers.length) return false;

@@ -1407,7 +1407,7 @@ function streamHouses(records, addresses, { radius, x, z, farCut = 1 }) {
     const two = Number.isFinite(px2) && Number.isFinite(pz2);
     for (const [k, made] of built) {
       const d = two ? Math.min(distance(k, px, pz), distance(k, px2, pz2)) : distance(k, px, pz);
-      if (d > radius + 300) {
+      if (d > radius + (TIER.keepBeyond ?? 300)) {
         made.removeFromParent();
         made.traverse((o) => o.geometry?.dispose());
         built.delete(k);
