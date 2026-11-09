@@ -1,9 +1,4 @@
 {
-  "generated" : [
-    {
-      "file" : "Assets/bookstore-mural.png"
-    }
-  ],
   "remixOf" : [
     {
       "commit" : "99efbab0a38a6010592015469f5d9912ba14b784",
@@ -12,7 +7,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "c10e1a4ef412666d3f9cfd6a8a0ff68c9680dc96",
+      "commit" : "6dfaa419ffbc4cfe4c8e00ccf7d03d0cc6702bcb",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"

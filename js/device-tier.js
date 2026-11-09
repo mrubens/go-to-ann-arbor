@@ -14,8 +14,10 @@ const TIERS = {
   full: { name: 'full', stream: 1500, shadows: true, bloom: true, antialias: true, scale: 1, traffic: 1, people: 1, farCut: 1, outskirts: true },
   // the ground and houses within 950 m built, the rest as the player comes near
   light: { name: 'light', stream: 950, shadows: true, bloom: true, antialias: true, scale: 0.85, traffic: 0.75, people: 0.75, farCut: 0.75, outskirts: true },
-  // within about 1 km; trees, houses and street details drawn half as far; 1344x756; half the cars, a third of the people
-  phone: { name: 'phone', stream: 1000, shadows: false, bloom: false, antialias: false, scale: 0.7, traffic: 0.5, people: 0.35, farCut: 0.5, outskirts: true },
+  // the Xbox's lean city (below), held tighter still: iPhone Safari ends a page at well under 2 GB, and the whole of
+  // 1 km built (and the ground cut within 10 cm) came to more than that once the drafted houses and bike routes came in.
+  // Within 500 m, the ground within 35 cm, uploads spread over frames, 1344x756, a fifth of the cars, an eighth of the people
+  phone: { name: 'phone', stream: 500, ground: 0.35, shadows: false, groundShade: true, mergeTrees: 60000, far: 9000, landmarkReach: 700, spreadLoads: true, warmReach: 500, shadowTile: 768, shadowFar: 110, bloom: false, antialias: false, scale: 0.7, traffic: 0.2, people: 0.12, farCut: 0.22, outskirts: true },
   // the Xbox's web view: the phone's city, drawn nearer still (its GPU takes about a twentieth of what a Mac draws of
   // the whole city, and split screen draws it twice), the hills' ground cut to follow them within 35 cm rather than
   // 10 (terrain.js: the ground was most of what's drawn), drawn at the full 1920x1080 (the frame isn't held up by its size, and 1440x810 stretched up looked soft); no sun shadows
