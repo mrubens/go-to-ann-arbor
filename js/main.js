@@ -30,6 +30,7 @@ import { reportTriangles, showTriangles } from './triangle-report.js';
 import { reportMemory, memoryCheckpoint, MEASURE_MEMORY } from './memory-report.js';
 import { gpuOnly, releaseUploaded, useRenderer } from './gpu-only.js';
 import { TIER, XBOX } from './device-tier.js';
+import { FILLS, fillWindow, stageSize } from './stage.js';
 import { GamepadControls } from './gamepad-controls.js';
 import { createSecondPlayer, createSplitView } from './split-screen.js';
 import { CameraSystem, CAMERA_PRESETS } from './cameras.js';
@@ -687,7 +688,9 @@ async function initApp() {
   // a camera kept from an earlier run takes this tier's reach (the Xbox's is shorter: device-tier.js)
   if (keptCamera.far !== (TIER.far || 60000)) { keptCamera.far = TIER.far || 60000; keptCamera.updateProjectionMatrix(); }
   const cameraSystem = new CameraSystem(renderer.domElement, controllerManager, keptCamera);
-  cameraSystem.onResize(1920, 1080);
+  // the window's shape (stage.js): the camera as wide as the drawing, set again on each resize
+  let stage = stageSize();
+  cameraSystem.onResize(stage.w, stage.h, FILLS);
   const touchControls = new TouchControls(controllerManager);
   const soundButton = document.getElementById('btn-sound');
   const audioSystem = new CityAudioSystem({ controllerManager, trafficSystem, highwayTraffic, streetDetails }, {
@@ -937,6 +940,12 @@ async function initApp() {
   const carRadio = new CarRadio();
   // split screen's state (see showSplit), here before anything that reads it
   const split = { on: false, second: null, view: null, offered: false, kept: null, drawn: false };
+  // each camera as wide as what it draws into: the whole drawing, or a half of it side by side
+  function fitCameras() {
+    const two = split.drawn;
+    cameraSystem.onResize(two ? stage.w / 2 : stage.w, stage.h, FILLS && !two);
+    split.second?.cs.onResize(stage.w / 2, stage.h);
+  }
 
   // The guide to each mode's controls, written once: the keys the city reads (by their codes, as controllers.js and the
   // keydown handler below have them) and the controller's buttons, sticks and triggers (as gamepad-controls.js reads
@@ -1032,6 +1041,19 @@ async function initApp() {
       return item;
     });
     elControlsHint.replaceChildren(...items);
+    fitHints();
+  }
+  // the key hints stay on one row: hidden where that row would reach the place signs and map or the speed panel
+  function fitHints() {
+    if (!elControlsHint) return;
+    elControlsHint.classList.remove('hints-off');
+    const r = elControlsHint.getBoundingClientRect();
+    if (!r.width) return;
+    const hits = (sel) => {
+      const b = document.querySelector(sel)?.getBoundingClientRect();
+      return b && b.width > 0 && b.right > r.left - 12 && b.left < r.right + 12 && b.bottom > r.top && b.top < r.bottom;
+    };
+    elControlsHint.classList.toggle('hints-off', hits('.hud-bottom-left') || hits('.hud-bottom-right') || r.left < 0 || r.right > window.innerWidth);
   }
 
   // The keys named on the HUD's buttons (data-key, a key's code) and, with a controller, the button that does the same
@@ -1811,6 +1833,7 @@ async function initApp() {
 
   window.addEventListener('resize', () => {
     placeModeIndicator();
+    fitHints();
     if (mapSystem.isFullMapOpen) {
       mapSystem.resizeFullCanvas();
       mapSystem.renderFullMap();
@@ -2086,7 +2109,7 @@ async function initApp() {
       split.view ??= createSplitView(renderer, { samples: QUALITY.antialias ? 4 : 0 });
       split.view.grade.applyPreset(lightingSystem.lookId);
     }
-    cameraSystem.onResize(on ? 960 : 1920, 1080);
+    fitCameras();
     // each half draws everything again: no sun shadows while there are two (soft shade on the ground instead)
     renderer.shadowMap.enabled = QUALITY.shadows && !on;
     document.body.classList.toggle('split', on);
@@ -2498,14 +2521,17 @@ async function initApp() {
   }
 
   // sharp: drawing smaller never made frames faster here (the log showed it undone every time), it only blurred the city
+  // fill: drawn at the window's shape everywhere but the Xbox (stage.js), which keeps the fixed 1920x1080 stage
+  let stopFilling = null;
   game({ renderer, init() {
-    // a phone draws fewer pixels, and smaller still if frames come slow
-    if (TIER.scale < 1) renderer.setSize(Math.round(1920 * TIER.scale), Math.round(1080 * TIER.scale), false);
+    // the Xbox: Lamp's stage at 1920x1080 (scale 1); elsewhere the window's shape at the tier's pixels
+    stopFilling?.();
+    stopFilling = fillWindow(renderer, (w, h) => { stage = { w, h }; fitCameras(); });
     const was = pendingRestore(); if (was) startFrom(was);
   // (on an Xbox too: the runtime's own steps, from 1920x1080, undid its smaller size and left it at 960x540 or full size)
-  }, frame, touch: false, keyboard: false, snapshot, sharp: XBOX || TIER.name !== 'phone',
+  }, frame, touch: false, keyboard: false, snapshot, sharp: XBOX || TIER.name !== 'phone', fill: FILLS,
     // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.
-    dispose() { groundShade.group.removeFromParent(); groundShade.dispose(); split.second?.dispose(); split.view?.dispose(); document.body.classList.remove('split');
+    dispose() { stopFilling?.(); groundShade.group.removeFromParent(); groundShade.dispose(); split.second?.dispose(); split.view?.dispose(); document.body.classList.remove('split');
       cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); scenePass.dispose(); } });
   container.appendChild(renderer.domElement);
 }

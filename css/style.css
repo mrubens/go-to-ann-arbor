@@ -773,10 +773,11 @@ body.hud-minimized .icon-show {
    ------------------------------------------------------------------------------------------------------------------ */
 .controls-hint {
   display: flex;
-  flex-wrap: wrap;
+  /* one row, never wrapped: hidden instead below 1240 px or where it would reach the side panels (main.js fitHints) */
+  flex-wrap: nowrap;
+  white-space: nowrap;
   justify-content: center;
   gap: 6px 16px;
-  max-width: 720px;
   font-size: 12px;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.88);
@@ -1681,3 +1682,21 @@ body.split .split-divider {
 .champion-action { font-size: 12px; font-weight: 600; margin-top: 8px; opacity: 0.6; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .champion-card.flying .champion-kicker { display: none; }
 .location-view { margin-left: 10px; font-weight: 600; letter-spacing: 0.06em; opacity: 0.75; display: inline-flex; align-items: center; gap: 4px; }
+
+.controls-hint.hints-off { display: none; }
+
+/* Narrow windows on the Mac and the link's page (the city fills any shape now): the brand goes under the toolbar
+   instead of beside it, the toolbar wraps to two rows where one won't fit, and the place signs sit above the bar */
+@media (max-width: 820px) {
+  html.mac-window .hud-top-left { top: calc(58px + var(--bar-h) + 10px); }
+}
+@media (max-width: 520px) {
+  .hud-top-right { left: var(--edge); display: flex; justify-content: flex-end; }
+  .toolbar { flex-wrap: wrap; justify-content: center; height: auto; padding: 4px 5px; row-gap: 2px; }
+  .toolbar-divider { display: none; }
+  .hud-top-left { top: calc(max(var(--edge), env(safe-area-inset-top)) + 100px); }
+  html.mac-window .hud-top-left { top: calc(58px + 100px); }
+}
+@media (max-width: 620px) {
+  .hud-bottom-left { bottom: calc(var(--edge) + 66px); max-width: calc(100% - 2 * var(--edge)); }
+}

@@ -198,6 +198,6 @@ const nearFootballField = (x, z) => FIELDS.some((F) => Math.hypot(x - F.at[0], z
 // the city's survey draws Huron's home grandstand as a 9 m block of a building on the track's east side; the bleachers
 // (bleachers.js, data/bleachers.json) build it instead, so buildings.js leaves out any surveyed building over here
 // (and the low building just behind it, which the stand's back rows ran into); Pioneer's two grandstands the same
-const GRANDSTANDS = [[3874.1, 9.8], [3882.58, 16.24], [-342.09, 2220.03], [-254.48, 2207.02]];
+const GRANDSTANDS = [[3874.1, 9.8], [3882.58, 16.24], [-342.09, 2220.03], [-254.48, 2207.02], [-2385.8, -2651.8], [-2296.5, -2654.6]];
 
 export { buildFootballFields, footballOutlines, nearFootballField, GRANDSTANDS };
