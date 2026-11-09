@@ -5,6 +5,18 @@
   'use strict';
   if (window.LampAI) return;
 
+  // A page framed by another (a Share Link's page on lamp.dev, a site that shows it) hears keys only while its frame
+  // has focus. A game that cancels pointerdown, to drag its camera say, also cancels the press that would give its
+  // frame focus, so once the person has typed in the page around it, the game never heard a key again. A press
+  // anywhere in the page brings the focus here first.
+  try {
+    if (window.top !== window) {
+      window.addEventListener('pointerdown', function () {
+        if (!document.hasFocus()) window.focus();
+      }, true);
+    }
+  } catch (e) {}
+
   // Where Lamp is: filled in by Lamp in the package it puts on a device. Never the app's token, which the app asks
   // Lamp for once, just after Lamp has put it on the device, and keeps.
   var installed = /*LAMP_INSTALL*/null;
