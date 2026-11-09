@@ -8,6 +8,7 @@ import { createPostProcessing } from './post-processing.js';
 import { ThirdPersonControllerManager } from './controllers.js';
 import { CameraSystem, CAMERA_PRESETS } from './cameras.js';
 import { GamepadControls } from './gamepad-controls.js';
+import { CAR_RATIOS, newGearState, shiftGear, engineRPM } from './gearbox.js';
 
 const MODES = ['person', 'car', 'cyclist', 'helicopter', 'kayak'];
 const FOLLOW = CAMERA_PRESETS.filter((p) => p.category === 'follow').map((p) => p.id);
@@ -79,34 +80,39 @@ function createSecondPlayer({ scene, colliders, share, beside, map = null, kept 
     onGetInOut: getInOrOut
   });
 
-  // The second player's speedometer, in the right half's corner: what they're in, and how fast
+  // The second player's speedometer, in the right half's corner, laid out as the first player's race HUD
+  // (index.html #hud-instruments): what they're in, the gear, the speed and, in a car, the revs
   const hud = document.createElement('div');
   hud.className = 'hud hud-bottom-right p2-hud';
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  const instruments = el('section', 'instruments p2-instruments');
+  instruments.setAttribute('aria-label', 'Player 2 instruments');
+  const name = el('div', 'race-mode');
+  const readout = el('div', 'readout');
+  const gearEl = el('div', 'readout-gear', 'N');
+  readout.append(gearEl, el('div', 'readout-cap', 'GEAR'));
+  const speedRow = el('div', 'race-speed');
+  const speed = el('span', 'p2-speed', '0');
+  speedRow.append(speed, el('span', 'race-unit', 'MPH'));
+  const revs = el('div', 'race-revs');
+  const rpmCaption = el('div', 'rev-caption');
+  const rpmEl = el('span', null, '780');
+  rpmCaption.append(el('span', null, 'RPM'), rpmEl);
+  const revTrack = el('div', 'rev-track');
+  const revFill = el('div', 'p2-rev-fill');
+  revTrack.append(revFill);
+  const revScale = el('div', 'rev-scale');
+  revScale.append(el('span', null, '0'), el('span', null, '8 × 1000'));
+  revs.append(rpmCaption, revTrack, revScale);
+  instruments.append(name, readout, speedRow, revs);
   const panel = document.createElement('section');
   panel.className = 'panel cluster';
   panel.setAttribute('aria-label', 'Player 2');
-  const gauge = document.createElement('div');
-  gauge.className = 'gauge';
-  const top = document.createElement('div');
-  top.className = 'gauge-top';
-  const name = document.createElement('span');
-  name.className = 'gauge-label';
-  top.append(name);
-  const speedRow = document.createElement('div');
-  speedRow.className = 'gauge-speed';
-  const speed = document.createElement('span');
-  speed.className = 'p2-speed';
-  speed.textContent = '0';
-  const unit = document.createElement('span');
-  unit.className = 'gauge-unit';
-  unit.textContent = 'mph';
-  speedRow.append(speed, unit);
-  const meter = document.createElement('div');
-  meter.className = 'gauge-meter';
-  const fill = document.createElement('span');
-  fill.className = 'p2-meter';
-  meter.append(fill);
-  gauge.append(top, speedRow, meter);
   // their camera, as the first player's chooser shows it: the arrows step through the follow cameras (Y on their
   // controller does too)
   const chooser = document.createElement('div');
@@ -126,8 +132,8 @@ function createSecondPlayer({ scene, colliders, share, beside, map = null, kept 
   const camName = document.createElement('span');
   current.append(camName);
   chooser.append(arrow('left', 'Player 2 previous camera'), current, arrow('right', 'Player 2 next camera'));
-  panel.append(gauge, chooser);
-  hud.append(panel);
+  panel.append(chooser);
+  hud.append(instruments, panel);
   // their mini map, in the left corner of the right half
   const radarHud = document.createElement('div');
   radarHud.className = 'hud p2-radar';
@@ -146,7 +152,22 @@ function createSecondPlayer({ scene, colliders, share, beside, map = null, kept 
   divider.className = 'split-divider';
   document.body.append(hud, radarHud, divider);
   const dropRadar = map?.addRadar?.(radarCanvas, null, cm, cs) || (() => {});
-  const shown = { name: '', mph: -1, camera: '' };
+  const shown = { name: '', mph: -1, camera: '', mode: '', gear: '', rpm: -1 };
+  // their car's gear and revs, from the same gearbox as the first player's (main.js gearReadout), fed their own speed
+  const box = newGearState();
+  const gearing = { clock: 0, last: 0, lastSpeed: 0, load: 0, first: true };
+  function gearReadout(speedMps, forward) {
+    const dt = Math.max(0.05, gearing.clock - gearing.last);
+    const accel = (speedMps - gearing.lastSpeed) / dt;
+    gearing.last = gearing.clock;
+    gearing.lastSpeed = speedMps;
+    const want = Math.min(1, Math.max(0, accel / 5 + Math.min(1, speedMps / 2) * (0.12 + 0.28 * Math.min(1, speedMps / 30) ** 2)));
+    gearing.load += (want - gearing.load) * 0.6;
+    shiftGear(box, speedMps, gearing.load, gearing.clock, gearing.first, CAR_RATIOS);
+    gearing.first = false;
+    const rpm = engineRPM(box, speedMps, gearing.load, CAR_RATIOS, 780);
+    return { gear: speedMps < 0.5 ? 'N' : !forward ? 'R' : String(box.gear + 1), rpm: Math.round(rpm / 50) * 50 };
+  }
 
   log(`[split] player 2 joined, in the ${mode}`);
   return {
@@ -158,15 +179,26 @@ function createSecondPlayer({ scene, colliders, share, beside, map = null, kept 
       cm.update(dt, elapsed, cs.initialized ? cs.currentPos : null);
       cs.update(dt, elapsed);
     },
-    // the speedometer, every frame; `top` is the first player's speed meter's full scale for this mode
-    drawHud(topMph) {
+    // the speedometer, every frame
+    drawHud() {
       const ent = cm.getActiveEntity();
       const label = ent?.label || '';
       if (label !== shown.name) { shown.name = label; name.textContent = String(label); }
       const mphExact = (cm.activeMode === 'kayak' ? ent.groundSpeed || 0 : Math.abs(ent.speed || 0)) * 2.237;
       const mph = Math.round(mphExact);
       if (mph !== shown.mph) { shown.mph = mph; speed.textContent = String(mph); }
-      fill.style.transform = `scaleX(${Math.min(1, mphExact / (topMph || 80))})`;
+      // the gear and revs shown in their car only, as the first player's are (the mode on the panel, not the page)
+      if (cm.activeMode !== shown.mode) { shown.mode = cm.activeMode; instruments.dataset.mode = cm.activeMode; }
+      gearing.clock = performance.now() / 1000;
+      if (cm.activeMode === 'car' && gearing.clock - gearing.last >= 0.1) {
+        const read = gearReadout(Math.abs(ent.speed || 0), (ent.speed || 0) >= 0);
+        if (read.gear !== shown.gear) { shown.gear = read.gear; gearEl.textContent = read.gear; }
+        if (read.rpm !== shown.rpm) {
+          shown.rpm = read.rpm;
+          rpmEl.textContent = String(read.rpm);
+          revFill.style.transform = `scaleX(${Math.min(1, read.rpm / 8000)})`;
+        }
+      }
       if (cs.activePresetId !== shown.camera) {
         shown.camera = cs.activePresetId;
         camName.textContent = CAMERA_PRESETS.find((p) => p.id === shown.camera)?.name || '';

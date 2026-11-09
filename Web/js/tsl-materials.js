@@ -85,6 +85,8 @@ const cityUniforms = hot(import.meta).keep('cityUniforms', () => ({
 // Lamp: how much of the ground lies under snow, 0 to 1 (snow-cover.js); added after the others, so a city kept from
 // before it gets it too
 cityUniforms.uSnow ??= uniform(0);
+// camera-to-player cutaway for trees: a (player), b (camera), r (1 on, 0 off)
+cityUniforms.uCut ??= { a: uniform(new THREE.Vector3()), b: uniform(new THREE.Vector3(0, 100, 0)), r: uniform(0) };
 
 // Fast deterministic 2D -> 1D hash in TSL
 const hash2D = Fn(([p]) => {
@@ -1487,6 +1489,18 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
 
   // Coverage: leaf cards from the atlas; bark is opaque from outside (its back faces are dropped)
   const alpha = mix(float(frontFacing), leaf.a, isLeaf);
+  // Leaf cards close to the camera dissolve (the chase view among a wood's crowns is never filled with giant leaves);
+  // bark stays solid, and the shadow pass keeps every leaf (its own camera is the light's)
+  const nearLeaves = smoothstep(1.6, 4.8, length(positionWorld.sub(cameraPosition)));
+  // cutaway: everything of the tree inside a tube from the player to the camera (wider towards the camera) fades
+  const cutA = cityUniforms.uCut.a, cutB = cityUniforms.uCut.b;
+  const cutBA = cutB.sub(cutA);
+  const cutPA = positionWorld.sub(cutA);
+  const cutH = clamp(dot(cutPA, cutBA).div(dot(cutBA, cutBA).max(0.01)), 0.0, 1.0);
+  const cutD = length(cutPA.sub(cutBA.mul(cutH)));
+  const cutR = mix(float(1.1), float(3.0), cutH);
+  const cutKeep = float(1.0).sub(float(1.0).sub(smoothstep(cutR.mul(0.6), cutR, cutD)).mul(cityUniforms.uCut.r));
+  const viewAlpha = mix(float(frontFacing), leaf.a.mul(nearLeaves), isLeaf).mul(cutKeep);
   mat.alphaTestNode = float(0.5);
   mat.maskShadowNode = alpha.greaterThan(0.5);
 
@@ -1509,7 +1523,7 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
     const planeBark = mix(mix(color(0x645e4b), color(0x948c73), smoothstep(0.56, 0.66, n2)), color(0x4a3f31), smoothstep(0.3, 0.22, n2));
     const bark = mix(furrowed, planeBark, step(species, 0.5)).mul(crownAO.mul(0.4).add(0.6));
 
-    return vec4(mix(bark, foliage, isLeaf), alpha);
+    return vec4(mix(bark, foliage, isLeaf), viewAlpha);
   })();
 
   mat.roughnessNode = mix(float(0.93), float(0.72).sub(leaf.r.mul(0.1)), isLeaf);

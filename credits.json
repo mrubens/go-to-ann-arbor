@@ -199,6 +199,24 @@
       "license" : "LicenseRef-Bird-GBFS-Data-License",
       "name" : "Ann Arbor scooter locations (GBFS)",
       "url" : "https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs"
+    },
+    {
+      "author" : "Open-Meteo.com",
+      "license" : "CC-BY-4.0",
+      "name" : "Snow depth (Open-Meteo)",
+      "url" : "https://open-meteo.com"
+    },
+    {
+      "author" : "Mapillary contributors",
+      "license" : "CC-BY-SA-4.0",
+      "name" : "Mapillary street-level imagery (decides house and shopfront looks; no photos ship)",
+      "url" : "https://www.mapillary.com"
+    },
+    {
+      "author" : "City of Ann Arbor",
+      "license" : "None",
+      "name" : "Parcels with assessor's year built and storeys",
+      "url" : "https://a2maps.a2gov.org/a2arcgis/rest/services/WaterServiceLeadMaterialAll/MapServer/3"
     }
   ]
 }

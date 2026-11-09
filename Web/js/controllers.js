@@ -540,6 +540,9 @@ class ThirdPersonControllerManager {
     if (this.entities.person.onBus) { this.traffic?.leaveBus(); this.getOffBus(null); }
     const ent = this.getActiveEntity();
     this.resetInput();
+    // the town-edge memory belongs to the old place
+    this._lastInTown?.delete(ent);
+    this._lastInTown?.delete(this.activeMode);
     if (!Number.isFinite(heading)) heading = ent.heading;
     if (this.activeMode === 'kayak') {
       // in the Argo Cascades' channel, shallower than the river, it stays where it was put and faces as it was asked
@@ -2029,21 +2032,14 @@ class ThirdPersonControllerManager {
       p.position.copy(this.entities[p.riding].position);
       p.speed = 0;
     } else {
-      // Keep the sidewalk pedestrian walking naturally on the ground when not actively controlled
+      // The walker waits where they were left, so switching back finds them there
       const p = this.entities.person;
-      const walkSpeed = 1.48;
       p.prevX = p.position.x;
       p.prevZ = p.position.z;
-      p.speed = walkSpeed;
+      p.speed = 0;
       p.jumping = false;
       p.jumpPrep = 0;
       p.verticalVel = 0;
-      p.position.x += Math.sin(p.heading) * walkSpeed * dt;
-      p.position.z += Math.cos(p.heading) * walkSpeed * dt;
-      this.resolveHorizontalCollision(p.position, 0.48, null, p);
-      p.position.y = this.getGroundHeight(p.position.x, p.position.z, 'person');
-      if (p.position.z < -340) p.heading = 0;
-      else if (p.position.z > 340) p.heading = Math.PI;
       p.position.y = this.getGroundHeight(p.position.x, p.position.z, 'person');
     }
 

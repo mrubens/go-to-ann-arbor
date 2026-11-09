@@ -610,6 +610,7 @@ async function initApp() {
         controllerManager.setMode(mode);
         controllerManager.teleportActiveTo(p.x, p.z, p.heading, p.y);
       }
+      if (saved.foot && [saved.foot.x, saved.foot.y, saved.foot.z, saved.foot.heading].every(Number.isFinite)) controllerManager.footSpot = { ...saved.foot };
       controllerManager.setMode(Object.hasOwn(controllerManager.entities, saved.activeMode) ? saved.activeMode : 'car');
       // the car the player drives (one taken from a parking spot or traffic), and whether they're in something
       if (saved.carLook && !isOwnLook(saved.carLook)) controllerManager.restyleCar(saved.carLook);
@@ -633,6 +634,12 @@ async function initApp() {
     }
   } catch { /* Missing or unavailable storage does not prevent playing. */ }
 
+  // where the walker last stood on foot (kept while they ride, since the walker then follows the vehicle)
+  function rememberFoot() {
+    const p = controllerManager.entities.person;
+    if (controllerManager.activeMode !== 'person' || p.sitting || p.fallen || p.chute) return;
+    controllerManager.footSpot = { x: p.position.x, y: p.position.y, z: p.position.z, heading: p.heading };
+  }
   function savePlayerState() {
     try {
       // one sitting down is kept where they stood to sit
@@ -642,7 +649,7 @@ async function initApp() {
         x: entity.position.x, y: entity.position.y, z: entity.position.z, heading: entity.heading
       }]));
       const leftEmpty = Object.keys(controllerManager.entities).filter((mode) => controllerManager.entities[mode].leftEmpty);
-      save('player', { version: 2, activeMode: controllerManager.activeMode, entities, carLook: controllerManager.carLook, leftEmpty,
+      save('player', { version: 2, activeMode: controllerManager.activeMode, entities, foot: controllerManager.footSpot || null, carLook: controllerManager.carLook, leftEmpty,
         boat: controllerManager.entities.kayak.boat, liveryTaken: liveryPart.made.taken, docksTaken: docksPart.made.taken });
       save('parkedSwaps', parkedCars.history);
     } catch { /* Storage may be disabled or full. */ }
@@ -884,6 +891,9 @@ async function initApp() {
   const elAltitude = document.getElementById('hud-altitude');
   const elGear = document.getElementById('hud-gear');
   const elRpm = document.getElementById('hud-rpm');
+  const elRpmMeter = document.getElementById('hud-rpm-meter');
+  const elRaceRpm = document.getElementById('race-rpm');
+  const elRevFill = document.getElementById('race-rev-fill');
   const elLocation = document.getElementById('hud-location');
   const elControlsHint = document.getElementById('hud-controls-hint');
   const gamepadControls = new GamepadControls(controllerManager, cameraSystem, {
@@ -947,17 +957,59 @@ async function initApp() {
     shiftGear(hudBox, speedMps, hud.load, hud.clock, hud.first, CAR_RATIOS);
     hud.first = false;
     const rpm = engineRPM(hudBox, speedMps, hud.load, CAR_RATIOS, 780);
-    const gear = speedMps < 0.5 ? 'N' : !forward ? 'R' : 'D' + (hudBox.gear + 1);
+    const gear = speedMps < 0.5 ? 'N' : !forward ? 'R' : String(hudBox.gear + 1);
     return { gear, rpm: Math.round(rpm / 50) * 50 };
   }
 
-  // The speedometer: the speed in large digits over a bar filled to its share of the mode's top speed
+  // The speedometer: a 270-degree analog dial whose scale fits the mode (a car's to 100, a walker's to 20)
+  const DIAL_SWEEP = 135;
   const dialScale = { max: 0 };
   function buildDial(mode, drive = null) {
-    // a car whose top speed is past the usual scale (the sports car, the performance EV) gets a bar that reaches it
-    dialScale.max = Math.max(topSpeedMph[mode] || 80, mode === 'car' && drive?.speed ? drive.speed * 2.237 : 0);
+    const g = document.getElementById('dial-ticks');
+    if (!g) return;
+    const top = Math.max(topSpeedMph[mode] || 80, mode === 'car' && drive?.speed ? drive.speed * 2.237 : 0);
+    const major = top <= 20 ? 5 : top <= 50 ? 10 : 20;
+    const max = Math.ceil(top / major) * major;
+    if (dialScale.max === max && g.childNodes.length) return;
+    dialScale.max = max;
+    const minor = major / 5;
+    const at = (deg, r) => [100 + r * Math.sin(deg * Math.PI / 180), 100 - r * Math.cos(deg * Math.PI / 180)];
+    let svg = '';
+    const redFrom = mode === 'car' || mode === 'helicopter' ? max * 0.85 : Infinity;
+    for (let v = 0; v <= max + 1e-6; v += minor) {
+      const isMajor = Math.abs(v / major - Math.round(v / major)) < 1e-6;
+      const deg = -DIAL_SWEEP + (v / max) * DIAL_SWEEP * 2;
+      const [x1, y1] = at(deg, 88);
+      const [x2, y2] = at(deg, isMajor ? 77 : 83);
+      const red = v >= redFrom;
+      svg += `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="${red ? '#ff4b3a' : isMajor ? '#f2f0ea' : 'rgba(242,240,234,0.5)'}" stroke-width="${isMajor ? 2.2 : 1}" stroke-linecap="round"/>`;
+      if (isMajor) {
+        const [tx, ty] = at(deg, 63);
+        svg += `<text x="${tx.toFixed(2)}" y="${(ty + 4).toFixed(2)}" text-anchor="middle" class="dial-num${red ? ' red' : ''}">${Math.round(v)}</text>`;
+      }
+    }
+    g.innerHTML = svg;
   }
 
+  // The tachometer's scale, drawn once: 0 to 8 thousand rpm, the last 1.5 in red
+  (function buildTach() {
+    const g = document.getElementById('tach-ticks');
+    if (!g) return;
+    const at = (deg, r) => [100 + r * Math.sin(deg * Math.PI / 180), 100 - r * Math.cos(deg * Math.PI / 180)];
+    let svg = '';
+    for (let v = 0; v <= 8.001; v += 0.5) {
+      const major = Math.abs(v - Math.round(v)) < 1e-6;
+      const deg = -DIAL_SWEEP + (v / 8) * DIAL_SWEEP * 2;
+      const red = v >= 6.5;
+      const [x1, y1] = at(deg, 88), [x2, y2] = at(deg, major ? 77 : 83);
+      svg += `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="${red ? '#ff4b3a' : major ? '#f2f0ea' : 'rgba(242,240,234,0.5)'}" stroke-width="${major ? 2.2 : 1}" stroke-linecap="round"/>`;
+      if (major) {
+        const [tx, ty] = at(deg, 63);
+        svg += `<text x="${tx.toFixed(2)}" y="${(ty + 4).toFixed(2)}" text-anchor="middle" class="dial-num${red ? ' red' : ''}">${Math.round(v)}</text>`;
+      }
+    }
+    g.innerHTML = svg;
+  })();
   // Keys in the city's own keycaps; a controller's buttons as the runtime draws them for that controller.
   function renderControlHints(mode, on = input()) {
     if (!elControlsHint) return;
@@ -983,6 +1035,8 @@ async function initApp() {
       return item;
     });
     elControlsHint.replaceChildren(...items);
+    const helpMode = document.getElementById('help-mode');
+    if (helpMode) helpMode.textContent = controllerManager.getActiveEntity().label;
   }
 
   // The keys named on the HUD's buttons (data-key, a key's code) and, with a controller, the button that does the same
@@ -1029,16 +1083,28 @@ async function initApp() {
     }
   }
 
-  // 1 to 5 (the mode buttons, the bumpers): another way of getting around starts at its own view of the city, unless
-  // it's already close by (the car the player just stepped out of), when the player simply takes it
+  // 1 to 5 (the mode buttons, the bumpers): switches to another way of getting around, which is where it was last left
+  // (the scenic start only on a first play or after Reset). The person on foot returns to their own remembered spot (footSpot).
   function travelBy(mode) {
     const cm = controllerManager;
     if (mode === 'car' && cm.entities.car.machine === 'stairtruck' && !airportPart.made.stairsHeld) retakeStairs();
     if (mode === cm.activeMode || !cm.entities[mode]) { selectMode(mode); return; }
-    const here = cm.getActiveEntity().position, there = cm.entities[mode].position;
-    const close = Math.hypot(there.x - here.x, there.z - here.z) < 40;
+    // Each way of getting around keeps its own place: switching brings the player back to where that one was left
+    // (the scenic starts are only for a first play, Reset and the Teleport menu). On foot they stand where the walker was
+    // left, not beside the vehicle they were in.
+    if (mode !== 'person') cm.entities[mode].leftEmpty = false;
+    const wasOn = cm.activeMode;
     selectMode(mode);
-    if (!close) goToStart(mode);
+    // on foot again: back where the walker was last on foot, not beside the vehicle they rode (setMode put them there)
+    if (mode === 'person' && wasOn !== 'person' && cm.footSpot) {
+      const f = cm.footSpot;
+      cm.teleportActiveTo(f.x, f.z, f.heading, f.y);
+    }
+    touchControls.reset();
+    gamepadControls.reset();
+    cameraSystem.resetForTeleport();
+    selectCamera('chase', true);
+    savePlayerState();
   }
   // Reset game: every way of getting around back at its own start, the player in their own car on Main St, the time
   // back to now and what earlier plays left behind (parked cars swapped) forgotten
@@ -1066,6 +1132,8 @@ async function initApp() {
       if (mode === 'kayak') { e.heading = s.heading; e.mesh.rotation.y = s.heading; }
       if (mode === 'car') cm.stopCar(e);
     }
+    // the walker's own remembered spot goes back to the walking start too, or Walk after a reset returns to the old place
+    { const s = SCENIC_STARTS.person; cm.footSpot = { x: s.x, y: groundHeight(s.x, s.z), z: s.z, heading: s.heading }; }
     p.riding = 'car';
     selectMode('car');
     parkedCars.history.length = 0;
@@ -1504,6 +1572,8 @@ async function initApp() {
 
   function teleportTo(x, z, heading = Math.PI, lookUp) {
     const destination = controllerManager.teleportActiveTo(x, z, heading);
+    rememberFoot();
+    savePlayerState();
     log(`[teleport] asked ${x.toFixed(1)}, ${z.toFixed(1)} → landed ${destination.x.toFixed(1)}, ${destination.z.toFixed(1)} as ${controllerManager.activeMode}`);
     touchControls.reset();
     gamepadControls.reset();
@@ -1604,6 +1674,9 @@ async function initApp() {
         break;
       case 'KeyV':
         cycleCamera(e.shiftKey ? -1 : 1);
+        break;
+      case 'Slash':
+        document.getElementById('help-popover')?.togglePopover();
         break;
       case 'KeyH':
         if (hudToggleBtn) hudToggleBtn.click();
@@ -2039,6 +2112,7 @@ async function initApp() {
       heardStrokes = kayak.strokes;
       if (controllerManager.activeMode === 'kayak') audioSystem.cue('splash', kayak.position, 0.8);
     }
+    rememberFoot();
     if (!document.hidden && now >= nextPlayerSave) {
       savePlayerState();
       nextPlayerSave = now + 5000;
@@ -2124,11 +2198,11 @@ async function initApp() {
       // each half with what's near its own camera shown, the far chunks hidden from it (scene-culling.js)
       const cam2 = split.second.camera;
       split.view.render([
-        { scene, camera: cameraSystem.camera },
-        { scene, camera: cam2, before: () => { updateSceneCulling(cam2.position); moonPart.made.update(cam2); } }
+        { scene, camera: cameraSystem.camera, before: () => cameraSystem.applyCut() },
+        { scene, camera: cam2, before: () => { split.second.cs.applyCut(); updateSceneCulling(cam2.position); moonPart.made.update(cam2); } }
       ]);
       moonPart.made.update(cameraSystem.camera);
-    } else renderPipeline.render();
+    } else { cameraSystem.applyCut(); renderPipeline.render(); }
     gpuTime.end();
     mark('render');
     prof.n++;
@@ -2204,7 +2278,7 @@ async function initApp() {
       const mph = Math.round(mphExact);
       if (elSpeed && mph !== hud.shownMph) { hud.shownMph = mph; elSpeed.textContent = String(mph); }
       if (elSpeedMeter && dialScale.max) {
-        elSpeedMeter.style.transform = `scaleX(${Math.min(1, mphExact / dialScale.max)})`;
+        elSpeedMeter.style.transform = `rotate(${-DIAL_SWEEP + Math.min(1, mphExact / dialScale.max) * DIAL_SWEEP * 2}deg)`;
       }
       // the street's speed limit beside it, in the car or on the bike, looked up four times a second
       if (elLimit && hud.clock - (hud.limitAt || 0) >= 0.25) {
@@ -2221,12 +2295,17 @@ async function initApp() {
         }
         elLimit.classList.toggle('over', !!limit && mphExact > limit + 10);
       }
-      if (split.drawn) split.second.drawHud(topSpeedMph[split.second.cm.activeMode]);
+      if (split.drawn) split.second.drawHud();
       // the gear and revs are worked out ten times a second, which is the rate the engine sound reads them at
-      if (geared && elGear && hud.clock - hud.lastClock >= 0.1) {
+      if (dialMode === 'car' && elGear && hud.clock - hud.lastClock >= 0.1) {
         const read = gearReadout(Math.abs(ent.speed), ent.speed >= 0);
         if (read.gear !== hud.shownGear) { hud.shownGear = read.gear; elGear.textContent = read.gear; }
-        if (elRpm && read.rpm !== hud.shownRpm) { hud.shownRpm = read.rpm; elRpm.textContent = String(read.rpm); }
+        if (elRpm && read.rpm !== hud.shownRpm) {
+          hud.shownRpm = read.rpm; elRpm.textContent = (read.rpm / 1000).toFixed(1);
+          if (elRaceRpm) elRaceRpm.textContent = String(read.rpm);
+          if (elRevFill) elRevFill.style.transform = `scaleX(${Math.min(1, read.rpm / 8000)})`;
+          if (elRpmMeter) elRpmMeter.style.transform = `rotate(${-DIAL_SWEEP + Math.min(1, read.rpm / 8000) * DIAL_SWEEP * 2}deg)`;
+        }
       }
     }
     if (fpsTimer >= 0.25) {

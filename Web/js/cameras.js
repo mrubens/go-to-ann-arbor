@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { TIER } from './device-tier.js';
 import { groundHeight, stadiumGround, waterLevel, riverDepth } from './terrain.js';
 import { hot, log } from '../lamp-game.js';
+import { cityUniforms } from './tsl-materials.js';
 
 // Lamp: the camera systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so a
 // changed preset is put on the camera in use at once (the end of this file).
@@ -44,6 +45,7 @@ class CameraSystem {
   release() { systems.delete(this); }
 
   constructor(domElement, controllerManager, camera = CameraSystem.makeCamera()) {
+    this._cutOn = false; this._cutA = new THREE.Vector3(); this._cutB = new THREE.Vector3();
     systems.add(this);
     this.domElement = domElement;
     this.controllerManager = controllerManager;
@@ -166,6 +168,14 @@ class CameraSystem {
     this.lookUp = 0;
   }
 
+  // The tree cutaway (tsl-materials.js createTreeMaterial) is one set of uniforms, so each camera applies its own
+  // player and position just before its view is drawn; scenic views and the first-person view cut nothing
+  applyCut() {
+    const cut = cityUniforms.uCut;
+    if (this._cutOn) { cut.a.value.copy(this._cutA); cut.b.value.copy(this._cutB); cut.r.value = 1; }
+    else cut.r.value = 0;
+  }
+
   resetForTeleport() {
     // Arrive with a fresh chase view, without carrying a previous drive or gesture into the destination.
     this._clearPointers();
@@ -285,6 +295,7 @@ class CameraSystem {
   }
 
   update(dt, elapsed) {
+    this._cutOn = false; // set again below only by the chase view, so no other view or early exit keeps the cutaway
     const entity = this.controllerManager.getActiveEntity();
     const desiredPos = this._desiredPos;
     const desiredLook = this._desiredLook;
@@ -505,6 +516,13 @@ class CameraSystem {
         const bed = groundHeight(this.currentPos.x, this.currentPos.z) + 0.4;
         this.currentPos.y = Math.max(bed, Math.min(this.currentPos.y, level - 0.4));
         this.currentLookAt.y = Math.min(this.currentLookAt.y, level - 0.5);
+      }
+      // Trees never hide the rider: the camera keeps its distance (its final place, after the parking and water
+      // adjustments) and the tree material cuts away whatever lies in a tube between it and the player
+      if (this.activePresetId === 'chase' && entity.type !== 'helicopter' && !entity.chute) {
+        this._cutOn = true;
+        this._cutA.set(entity.position.x, entity.position.y + 1.1, entity.position.z);
+        this._cutB.copy(this.currentPos);
       }
     } else {
       this.followEntity = null;
