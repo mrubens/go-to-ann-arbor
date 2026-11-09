@@ -279,7 +279,7 @@ function createBikeRacks(group, data) {
   }
 
   log(`[bike racks] ${racks.length - kiosks.length / 3} racks of ${si} stands, ${kiosks.length / 3} e-bike docks by the Diag`);
-  return { update, nearest, take, count: racks.length };
+  return { update, nearest, take, count: racks.length, spots: racks };
 }
 
 async function buildBikeRacks(group) {

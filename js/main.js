@@ -63,6 +63,7 @@ import { probe, gpuTimer } from './gpu-probe.js';
 import { buildPools } from './pools.js';
 import { buildOutdoorSeating } from './outdoor-seating.js';
 import { buildBallDiamonds } from './ball-diamonds.js';
+import { buildFootballFields } from './football-fields.js';
 import { buildBleachers } from './bleachers.js';
 import { buildBoatDocks } from './boat-docks.js';
 import { buildSkatePark } from './skate-park.js';
@@ -292,6 +293,7 @@ async function initApp() {
   const seatingPart = await live.keep('outdoorSeating', () => cityPart((g) => buildOutdoorSeating(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/outdoor-seating.js', 'data/outdoor-seating.json'] });
   // the baseball and softball diamonds in the parks and at the schools (ball-diamonds.js)
   const diamondsPart = await live.keep('ballDiamonds', () => cityPart((g) => buildBallDiamonds(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/ball-diamonds.js', 'data/ball-diamonds.json'] });
+  const footballPart = await live.keep('footballFields', () => cityPart((g) => buildFootballFields(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/football-fields.js'] });
   // the bleachers by the fields and tracks (bleachers.js)
   const bleachersPart = await live.keep('bleachers', () => cityPart((g) => buildBleachers(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/bleachers.js', 'data/bleachers.json'] });
   // the docks and boat launches on the river and its ponds, with boats tied up (boat-docks.js)
@@ -525,7 +527,7 @@ async function initApp() {
   });
   // Lamp: Ann Arbor's animals, near the player only; never anyone's obstacle (animals.js)
   const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
-  const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
+  const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -549,7 +551,7 @@ async function initApp() {
   // river and the sky stay as they are
   // (only once there is snow: on a bare day the materials keep their shaders as they are)
   loadSnowCover().then((cover) => {
-    if (cover > 0) for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
+    if (cover > 0) for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
   });
   const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
   scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
@@ -1722,6 +1724,7 @@ async function initApp() {
     onTeleport: teleportTo
   });
   // the road work on the maps: the middle of each closed block
+  // bike racks and bus stops, as small dots once zoomed in (city-map.js drawSpots)
   mapSystem.workSites = (roadWork?.closures || []).map((e) => ({ x: e.sx + e.dx * e.len / 2, z: e.sz + e.dz * e.len / 2 }));
 
   teleportButtons.forEach((btn) => {
