@@ -61,11 +61,12 @@ function createBleachers(group, data) {
   for (let i = 0; i + 4 < B.length; i += 5) {
     const [cx, cz, h, length, depth] = B.slice(i, i + 5);
     const fx = Math.sin(h), fz = Math.cos(h), ax = Math.cos(h), az = -Math.sin(h);
-    const rows = Math.max(2, Math.min(10, Math.round(depth / 0.62)));
+    const rows = Math.max(2, Math.min(depth >= 9 ? 16 : 10, Math.round(depth / 0.62)));
     const step = depth / rows;
-    // level on the lowest ground under it
+    // level on the lowest ground along its front, the side the field is on: a dip or a wall's foot behind it would
+    // sink the whole stand into the ground (its back legs run down into ground that falls away instead)
     let g = Infinity;
-    for (const [u, v] of [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5], [0, 0]]) g = Math.min(g, groundHeight(cx + ax * u * length + fx * v * depth, cz + az * u * length + fz * v * depth));
+    for (const u of [-0.5, -0.25, 0, 0.25, 0.5]) g = Math.min(g, groundHeight(cx + ax * u * length + fx * 0.5 * depth, cz + az * u * length + fz * 0.5 * depth));
     g += 0.1;
     const P = (u, v) => [cx + ax * u + fx * v, cz + az * u + fz * v];
     for (let r = 0; r < rows; r++) {

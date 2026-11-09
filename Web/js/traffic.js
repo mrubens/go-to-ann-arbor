@@ -1738,8 +1738,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   let scheduleTimer = 0;
   const tripBus = new Map();
   const tripsDone = new Set();
+  // every bus stop, TheRide's and the U's, for the map (city-map.js)
+  const busStops = [];
   loadTheRide().then((data) => {
     if (!data) return;
+    for (const [, x, z] of data.stops) busStops.push({ x, z });
     const sched = createSchedule(data, network);
     sched.um = false;
     schedules.push(sched);
@@ -1752,6 +1755,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const sched = createSchedule(data, network);
     sched.um = true;
     schedules.push(sched);
+    for (const [, x, z] of data.stops) busStops.push({ x, z });
     const signs = buildStopSigns(data.stops, network);
     group.add(signs.poles, signs.plates);
   });
@@ -2415,6 +2419,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   }
 
   return {
+    busStops,
+    // every bus out on its route right now, TheRide's and the U's, for the map
     group,
     update,
     setCollisionListener,

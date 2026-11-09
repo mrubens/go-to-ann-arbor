@@ -435,6 +435,19 @@ More from the generator, each in `GEO`:
   (cameras.js), a slow circle round it; for a tree a plain caption (`.champion-card`, no box) hangs over the crown with
   its name, Latin name and size. Escape/B, a driving key or the stick ends it. Champion trees are `fixed` (can't be
   knocked down); knocked carts can be hit again once they land.
+  The big map also shows every bike lane and path (the radar only while cycling). Teleporting clears the GPS waypoint.
+  Buses, bus stops and bike racks on the map were tried and turned down (too cluttered), and so were the high school
+  football fields (they're only in the world). Zoomed far out (under 0.22 px/m) markers are small dots.
+- Huron's home grandstand: the city survey draws it as a 9 m building; buildings.js leaves out any survey building on
+  `GRANDSTANDS` (football-fields.js) and bleachers.json has a 35 x 9.5 m stand there; the low building behind it is left out too (stands 9 m+ deep get up to 16
+  rows), driven up its front and jumped off like any stand.
+- Pioneer's Hollway Field: the survey's two grandstand buildings are left out the same way (`GRANDSTANDS`), with a
+  64 m home stand on the west side and a 53 m stand on the east in bleachers.json. Pioneer's separate running track
+  about 130 m west of the field is a `trackOnly` entry in football-fields.js: red lanes with grass inside, no field.
+- High school football fields (`football-fields.js`, data inline from OSM's american_football pitches): Pioneer's
+  Hollway Field, Huron's (with its six-lane track, fitted to OSM's athletics outline) and Skyline's; regulation turf in
+  5-yard stripes, chalk lines, hash marks and yellow gooseneck goalposts. No numbers or end zone paint (unvouched).
+  No map pins (turned down).
   A flying cart, can or bench (knockdowns.js `flying`) knocks down walkers and throws riders off it reaches (main.js
   after `knockdowns.update`, through traffic.js `knockBy` to pedestrian-system.js `knockBy` and `knockRiders`). Humps: one chevron per slope per lane pointing the way it drives
   (">>"), the right-hand lane only, the middle on one-ways; no posts. One-way signs stand off the pavement. Live bike counts were looked at and aren't reachable (the counters' site has no open feed).

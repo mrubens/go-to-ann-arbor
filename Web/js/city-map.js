@@ -425,6 +425,23 @@ class MapView {
 
 // Player heading arrow at the (already rotated) origin: white, on a dark halo
 // a road work sign: a small orange diamond with a dark rim and a dark bar across it, like the "ROAD WORK" diamonds
+
+// Lamp: how big the big map's markers are drawn at a zoom (s pixels a metre): full size zoomed in to the streets,
+// down to a little over half zoomed out over the town, so they don't crowd it
+const iconScale = (s) => Math.max(0.55, Math.min(1, 0.5 + s * 0.8));
+// zoomed out over the whole town (under this many pixels a metre) every marker is only a small dot in its color
+const DOTS_UNDER = 0.22;
+function drawDot(ctx, x, y, color, r = 2.6) {
+  ctx.fillStyle = MAP.halo;
+  ctx.beginPath();
+  ctx.arc(x, y, r + 1.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 function drawWorkSign(ctx, x, y, r) {
   ctx.beginPath();
   ctx.moveTo(x, y - r - 1.5); ctx.lineTo(x + r + 1.5, y); ctx.lineTo(x, y + r + 1.5); ctx.lineTo(x - r - 1.5, y); ctx.closePath();
@@ -1107,9 +1124,9 @@ class CityMapSystem {
       L.mainRoads.each(v, (p) => ctx.stroke(p));
     }
 
-    // 7b. On the bike: the protected and buffered lanes (solid, stronger), bike lanes (solid), shared lanes and signed
-    // routes (dashed) and the paved paths (thin)
-    if (this.controllerManager?.activeMode === 'cyclist') {
+    // 7b. On the big map always, on the radar while on the bike: the protected and buffered lanes (solid, stronger),
+    // bike lanes (solid), shared lanes and signed routes (dashed) and the paved paths (thin)
+    if (!isMinimap || this.controllerManager?.activeMode === 'cyclist') {
       ctx.strokeStyle = MAP.bikePath;
       ctx.lineWidth = Math.max(px(1.4), 2.5);
       L.bikePaths.each(v, (p) => ctx.stroke(p));
@@ -1427,10 +1444,11 @@ class CityMapSystem {
       drawWaypoint(ctx, wx, wy, 7);
     }
 
+
     // Road work: an orange diamond at each closed block
     for (const site of this.workSites || []) {
       const sx = toX(site.x), sy = toY(site.z);
-      if (Math.abs(sx) < v.w * 0.5 && Math.abs(sy) < v.h * 0.5) drawWorkSign(ctx, sx, sy, 7);
+      if (Math.abs(sx) < v.w * 0.5 && Math.abs(sy) < v.h * 0.5) (v.s < DOTS_UNDER ? drawDot(ctx, sx, sy, '#ff8a1f', 2.2) : drawWorkSign(ctx, sx, sy, 7 * iconScale(v.s)));
     }
 
     // Live Player Blip & Heading Arrow, with a slow pulse to find it at a glance
@@ -1610,9 +1628,11 @@ class CityMapSystem {
 
     ctx.font = `700 11px ${FONT}`;
     ctx.textAlign = 'left';
+    const ik = iconScale(s);
     for (const { lm, lx, ly, showLabel } of pins) {
-      const r = lm.art ? 0.7 : 1;
-      if (lm.art === 'tree') drawTreeSign(ctx, lx, ly, 7);
+      const r = (lm.art ? 0.7 : 1) * ik;
+      if (s < DOTS_UNDER) drawDot(ctx, lx, ly, lm.art === 'tree' ? '#43d17f' : ART_PIN[lm.art] || '#ffffff', lm.art ? 2.2 : 3);
+      else if (lm.art === 'tree') drawTreeSign(ctx, lx, ly, 7 * ik);
       else {
         ctx.fillStyle = MAP.halo;
         ctx.beginPath();
@@ -1624,11 +1644,12 @@ class CityMapSystem {
         ctx.fill();
       }
       if (showLabel) {
+        const tx = lx + 3 + 6 * ik;
         ctx.lineWidth = 3;
         ctx.strokeStyle = MAP.halo;
-        ctx.strokeText(lm.short, lx + 9, ly + 4);
+        ctx.strokeText(lm.short, tx, ly + 4);
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(lm.short, lx + 9, ly + 4);
+        ctx.fillText(lm.short, tx, ly + 4);
       }
     }
 

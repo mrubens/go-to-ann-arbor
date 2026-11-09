@@ -363,6 +363,29 @@ function createSchedule(data, network) {
 function buildStopSigns(stops, network) {
   const { edges } = network;
   const placed = [];
+  // every road by 50 m cell, each in every cell within its width (and 2 m) of it, to tell whether a spot is on one
+  const CELL = 50, grid = new Map(), cellKey = (ix, iz) => ix * 100003 + iz;
+  for (const e of edges) {
+    const x1 = e.sx + e.dx * e.len, z1 = e.sz + e.dz * e.len, m = (e.half || 0) + 2;
+    for (let ix = Math.floor((Math.min(e.sx, x1) - m) / CELL); ix <= Math.floor((Math.max(e.sx, x1) + m) / CELL); ix++) {
+      for (let iz = Math.floor((Math.min(e.sz, z1) - m) / CELL); iz <= Math.floor((Math.max(e.sz, z1) + m) / CELL); iz++) {
+        const k = cellKey(ix, iz);
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(e);
+      }
+    }
+  }
+  // on a road's pavement, its ends rounded so the corners of a crossing count too
+  const onRoad = (px, pz) => {
+    for (const e of grid.get(cellKey(Math.floor(px / CELL), Math.floor(pz / CELL))) || []) {
+      const qx = px - e.sx, qz = pz - e.sz;
+      const t = Math.max(0, Math.min(e.len, qx * e.dx + qz * e.dz));
+      if (Math.hypot(qx - e.dx * t, qz - e.dz * t) < (e.half || 0) + 0.4) return true;
+    }
+    return false;
+  };
+  const SLIDES = [0];
+  for (let d = 2; d <= 30; d += 2) SLIDES.push(-d, d);
   for (const [, x, z] of stops) {
     let best = null, bd = Infinity;
     for (const e of edges) {
@@ -374,14 +397,29 @@ function buildStopSigns(stops, network) {
       if (lat < bd) { bd = lat; best = { e, s }; }
     }
     if (best) {
+      // Lamp: beside its own road, slid along the curb (nearest first) until the spot is on no road at all: a stop
+      // mapped by a corner would otherwise stand in the cross street. Left out when no spot nearby is clear.
       const { e, s } = best;
-      const off = e.half + 0.7;
-      placed.push({ x: e.sx + e.dx * s + e.rx * off, z: e.sz + e.dz * s + e.rz * off, yaw: Math.atan2(e.dx, e.dz) });
-    } else {
+      let done = false;
+      for (const back of [0.7, 1.6, 2.8]) {
+        const off = e.half + back;
+        for (const step of SLIDES) {
+          const t = s + step;
+          if (t < 0 || t > e.len) continue;
+          const px = e.sx + e.dx * t + e.rx * off, pz = e.sz + e.dz * t + e.rz * off;
+          if (onRoad(px, pz)) continue;
+          placed.push({ x: px, z: pz, yaw: Math.atan2(e.dx, e.dz) });
+          done = true;
+          break;
+        }
+        if (done) break;
+      }
+    } else if (!onRoad(x, z)) {
       placed.push({ x, z, yaw: 0 });
     }
   }
 
+  log(`[bus] ${placed.length} of ${stops.length} stop signs placed off the road`);
   const c = document.createElement('canvas');
   c.width = 128;
   c.height = 192;

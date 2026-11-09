@@ -67,6 +67,7 @@ import { buildGolf, buildTrails } from './golf.js';
 import { buildRiver } from './river.js';
 import { riverDepth, drawOver, streamFromSquares, riverGaps } from './terrain.js';
 import { LIFT } from './ground-lifts.js';
+import { nearFootballField } from './football-fields.js';
 import { cascadeGaps } from './cascades.js';
 
 // Live construction data consumed by the building and street-detail builders after buildCityGrid().
@@ -1818,7 +1819,12 @@ function buildCityGrid(scene, yards = null) {
       const dg = flatGeo(r, LAWN_Y + 0.008);
       // Lamp: a vast web of walks (the plazas around Michigan Stadium, its gates and concourses) in one flat pale gray
       // read as a blank slab: it's laid in granite pavers, jointed and weathered, like the city's plazas
-      if (web && Math.abs(area) / 2 > 5000) { out.plaza.push(setPavingStyle(dg, 1)); continue; }
+      // Lamp: but the paving round a high school's football field and track is its asphalt apron, not granite pavers
+      let mx = 0, mz = 0;
+      for (const p of r[0]) { mx += p.x; mz += p.z; }
+      const stadium = web && nearFootballField(mx / r[0].length, mz / r[0].length);
+      if (web && !stadium && Math.abs(area) / 2 > 5000) { out.plaza.push(setPavingStyle(dg, 1)); continue; }
+      if (stadium) { out.blacktop.push(dg); continue; }
       (asphalt ? out.blacktop : out.concrete).push(dg);
     }
     // Curb cuts: where a driveway meets the street, a concrete ramp flaring down over the curb to the gutter
