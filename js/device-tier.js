@@ -4,7 +4,7 @@
 // buildings.js: `STREAM`), with the far trees, houses and street details cut, no shadows or glow, a smaller drawing and
 // fewer cars and people. A Mac with 16 GB or less ('light') streams the same way over a wider area and keeps the look.
 // `?tier=phone`, `?tier=light` or `?tier=full` in the page's address chooses one, to try it.
-import { log } from '../lamp-game.js';
+import { log, load } from '../lamp-game.js';
 // Lamp writes this beside its runtime in each copy of the game: on the Xbox it names the Xbox's controller
 import device from '../lamp-device.js';
 
@@ -19,6 +19,10 @@ const TIERS = {
   // Within 500 m, let go of 120 m beyond that (it crashed after a few minutes of driving keeping 300 m), the ground
   // within 35 cm, uploads spread over frames, 1056x594, a seventh of the cars, a tenth of the people
   phone: { name: 'phone', stream: 500, keepBeyond: 120, ground: 0.35, shadows: false, groundShade: true, mergeTrees: 60000, far: 9000, landmarkReach: 700, spreadLoads: true, warmReach: 400, shadowTile: 768, shadowFar: 110, bloom: false, antialias: false, scale: 0.55, traffic: 0.15, people: 0.1, farCut: 0.2, outskirts: true },
+  // a slower computer (a few cores, little memory, a laptop's built-in graphics, or one whose frames came slow last
+  // time): the city within 750 m, let go of 200 m beyond, no sun shadows (soft blobs on the ground instead) or glow,
+  // drawn at 1536x864, under half the cars and people, and less drawn far off
+  slow: { name: 'slow', stream: 750, keepBeyond: 200, ground: 0.2, shadows: false, groundShade: true, spreadLoads: true, warmReach: 600, landmarkReach: 1400, bloom: false, antialias: false, scale: 0.8, traffic: 0.4, people: 0.3, farCut: 0.45, outskirts: true },
   // the Xbox's web view: the phone's city, drawn nearer still (its GPU takes about a twentieth of what a Mac draws of
   // the whole city, and split screen draws it twice), the hills' ground cut to follow them within 35 cm rather than
   // 10 (terrain.js: the ground was most of what's drawn), drawn at the full 1920x1080 (the frame isn't held up by its size, and 1440x810 stretched up looked soft); no sun shadows
@@ -49,6 +53,18 @@ async function chooseTier() {
     memory = await window.LampNative.call('memory').catch(() => null);
     name = (typeof memory === 'number' && memory > 17) ? 'full' : 'light';
   }
+  // a slower computer gets the lighter city (a Mac's own memory or the browser's hints, its graphics, or frames that
+  // came slow last time: main.js saves `slowDevice`)
+  let why = null;
+  if (!TOUCH_DEVICE && !XBOX) {
+    const gpu = gpuName();
+    if (load('slowDevice')) why = 'frames came slow last time';
+    else if (typeof memory === 'number' && memory <= 8.5) why = `${Math.round(memory)} GB`;
+    else if (navigator.deviceMemory && navigator.deviceMemory <= 4) why = `${navigator.deviceMemory} GB`;
+    else if (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) why = `${navigator.hardwareConcurrency} cores`;
+    else if (/Intel|SwiftShader|llvmpipe|Software|Basic Render|Mali|Adreno|PowerVR/i.test(gpu)) why = gpu;
+    if (why) name = 'slow';
+  }
   const asked = new URLSearchParams(location.search).get('tier');
   if (TIERS[asked]) name = asked;
   Object.assign(TIER, TIERS[name]);
@@ -56,7 +72,19 @@ async function chooseTier() {
   if (FIREFOX && !asked) {
     Object.assign(TIER, { bloom: false, antialias: false, scale: Math.min(TIER.scale, 0.75), farCut: Math.min(TIER.farCut, 0.65) });
   }
-  log(`[tier] ${name}${memory ? ` (${Math.round(memory)} GB)` : ''}${TOUCH_DEVICE ? ', a touch device' : ''}${XBOX ? ', an Xbox' : ''}${FIREFOX ? ', firefox' : ''}`);
+  log(`[tier] ${name}${why ? ` (${why})` : ''}${memory ? ` (${Math.round(memory)} GB)` : ''}${TOUCH_DEVICE ? ', a touch device' : ''}${XBOX ? ', an Xbox' : ''}${FIREFOX ? ', firefox' : ''}`);
   return TIER;
+}
+// the graphics the browser draws with, from a throwaway context, or ''
+function gpuName() {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl');
+    if (!gl) return 'Software (no WebGL)';
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    // (an Apple GPU, Apple's own or one the browser names only as Apple, is never slow here)
+    return /Apple/i.test(name) ? '' : String(name || '');
+  } catch { return ''; }
 }
 await chooseTier();

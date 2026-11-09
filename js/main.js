@@ -1912,6 +1912,21 @@ async function initApp() {
     const rawDt = f.dt;
     const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
     elapsed += dt;
+    // a computer whose frames come slow (under 25 a second over a minute of play, once the city's in) starts
+    // lighter from then on (device-tier.js `slow`); a phone, an Xbox and the light city itself are left as they are
+    if (TIER.name === 'full' || TIER.name === 'light') {
+      const w = (globalThis.__slowWatch ||= { t: 0, n: 0, told: false });
+      if (elapsed > 45 && rawDt < 0.5 && !w.told) {
+        w.t += rawDt; w.n++;
+        if (w.t > 30) {
+          const fps = w.n / w.t;
+          // (two half-minutes running, so a burst of building after a teleport doesn't count)
+          w.slow = fps < 25 ? (w.slow || 0) + 1 : 0;
+          if (w.slow >= 2) { w.told = true; save('slowDevice', true); log(`[tier] ${fps.toFixed(0)} frames a second: lighter from the next start`); }
+          w.t = 0; w.n = 0;
+        }
+      }
+    }
     tickNotice(dt);
     knockdowns.update(dt);
     hydrantSpray.update(dt, cameraSystem.camera);
