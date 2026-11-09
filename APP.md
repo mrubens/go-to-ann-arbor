@@ -421,6 +421,23 @@ More from the generator, each in `GEO`:
   from the curb onto the street beside it into the wheel path, bigger the longer it's been open; one instanced patch
   of broken asphalt whose normals lean in. A wheel through one jolts the car or bike (`jolt`, after `carVertical` in
   controllers.js) with rumble and a thud (`onPothole` in main.js).
+- Speed humps and tables (`speed-humps.js`, `data/speed-humps.json`), curb carts (`curb-carts.js`,
+  `data/collection-days.json`) and champion trees (`champion-trees.js`), all written by
+  `Assets/Tools/build-humps-carts-champions.py` from the City's Traffic Calming, Collection Routes and Champion Trees
+  data. Humps: placed by each built project's count, laid curb to curb; an axle crossing one jolts the car, and a front
+  axle over `HUMP_LAUNCH` (11 m/s) launches it (controllers.js, after the pothole block). Carts: on today's pickup-day
+  zone (Detroit weekday), trash + recycling (+ compost Apr–Dec 15 for ~35%) at the curb of each single/two-family
+  address; knockable as `cart` (knockdowns.js). Champion trees: real height and crown spread (trees.js scales by
+  `spread`), added in street-details.js replacing street trees beside them, green tree badges on the minimap and the big map at
+  every zoom (LANDMARKS `art: 'tree'`, `drawTreeSign` in city-map.js); within 40 m of one the place label names it with
+  "T to view" (main.js `updateChampion`; the found set kept with `save('championFound')`); every landmark's place label
+  has the same hint (`viewLandmark`, sized by `VIEW_SIZE`). T or the pad's d-pad up starts `cameraSystem.startFlyover`
+  (cameras.js), a slow circle round it; for a tree a plain caption (`.champion-card`, no box) hangs over the crown with
+  its name, Latin name and size. Escape/B, a driving key or the stick ends it. Champion trees are `fixed` (can't be
+  knocked down); knocked carts can be hit again once they land.
+  A flying cart, can or bench (knockdowns.js `flying`) knocks down walkers and throws riders off it reaches (main.js
+  after `knockdowns.update`, through traffic.js `knockBy` to pedestrian-system.js `knockBy` and `knockRiders`). Humps: one chevron per slope per lane pointing the way it drives
+  (">>"), the right-hand lane only, the middle on one-ways; no posts. One-way signs stand off the pavement. Live bike counts were looked at and aren't reachable (the counters' site has no open feed).
 - Kayaks on the banks (`kayak-launches.js`): two or three pulled up on the grass by the river at each park it runs
   through (Argo, Bandemer, Riverside, Island Park, Gallup, the Arb...); walking up to one and getting in (the car key)
   puts the player's kayak in the water there facing downstream (`choice.beach` in main.js, `enterOrExit` in

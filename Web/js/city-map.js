@@ -108,7 +108,8 @@ const MAP = {
 // Landmarks modelled by landmarks.js on their real OpenStreetMap lots (outlined in amber)
 const MODELLED_LANDMARKS = ['Michigan Stadium'];
 // the murals' and sculptures' pins (art-places.js), smaller than the big landmarks' white ones
-const ART_PIN = { mural: '#ff8fc7', sculpture: '#ffcb05' };
+// and the champion trees' (champion-trees.js) in leaf green
+const ART_PIN = { mural: '#ff8fc7', sculpture: '#ffcb05', tree: '#6fdc6a' };
 
 // Town (0), waterway (1) & neighborhood (2) names at their real places (world metres)
 const AREA_LABELS = [
@@ -440,6 +441,29 @@ function drawWorkSign(ctx, x, y, r) {
   ctx.stroke();
   ctx.fillStyle = '#1b1b1c';
   ctx.fillRect(x - r * 0.38, y - r * 0.12, r * 0.76, r * 0.24);
+}
+
+// a champion tree: a leafy tree, a round crown of three puffs over a trunk, dark-rimmed so it reads on any ground
+function drawTreeSign(ctx, x, y, r) {
+  const puffs = [[-0.42, -0.1, 0.5], [0.42, -0.1, 0.5], [0, -0.48, 0.58], [0, 0.02, 0.5]];
+  const trunk = () => { ctx.beginPath(); ctx.rect(x - r * 0.16, y + r * 0.2, r * 0.32, r * 0.85); };
+  const crown = (grow) => {
+    ctx.beginPath();
+    for (const [dx, dy, s] of puffs) { ctx.moveTo(x + dx * r + s * r + grow, y + dy * r); ctx.arc(x + dx * r, y + dy * r, s * r + grow, 0, Math.PI * 2); }
+  };
+  ctx.fillStyle = MAP.halo;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = MAP.halo;
+  trunk(); ctx.fill(); ctx.stroke();
+  crown(1.5); ctx.fill();
+  ctx.fillStyle = '#6b4a2b';
+  trunk(); ctx.fill();
+  ctx.fillStyle = '#3fae4a';
+  crown(0); ctx.fill();
+  // a lighter puff top left, as sun on the leaves
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+  ctx.beginPath(); ctx.arc(x - r * 0.15, y - r * 0.62, r * 0.26, 0, Math.PI * 2); ctx.fill();
 }
 
 function drawPlayerArrow(ctx, tipY, halfWidth, tailY) {
@@ -792,10 +816,10 @@ class CityMapSystem {
     this.renderFullMap();
   }
 
-  // Teleports to a point on the full map and routes the GPS there
+  // Teleports to a point on the full map, clearing any GPS route (you're there)
   teleportAt(mx, my, w, h) {
     const wPos = this.clampToTown(this.screenToWorld(mx, my, w, h));
-    this.waypoint = { x: wPos.x, z: wPos.z, name: getLocationLabel(wPos.x, wPos.z) };
+    this.waypoint = null;
     if (this.onTeleport) this.onTeleport(wPos.x, wPos.z);
     this.renderFullMap();
   }
@@ -1309,6 +1333,7 @@ class CityMapSystem {
       const lx = toX(lm.x);
       const ly = toY(lm.z);
       if (Math.abs(lx) < w * 0.48 && Math.abs(ly) < h * 0.48) {
+        if (lm.art === 'tree') { drawTreeSign(ctx, lx, ly, 5); continue; }
         const r = lm.art ? 0.7 : 1;
         ctx.fillStyle = MAP.halo;
         ctx.beginPath();
@@ -1533,14 +1558,15 @@ class CityMapSystem {
     const placed = [];
     const pins = [];
     // the big landmarks first, then the murals and sculptures, whose names show only once zoomed in
-    const ordered = [...LANDMARKS.filter((l) => !l.art), ...(s >= 0.6 ? LANDMARKS.filter((l) => l.art) : [])];
+    // (the champion trees' badges show at every zoom, their names only zoomed in)
+    const ordered = [...LANDMARKS.filter((l) => !l.art), ...LANDMARKS.filter((l) => l.art && (s >= 0.6 || l.art === 'tree'))];
     for (const lm of ordered) {
       const lx = toX(lm.x);
       const ly = toY(lm.z);
       if (Math.abs(lx) > w * 0.48 || Math.abs(ly) > h * 0.48) continue;
       const labelW = this.textWidth(ctx, lm.short) + 6;
       const box = [lx + 6, ly - 8, lx + 8 + labelW, ly + 7];
-      const showLabel = !overlaps(placed, box);
+      const showLabel = (s >= 0.6 || !lm.art) && !overlaps(placed, box);
       placed.push([lx - 6, ly - 6, lx + 6, ly + 6]);
       if (showLabel) placed.push(box);
       pins.push({ lm, lx, ly, showLabel });
@@ -1586,14 +1612,17 @@ class CityMapSystem {
     ctx.textAlign = 'left';
     for (const { lm, lx, ly, showLabel } of pins) {
       const r = lm.art ? 0.7 : 1;
-      ctx.fillStyle = MAP.halo;
-      ctx.beginPath();
-      ctx.arc(lx, ly, 6.5 * r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = ART_PIN[lm.art] || '#ffffff';
-      ctx.beginPath();
-      ctx.arc(lx, ly, 4.2 * r, 0, Math.PI * 2);
-      ctx.fill();
+      if (lm.art === 'tree') drawTreeSign(ctx, lx, ly, 7);
+      else {
+        ctx.fillStyle = MAP.halo;
+        ctx.beginPath();
+        ctx.arc(lx, ly, 6.5 * r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = ART_PIN[lm.art] || '#ffffff';
+        ctx.beginPath();
+        ctx.arc(lx, ly, 4.2 * r, 0, Math.PI * 2);
+        ctx.fill();
+      }
       if (showLabel) {
         ctx.lineWidth = 3;
         ctx.strokeStyle = MAP.halo;

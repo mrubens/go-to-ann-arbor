@@ -269,6 +269,43 @@ class CameraSystem {
     return true;
   }
 
+  // A slow circling flyover around a point (a champion tree, main.js): `height` is how tall it is and `spread` how wide,
+  // so the circle is wide enough to see all of it, a little above its middle, looking at it. Swoops in from where the
+  // camera is; endFlyover() glides back to the view in use.
+  startFlyover(x, z, height, spread) {
+    const g = groundHeight(x, z);
+    this.flyover = {
+      x, z, g, height,
+      radius: Math.max(16, spread * 0.85, height * 0.95),
+      angle: Math.atan2(this.currentPos.x - x, this.currentPos.z - z),
+      t: 0
+    };
+    log(`[camera] flyover at ${Math.round(x)}, ${Math.round(z)}`);
+  }
+  endFlyover() {
+    if (!this.flyover) return;
+    this.flyover = null;
+    this.followEntity = null; // the follow view re-anchors from where the flyover left it and glides back
+  }
+  updateFlyover(dt) {
+    const f = this.flyover;
+    if (!f) return false;
+    f.t += dt;
+    f.angle += dt * 0.22;
+    // rises and falls a little as it goes round
+    const alt = f.g + f.height * (0.75 + 0.18 * Math.sin(f.t * 0.3)) + 4;
+    const r = f.radius * (1 + 0.08 * Math.sin(f.t * 0.17));
+    const px = f.x + Math.sin(f.angle) * r, pz = f.z + Math.cos(f.angle) * r;
+    this._desiredPos.set(px, Math.max(alt, groundHeight(px, pz) + 3), pz);
+    this._desiredLook.set(f.x, f.g + f.height * 0.5, f.z);
+    const k = 1 - Math.exp(-dt * (f.t < 2.5 ? 1.6 : 6));
+    this.currentPos.lerp(this._desiredPos, k);
+    this.currentLookAt.lerp(this._desiredLook, k);
+    this.camera.position.copy(this.currentPos);
+    this.camera.lookAt(this.currentLookAt);
+    return true;
+  }
+
   endJumpCam() {
     this.jumpCam = null;
     this.followEntity = null; // the follow view re-anchors from the jump camera and glides back
@@ -311,6 +348,7 @@ class CameraSystem {
     const totalYaw = entity.heading + this.orbitYawOffset;
 
     if (this.updateJumpCam(entity, dt)) return;
+    if (this.updateFlyover(dt)) return;
 
     switch (this.activePresetId) {
       case 'chase': {
