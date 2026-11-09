@@ -108,7 +108,7 @@ the city's inventory, traffic and people; Michigan Stadium ("the Big House") mod
   - `main.js`: start-up, `QUALITY` (what's drawn), the HUD, keys, and `frame(f)`, which Lamp's runtime calls about 60
     times a second (`game({ renderer, init, frame, touch: false, keyboard: false, snapshot })`: the city reads its own
     keys and draws its own touch controls; a controller comes as the first pad; after a change of code `init` starts
-    the city where `snapshot()` left it, full map and hidden HUD included). Lamp draws it at 1920x1080 and fits that to the window.
+    the city where `snapshot()` left it, full map and hidden HUD included). Drawn at the window's own shape (below, "Window shape"); the Xbox keeps Lamp's fixed 1920x1080 stage.
   - The animals (built in code, no files): `animals.js` runs them all near the view only. Squirrels (gray, fox-red,
     a few black) live on the city's tree trunks (the knock-down colliders) on the Diag, campus lawns, parks and
     neighborhood yards: forage, hop in bursts, sit up, flick tails, chase round trunks, come near someone standing
@@ -444,6 +444,8 @@ More from the generator, each in `GEO`:
 - Pioneer's Hollway Field: the survey's two grandstand buildings are left out the same way (`GRANDSTANDS`), with a
   64 m home stand on the west side and a 53 m stand on the east in bleachers.json. Pioneer's separate running track
   about 130 m west of the field is a `trackOnly` entry in football-fields.js: red lanes with grass inside, no field.
+- Skyline's football field: the same, its home stand (62 x 13 m) on the west side and the visitors' (42 x 10.5 m) on
+  the east, where the survey drew the two grandstands as buildings.
 - High school football fields (`football-fields.js`, data inline from OSM's american_football pitches): Pioneer's
   Hollway Field, Huron's (with its six-lane track, fitted to OSM's athletics outline) and Skyline's; regulation turf in
   5-yard stripes, chalk lines, hash marks and yellow gooseneck goalposts. No numbers or end zone paint (unvouched).
@@ -650,3 +652,27 @@ Ann Arbor Municipal Airport (airport.js, airport-data.js from Assets/Tools/build
 - Busier freeways: spawnVehicle in traffic.js puts a third of new cars on a nearby freeway link (cls 0, listed in nearFreeways) whenever one is near, since its few long links would otherwise get few cars.
 - Drafted yards: drafted-yards.js draws each drafted house's yard (from Open Facades, `yard` in data/drafted-houses.json) inside the draftedHouses part: fences post by post by style (picket, rail, chain link, solid) and beds' mulch as two instanced draws, on the lawn. Shrubs, the beds' plants and hedges (in ~1.3 m pieces) are drawn by trees.js createShrubs from street-details.js with the trees' own leaf cards and material (yardLeaves), so they match the trees: one instanced draw each. Its trees go to street-details.js (yardTreeSites → the city's tree field, at their real height, species from leaves/shape/size: evergreen or conical → spruce, columnar → elm, spreading → oak or locust, round → maple or flowering); canopy fill trees within 6 m of one are dropped. Walks, driveways and lawns are left to the map's own.
 - Drafted houses' draws: the renderer makes ~100 meshes per house; drafted-houses.js bakes them in place and merges them per 160 m cell by material (texture, roughness, metalness, transparency), with each piece's color in vertex colors: 65 houses are ~174 draws in all (was ~5,000 near them).
+
+## Window shape
+
+- Everywhere but the Xbox, `game({ fill: true })` and stage.js `fillWindow` size the canvas: it fills the window (no
+  black bars), drawn at the window's shape with no more pixels than the old stage: 1920x1080 worth (2.07M) times the
+  tier's `scale` squared (light 0.85, slow 0.8, phone 0.55), never more than the window's own pixels, pixel ratio 1,
+  and the browser scales it up. A wide window draws wider and shorter, a tall one narrower and taller. `[stage]` in the
+  log gives the size drawn and the window's, at the start and on each resize.
+- The Xbox (`XBOX`, `FILLS` false) stays exactly as it was: the fixed 1920x1080 stage, `sharp`, fitted by Lamp.
+- The view (cameras.js `onResize(w, h, widen)` and `setFov`): wider than 16:9 keeps each preset's vertical view and
+  shows more to the sides; narrower opens the vertical view so the horizontal view never drops below a 16:9 window's
+  (capped at 120°). Split screen's halves keep their view as before (no widening); each half's camera follows the
+  drawing's size (main.js `fitCameras`).
+- The phone tier no longer gets Lamp's own drop to a smaller size when frames come slow (that only works on the fixed
+  stage); it keeps its own smaller size.
+- HUD: the key hints stay on one row, hidden below 1240 px or wherever the row would reach the place signs and map or
+  the speed panel (main.js `fitHints`, on each mode and resize). Narrow windows (style.css end): below 820 px the brand
+  sits under the toolbar in the Mac's window; below 520 px the toolbar wraps to two rows; below 620 px the place signs
+  sit above the bottom bar.
+- Checked (Nov 2026): at 1123x639 (1.76:1, close to 16:9) it drew at 1909x1086 = 2.07M pixels, with 12.7–15.4 ms of
+  drawing per frame. Before, on the fixed 1920x1080 stage, it was 13.4–14.9 ms at 28 frames a second downtown; after,
+  48 frames a second out by the river. The same cost. The 21:9, 4:3 and 9:16 shapes were laid out from the style
+  rules: Lamp's shaped preview shows only the open window for a game, so they haven't been seen on screen.
+

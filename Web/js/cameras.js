@@ -139,8 +139,7 @@ class CameraSystem {
     const preset = CAMERA_PRESETS.find((p) => p.id === presetId);
     if (!preset) return;
     this.activePresetId = preset.id;
-    this.camera.fov = preset.fov;
-    this.camera.updateProjectionMatrix();
+    this.setFov(preset.fov);
     if (snapImmediately) {
       this.initialized = false;
     }
@@ -252,8 +251,7 @@ class CameraSystem {
       jc = this.jumpCam = { entity, after: 0, pos: new THREE.Vector3(cx, camY, cz), flight: launch ? tLeft : 0 };
       this.currentPos.copy(jc.pos);
       this.currentLookAt.set(p.x, p.y + 0.6, p.z);
-      this.camera.fov = 40;
-      this.camera.updateProjectionMatrix();
+      this.setFov(40);
       log(launch ? `[jump cam] cut to the side of a wipeout at ${Math.round(hv * 2.237)} mph` : `[jump cam] cut to the side for about ${tLeft.toFixed(1)} s in the air`);
     }
     // a body is down once it lies still (or has tumbled a good while), a car once it lands
@@ -316,8 +314,22 @@ class CameraSystem {
     return CAMERA_PRESETS.find((p) => p.id === this.activePresetId) || CAMERA_PRESETS[0];
   }
 
-  onResize(width, height) {
+  // `widen`: a window narrower than 16:9 opens the vertical view so the sides seen stay as wide as a 16:9 window's
+  // (a phone held upright, a narrow window: the road ahead and the car aren't cropped to a sliver); a wider one keeps
+  // the vertical view and just sees more to the sides. Split screen's halves keep their view as it was.
+  onResize(width, height, widen = false) {
     this.camera.aspect = width / height;
+    this.widen = widen;
+    this.setFov(this.baseFov ?? this.camera.fov);
+  }
+
+  // the view a preset or the jump camera asks for, opened for a narrow window (`onResize`)
+  setFov(fov) {
+    this.baseFov = fov;
+    const a = this.camera.aspect, wide = 16 / 9;
+    this.camera.fov = this.widen && a < wide
+      ? Math.min(120, 2 * Math.atan(Math.tan(fov * Math.PI / 360) * wide / a) * 180 / Math.PI)
+      : fov;
     this.camera.updateProjectionMatrix();
   }
 
