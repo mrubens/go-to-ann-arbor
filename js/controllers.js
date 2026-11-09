@@ -188,6 +188,8 @@ function driveSpeed(speed, throttle, dt, drive) {
 }
 
 // Walking surface for the player's pedestrian (its rig samples it around its feet)
+// the speed (m/s, ~40 km/h) above which a car taking a speed hump leaves the ground (speed-humps.js)
+const HUMP_LAUNCH = 11;
 const personGround = (controllers, x, z) => controllers.getGroundHeight(x, z, 'person');
 const RIDER_THROW_SPEED = 5.5;
 // a motorbike that hits a wall or a car this hard (m/s closing, about 16 mph) throws its rider off
@@ -806,7 +808,7 @@ class ThirdPersonControllerManager {
     const kindName = { sedan: 'Sedan', suv: 'SUV', minivan: 'Minivan', pickup: 'Pickup', van: 'Van', forester: 'Wagon', sports: 'Sports Car', tesla: 'EV Sport Sedan', ioniq: 'EV Hatch', cybertruck: 'Wedge Truck', r1s: 'EV SUV', r1t: 'EV Pickup' };
     return {
       type: 'car',
-      label: own ? 'Your Car' : kindName[look.kind] || 'Car',
+      label: kindName[look.kind] || 'Car',
       mesh: root,
       chassisPivot,
       carState,
@@ -1492,11 +1494,13 @@ class ThirdPersonControllerManager {
     return null;
   }
 
-  enterOrExit(parked = null, traffic = null) {
+  // `peek`: only say what F would do now (main.js's hint), changing nothing
+  enterOrExit(parked = null, traffic = null, peek = false) {
     const mode = this.activeMode;
     const p = this.entities.person;
     if ((p.fallen || p.chute) && mode === 'person') return null;
     if (mode !== 'person') {
+      if (peek) return null;
       const v = this.getActiveEntity();
       // out of the helicopter in the air: a jump, under a parachute from high up; out of a car on the move: thrown
       // out the door at its speed, and it rolls on without anyone (bailOut)
@@ -1561,7 +1565,7 @@ class ThirdPersonControllerManager {
     // a bench, a chair or a place on the bleachers (seats.js), sat on from beside it; nearer than anything else in reach
     const chair = !p.swimming && (p.grounded ?? true) ? this.seats?.nearest(p.position.x, p.position.z, 1.5, p.position.y, facing) : null;
     if (chair && chair.d / 1.5 * facing(chair.seat.x, chair.seat.z) * 0.8 < score) return { mode: 'person', sit: chair.seat };
-    if (best) {
+    if (best && !peek) {
       p.riding = best.mode;
       this.entities[best.mode].leftEmpty = false;
     }
@@ -2699,6 +2703,31 @@ class ThirdPersonControllerManager {
         c.speed *= 1 - 0.04 * s;
         rumble(0, Math.min(1, 0.3 + s * 0.6), Math.min(1, 0.4 + s * 0.6), 0.14);
         this.onPothole?.(hole.x, hole.z, s);
+      }
+    }
+    // over a speed hump or table (speed-humps.js): the nose, then the tail, lifts; taken fast, the car takes off
+    if (this.speedHumps && !c.airborne && Math.abs(c.speed) > 1) {
+      const hump = this.speedHumps.cross(c, prevX, prevZ, c.bike);
+      if (hump) {
+        const v = Math.abs(c.speed);
+        if (hump.front && v > HUMP_LAUNCH) {
+          c.airborne = true;
+          c.vy = (v - HUMP_LAUNCH) * 0.34 * (hump.table ? 1.15 : 1) + 0.9;
+          c.position.y += 0.03;
+          c.flightTime = 0;
+          c.airPitch = (c.groundPitch || 0) + Math.atan2(c.vy, v) * 0.8 * Math.sign(c.speed);
+          c.airRoll = c.groundRoll || 0;
+          rumble(0, 0.7, 0.9, 0.18);
+          log(`[hump] took off at ${Math.round(v * 3.6)} km/h`);
+          this.onHump?.(hump.x, hump.z, 1);
+        } else {
+          const s = Math.min(1, v / 11);
+          c.heaveVel += (hump.front ? 1.3 : 1.0) * s;
+          c.pitchVel += (hump.front ? -1.7 : 1.4) * s;
+          c.speed *= 1 - 0.03 * s;
+          rumble(0, Math.min(1, 0.25 + s * 0.5), Math.min(1, 0.3 + s * 0.5), 0.12);
+          this.onHump?.(hump.x, hump.z, s);
+        }
       }
     }
     c.chassisPivot.position.y = c.heaveY;

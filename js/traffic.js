@@ -1552,6 +1552,21 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     pedestrianSystem.onRiderHit?.(v.x, v.z, speed);
     log(`[traffic] a ${v.bodyType} rider thrown at ${Math.round(speed * 2.237)} mph`);
   }
+  // A rider in traffic hit by something the player's car sent flying (knockdowns.js) at (x, y, z) going (vx, vz):
+  // thrown off the way it was going
+  function knockRiders(x, y, z, r, vx, vz) {
+    const speed = Math.hypot(vx, vz) || 1;
+    let hit = false;
+    for (const v of cars) {
+      if (!v.riderRig || v.riderOff) continue;
+      const dx = v.x - x, dz = v.z - z;
+      if (dx * dx + dz * dz > r * r || y - groundHeight(v.x, v.z) > 2.1) continue;
+      throwRider(v, vx * 0.5 + Math.sin(v.yaw) * v.speed * 0.6, vz * 0.5 + Math.cos(v.yaw) * v.speed * 0.6,
+        { x, z, nx: -vx / speed, nz: -vz / speed }, Math.max(5, speed * 0.6));
+      hit = true;
+    }
+    return hit;
+  }
   function remount(v) {
     const rig = v.riderRig;
     if (rig.rag) rig.rag.done = false;
@@ -2339,7 +2354,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     return [v.x + fx * ahead - fz * side, v.z + fz * ahead + fx * side, yaw];
   }
   // a bus standing at a stop with its door within `reach` of (x, z): the player gets on
-  function boardBus(x, z, reach) {
+  function boardBus(x, z, reach, peek = false) {
     let best = null, bestD = reach;
     for (const v of buses) {
       if (!v.edge || !v.dwellUntil) continue;
@@ -2347,6 +2362,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       const d = Math.hypot(dx - x, dz - z);
       if (d < bestD) { bestD = d; best = v; }
     }
+    if (peek) return !!best;
     if (best) {
       ridden = best;
       best.dwellUntil = Math.max(best.dwellUntil, clock + 3);
@@ -2414,6 +2430,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     setCrowdBusy: pedestrianSystem.setBusy,
     crowdStats: pedestrianSystem.stats,
     setPedestrianHitListener: pedestrianSystem.setHitListener,
+    knockBy: (x, y, z, r, vx, vz) => pedestrianSystem.knockBy(x, y, z, r, vx, vz) | knockRiders(x, y, z, r, vx, vz),
     setPlayerStruckListener,
     network
   };

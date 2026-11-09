@@ -1043,9 +1043,15 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     const y = (t.y || 0) + (t.world ? 0 : groundHeight(t.x, t.z));
     dummy.position.set(t.x, y, t.z);
     dummy.rotation.set(0, t.yaw ?? r2 * Math.PI * 2, 0);
-    dummy.scale.set(s * (0.9 + r3 * 0.2) * (t.sx || 1), s * (0.88 + r1 * 0.24), s * (0.9 + r2 * 0.2) * (t.sz || 1));
+    // a champion tree (champion-trees.js) as it was measured: its height and its crown's spread, both exactly
+    if (t.spread) {
+      const b = treeBounds[sp][variant].bounds, wide = Math.max(b.max.x - b.min.x, b.max.z - b.min.z) || 1;
+      const hs = Math.min(45, t.height) / heightOf[sp][variant], ws = t.spread / wide;
+      dummy.scale.set(ws, hs, ws);
+    } else dummy.scale.set(s * (0.9 + r3 * 0.2) * (t.sx || 1), s * (0.88 + r1 * 0.24), s * (0.9 + r2 * 0.2) * (t.sz || 1));
     dummy.updateMatrix();
-    if (!cleared) {
+    // (a champion stands where it really does, whatever the city's outlines say is next to it)
+    if (!cleared && !t.spread) {
       const tree = treeBounds[sp][variant];
       worldBounds.copy(tree.bounds).applyMatrix4(dummy.matrix).expandByScalar(tree.margin);
       if (!clearOfBuildings(worldBounds)) return null;
@@ -1427,7 +1433,8 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     const out = [];
     for (const t of field.list) {
       const size = field.info(t);
-      if (size) out.push({ x: t.x, z: t.z, r: 0.22, kind: 'tree', trunk: size.r, height: size.h, pose: (turn) => field.pose(t, turn) });
+      // a champion tree (champion-trees.js) is solid but never knocked over
+      if (size) out.push({ x: t.x, z: t.z, r: 0.22, kind: 'tree', trunk: size.r, height: size.h, fixed: !!(t.champion || t.spread), pose: (turn) => field.pose(t, turn) });
     }
     return out;
   };

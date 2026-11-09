@@ -74,6 +74,9 @@ import { createMoon } from './moon.js';
 import { waterDisturb } from './tsl-materials.js';
 import { buildRoadWork } from './road-work.js';
 import { buildPotholes } from './potholes.js';
+import { buildSpeedHumps } from './speed-humps.js';
+import { buildCurbCarts } from './curb-carts.js';
+import { CHAMPION_TREES } from './champion-trees.js';
 import { VideoRecorder } from './recorder.js';
 import { createGroundShade } from './ground-shade.js';
 
@@ -350,7 +353,7 @@ async function initApp() {
     const made = buildStreetDetails(g, allColliders, streetFurniture, parkingPart.made.inside, draftedPart.made.yard || []);
     await setOnTerrain(g.getObjectByName('StreetDetails'));
     return made;
-  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, parkingPart, draftedPart], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js', 'js/drafted-yards.js', 'js/trees.js'] });
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, parkingPart, draftedPart], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js', 'js/drafted-yards.js', 'js/trees.js', 'js/champion-trees.js'] });
   const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
@@ -431,6 +434,16 @@ async function initApp() {
   const potholesPart = live.keep('potholes', () => cityPart((g) => buildPotholes(g, potholeData)), { inputs: [heights, grid], from: ['js/potholes.js', 'data/potholes.json'] });
   const potholes = potholesPart.made;
   log(`[potholes] ${potholes.count} on the streets`);
+  // the speed humps and tables the city's Traffic Calming program built (speed-humps.js): a jolt, or a jump taken fast
+  const humpBytes = await asset('data/speed-humps.json');
+  const humpData = humpBytes ? JSON.parse(new TextDecoder().decode(humpBytes)) : null;
+  const humpsPart = live.keep('speed-humps', () => cityPart((g) => buildSpeedHumps(g, humpData)), { inputs: [heights, grid], from: ['js/speed-humps.js', 'data/speed-humps.json'] });
+  log(`[humps] ${humpsPart.made.count} speed humps and tables`);
+  // trash, recycling and compost carts out at the curb on today's pickup route (curb-carts.js): they fly when hit
+  const cartBytes = await asset('data/collection-days.json');
+  const cartData = cartBytes ? JSON.parse(new TextDecoder().decode(cartBytes)) : null;
+  const cartsPart = live.keep('curb-carts', () => cityPart((g) => buildCurbCarts(g, cartData, addresses), { cull: setupSceneCulling }), { inputs: [heights, grid], from: ['js/curb-carts.js', 'data/collection-days.json', 'data/addresses.json'] });
+  log(`[carts] ${cartsPart.made.count} carts out for ${cartsPart.made.day || 'no pickup today'}`);
   allColliders.push(...roadWork.colliders);
   allColliders.push(...airportPart.made.colliders);
   allColliders.push(...bleachersPart.made.colliders);
@@ -441,7 +454,7 @@ async function initApp() {
   // and each goes over when a car hits it hard enough (knockdowns.js)
   const obstacleBox = (o) => {
     const g = groundHeight(o.x, o.z);
-    const knock = o.kind && (o.pose || o.parts?.length) ? { ...o, g, down: false } : null;
+    const knock = o.kind && !o.fixed && (o.pose || o.parts?.length) ? { ...o, g, down: false } : null;
     return { minX: o.x - o.r, maxX: o.x + o.r, minZ: o.z - o.r, maxZ: o.z + o.r, minY: g - 1, maxY: g + 6, thin: true, knock };
   };
   const knockBoxOf = new Map();
@@ -481,6 +494,8 @@ async function initApp() {
   // and along the foot of the buildings (ground-shade.js)
   const groundShade = createGroundShade(new THREE.Group(), { colliders: allColliders, peds: trafficSystem.peds });
   scene.add(groundShade.group);
+  // the carts at the curb: knocked flying by the car (knockdowns.js), never shaded on the ground as the buildings are
+  for (const o of cartsPart.made.obstacles || []) allColliders.push(obstacleBox(o));
   // a hydrant knocked off its main gushes water (hydrant-spray.js)
   const hydrantSpray = createHydrantSpray(scene);
   const skidEffects = createSkidEffects(scene);
@@ -493,11 +508,24 @@ async function initApp() {
       if (it.kind === 'hydrant') hydrantSpray.start(it.x, it.z);
     },
     onLand: (it, spin) => audioSystem?.cue(it.kind === 'tree' ? 'thud' : 'crash',
-      { x: it.x + it.dx * it.height * 0.6, y: it.g, z: it.z + it.dz * it.height * 0.6 }, Math.min(1, 0.4 + spin * 0.2))
+      { x: it.x + it.dx * it.height * 0.6, y: it.g, z: it.z + it.dz * it.height * 0.6 }, Math.min(1, 0.4 + spin * 0.2)),
+    // a cart come to rest is solid where it lies: put its box in the collision cells there (controllers.js)
+    onRest: (it, c) => {
+      const cells = controllerManager._colliderCells;
+      if (!cells) return;
+      const CELL = 48, key = (ix, iz) => (ix + 4096) * 8192 + (iz + 4096);
+      for (let ix = Math.floor(c.minX / CELL); ix <= Math.floor(c.maxX / CELL); ix++) {
+        for (let iz = Math.floor(c.minZ / CELL); iz <= Math.floor(c.maxZ / CELL); iz++) {
+          let list = cells.get(key(ix, iz));
+          if (!list) cells.set(key(ix, iz), (list = []));
+          if (!list.includes(c)) list.push(c);
+        }
+      }
+    }
   });
   // Lamp: Ann Arbor's animals, near the player only; never anyone's obstacle (animals.js)
   const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
-  const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
+  const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -551,6 +579,7 @@ async function initApp() {
   // the playgrounds' wave slides and decks, driven up like ramps (playgrounds.js)
   controllerManager.playTop = cityGrid.playTop || null;
   controllerManager.potholes = potholes;
+  controllerManager.speedHumps = humpsPart.made;
   controllerManager.railways = railways;
   // the maize sports car, or the black Forester it was before (an older save's own car)
   const isOwnLook = (look) => (look.kind === 'sports' && look.hex === 0xffcb05) || (look.kind === 'forester' && look.hex === 0x16181b);
@@ -726,6 +755,11 @@ async function initApp() {
     _holeAt.x = x; _holeAt.z = z; _holeAt.y = groundHeight(x, z) + 0.3;
     audioSystem.cue('thud', _holeAt, Math.min(1, 0.25 + strength * 0.6));
     log(`[pothole] a wheel through one, ${strength.toFixed(2)} hard`);
+  };
+  // over a speed hump: a bump under the car, harder when it takes off
+  controllerManager.onHump = (x, z, strength) => {
+    _holeAt.x = x; _holeAt.z = z; _holeAt.y = groundHeight(x, z) + 0.3;
+    audioSystem.cue('thud', _holeAt, Math.min(1, 0.2 + strength * 0.6));
   };
   // someone knocked down by the player's car or bike: a thump there and a jolt in the hands
   const _thudAt = { x: 0, y: 0, z: 0 };
@@ -925,10 +959,23 @@ async function initApp() {
   };
   // Getting in and out, in every mode
   for (const [mode, hints] of Object.entries(controlHints)) {
-    hints.push({ keys: ['KeyF'], pad: [BUTTON.X], does: mode === 'person' ? 'Get in / Sit' : 'Get out', getOut: mode !== 'person' });
+    hints.push({ keys: ['KeyF'], pad: [BUTTON.X], does: mode === 'person' ? '' : 'Get out', getOut: mode !== 'person', getIn: mode === 'person' });
   }
   // Getting out of a car on the move or the helicopter in the air is a jump, and its hint says so
   let jumpOut = false;
+  // On foot, what F would do now (what's in reach, looked for each quarter second below): '' with nothing near hides it
+  let getInWords = '';
+  function getInNow() {
+    const cm = controllerManager, p = cm.entities.person;
+    if (cm.activeMode !== 'person' || p.fallen || p.chute) return '';
+    if (p.onBus) return 'Get off';
+    if (trafficSystem.boardBus(p.position.x, p.position.z, 5, true)) return 'Board the bus';
+    const c = cm.enterOrExit(parkedCars, trafficSystem, true);
+    if (!c) return '';
+    if (c.sit) return 'Sit';
+    if (c.rack || c.mode === 'cyclist') return 'Ride';
+    return 'Get in';
+  }
   // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
   const topSpeedMph = { person: 18, car: 160, cyclist: 28, helicopter: 167, kayak: 12 };
 
@@ -963,7 +1010,7 @@ async function initApp() {
     if (!elControlsHint) return;
     if (mode === 'helicopter' && controllerManager.entities.helicopter.craft === 'plane') mode = 'plane';
     const pad = on.kind === 'controller';
-    const items = (controlHints[mode] || []).filter((hint) => pad ? hint.pad : hint.keys).map((hint) => {
+    const items = (controlHints[mode] || []).filter((hint) => (pad ? hint.pad : hint.keys) && !(hint.getIn && !getInWords)).map((hint) => {
       const item = document.createElement('span');
       item.className = 'hint';
       for (const what of pad ? hint.pad : hint.keys) {
@@ -978,7 +1025,7 @@ async function initApp() {
       }
       const words = document.createElement('span');
       words.className = 'hint-label';
-      words.textContent = hint.getOut && jumpOut ? 'Jump out' : hint.does;
+      words.textContent = hint.getIn ? getInWords : hint.getOut && jumpOut ? 'Jump out' : hint.does;
       item.appendChild(words);
       return item;
     });
@@ -1450,10 +1497,140 @@ async function initApp() {
     if (btn && e.detail > 0) btn.blur();
   });
 
+  // A champion tree found: within 40 m of one, a card rises over the middle of the screen with its name, its kind in
+  // Latin, how big it is and how many of the city's champions you've found (kept with save('championFound')). Pressing
+  // the card (or the pad's FLYOVER button) circles the camera slowly round the tree; moving, Back or the card again ends it.
+  const CHAMPION_CONTROLS = { flyover: BUTTON.UP, back: BUTTON.B };
+  const championFound = new Set(load('championFound') || []);
+  document.querySelector('.champion-card')?.remove();
+  const elChampion = document.createElement('div');
+  elChampion.className = 'champion-card';
+  elChampion.setAttribute('aria-live', 'polite');
+  elChampion.setAttribute('role', 'button');
+  elChampion.setAttribute('aria-label', 'Fly around the champion tree');
+  document.body.appendChild(elChampion);
+  const elChampionAction = document.createElement('div');
+  elChampionAction.className = 'champion-action';
+  let championNear = null, championShown = null, championCheckAt = 0, lastNow = 0, championFlying = false, signH = 160;
+  // the landmark the place label names (renderLocation), to fly round with the view button
+  let viewLandmark = null;
+  const ft = (m) => Math.round(m * 3.28084);
+  // the line under the tree's name: how to fly round it, or, while circling, how to come back (quietly)
+  function drawChampionAction(on = input()) {
+    const keys = on.kind === 'keyboard';
+    const g = glyph(championFlying ? (keys ? 'Escape' : CHAMPION_CONTROLS.back) : (keys ? 'KeyT' : CHAMPION_CONTROLS.flyover));
+    const words = championFlying ? ' to go back' : ' to fly around it';
+    elChampionAction.replaceChildren(...(g ? [g, document.createTextNode(words)] : [document.createTextNode(championFlying ? 'Tap to go back' : 'Tap to fly around it')]));
+  }
+  onInput((on) => drawChampionAction(on));
+  function showChampion(t, first) {
+    if (first) { championFound.add(t.name); save('championFound', [...championFound]); }
+    championShown = t;
+    const el = (cls, text) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; };
+    elChampion.replaceChildren(
+      el('champion-kicker', first ? 'Champion tree found' : 'Champion tree'),
+      el('champion-title', t.name),
+      el('champion-latin', t.latin),
+      el('champion-detail', `${ft(t.height)} ft tall · ${ft(t.spread)} ft across · ${Math.round(t.trunk * 39.37)} in trunk`),
+      elChampionAction
+    );
+    drawChampionAction();
+    if (first) { rumble(0, 0.25, 0.4, 0.3); log(`champion found: ${t.name} (${championFound.size}/${CHAMPION_TREES.length})`); }
+  }
+  // how tall and wide each landmark is, for the flyover's circle (a mural or sculpture is small; the rest a building)
+  const VIEW_SIZE = { stadium: [45, 260], arb: [30, 220], gallup: [20, 160], westpark: [20, 140], fuller: [20, 160],
+    burnspark: [20, 130], burton: [65, 40], diag: [30, 120], crisler: [30, 120], yost: [25, 90], huron: [25, 160], cascades: [10, 120] };
+  function startChampionFlyover() {
+    if (championFlying) return;
+    const t = championShown;
+    if (t) {
+      cameraSystem.startFlyover(t.x, t.z, t.height, t.spread);
+      elChampion.classList.add('flying', 'show');
+      signH = elChampion.offsetHeight;
+    } else if (viewLandmark) {
+      const l = viewLandmark, [h, w] = VIEW_SIZE[l.id] || (l.art ? [6, 18] : [30, 80]);
+      cameraSystem.startFlyover(l.x, l.z, h, w);
+    } else return;
+    championFlying = true;
+    drawChampionAction();
+    drawViewHint();
+  }
+  // the green sign hangs over the tree's crown in the world like a hologram, facing the camera, smaller farther off,
+  // from when you reach the tree until you leave it
+  const signAt = new THREE.Vector3();
+  function placeChampionSign() {
+    const t = championShown;
+    if (!t || !championFlying) return;
+    const cam = cameraSystem.camera;
+    signAt.set(t.x, groundHeight(t.x, t.z) + t.height * 1.02 + 2, t.z);
+    const dist = signAt.distanceTo(cam.position);
+    signAt.project(cam);
+    const box = renderer.domElement.getBoundingClientRect();
+    const behind = signAt.z > 1;
+    const x = box.left + (signAt.x * 0.5 + 0.5) * box.width;
+    const y = box.top + (0.5 - signAt.y * 0.5) * box.height;
+    const k = Math.max(0.6, Math.min(0.9, 45 / dist)) * Math.min(1, box.height / 1080 * 1.4);
+    elChampion.style.left = `${x.toFixed(1)}px`;
+    // kept below the toolbar when the crown is above the top of the screen
+    elChampion.style.top = `${Math.max(box.top + 110 + signH * k, y).toFixed(1)}px`;
+    elChampion.style.transform = `translate(-50%, -100%) scale(${k.toFixed(3)})`;
+    elChampion.style.visibility = behind ? 'hidden' : '';
+  }
+  function endChampionFlyover() {
+    if (!championFlying) return;
+    championFlying = false;
+    cameraSystem.endFlyover();
+    elChampion.classList.remove('flying', 'show');
+    drawChampionAction();
+    drawViewHint();
+  }
+  elChampion.addEventListener('click', () => (championFlying ? endChampionFlyover() : startChampionFlyover()));
+  // the keys (the page reads them itself): T flies round the tree whose card is up; Escape or a driving key comes back
+  window.addEventListener('keydown', (e) => {
+    if (isTypingInField(e) || e.repeat) return;
+    if (championFlying && /^(Escape|Key[WASDT]|Arrow)/.test(e.code)) endChampionFlyover();
+    else if (!championFlying && (championShown || viewLandmark) && e.code === 'KeyT') startChampionFlyover();
+  });
+  function updateChampion(now, pos) {
+    lastNow = now;
+    if (now < championCheckAt) return;
+    championCheckAt = now + 400;
+    let near = null;
+    for (const t of CHAMPION_TREES) {
+      const dx = t.x - pos.x, dz = t.z - pos.z;
+      if (dx * dx + dz * dz < 40 * 40) { near = t; break; }
+    }
+    if (near && near !== championNear && !championFlying) showChampion(near, !championFound.has(near.name));
+    // gone well away from it: the next visit shows its card again
+    if (championNear && !near) {
+      const dx = championNear.x - pos.x, dz = championNear.z - pos.z;
+      if (dx * dx + dz * dz < 60 * 60) return;
+      endChampionFlyover();
+      elChampion.classList.remove('show');
+      championShown = null;
+    }
+    championNear = near;
+  }
+  // the pad, each frame: the flyover button while the card is up; Back or moving ends the flyover
+  function championPad(pad) {
+    if (!pad) return;
+    if (championFlying) {
+      if ((pad.pressed & (CHAMPION_CONTROLS.back | CHAMPION_CONTROLS.flyover)) || Math.hypot(pad.lx, pad.ly) > 0.4 || pad.rt > 0.2 || pad.lt > 0.2) endChampionFlyover();
+    } else if ((championShown || viewLandmark) && (pad.pressed & CHAMPION_CONTROLS.flyover)) startChampionFlyover();
+  }
+
   // Where you are: the place's name over its street corner, drawn as a pair of green street-name signs
   const roadNames = new Set(ROADS.map((r) => r.name));
   const placeNames = new Set(LANDMARKS.flatMap((l) => (l.art ? [l.name, l.short] : [l.name])));
   let locationText = '';
+  const elViewHint = document.createElement('span');
+  elViewHint.className = 'location-view';
+  function drawViewHint(on = input()) {
+    const keys = on.kind === 'keyboard';
+    const g = glyph(championFlying ? (keys ? 'Escape' : CHAMPION_CONTROLS.back) : (keys ? 'KeyT' : CHAMPION_CONTROLS.flyover));
+    elViewHint.replaceChildren(...(g ? [g, document.createTextNode(championFlying ? ' to go back' : ' to view')] : []));
+  }
+  onInput((on) => drawViewHint(on));
   function renderLocation(label) {
     if (!elLocation || label === locationText) return;
     locationText = label;
@@ -1468,10 +1645,22 @@ async function initApp() {
       streets = '';
     }
     const nodes = [];
+    // a landmark (a building, park, mural, sculpture or champion tree) can be flown round: "T to view" beside its name
+    viewLandmark = null;
+    if (place) {
+      const at = controllerManager.getActiveEntity()?.position || cameraSystem.currentPos;
+      let best = Infinity;
+      for (const l of LANDMARKS) {
+        if (l.name !== place && l.short !== place) continue;
+        const d = (l.x - at.x) ** 2 + (l.z - at.z) ** 2;
+        if (d < best) { best = d; viewLandmark = l; }
+      }
+    }
     if (place) {
       const el = document.createElement('div');
       el.className = 'location-place';
       el.textContent = place;
+      if (viewLandmark) { el.appendChild(elViewHint); drawViewHint(); }
       nodes.push(el);
     }
     if (streets) {
@@ -1511,11 +1700,8 @@ async function initApp() {
     selectCamera('chase', true);
     // a tall landmark's viewpoint looks up at it, until the player moves off
     if (Number.isFinite(lookUp)) cameraSystem.lookUp = lookUp;
-    mapSystem.waypoint = {
-      x: destination.x,
-      z: destination.z,
-      name: getLocationLabel(destination.x, destination.z)
-    };
+    // arrived: no GPS route left to follow
+    mapSystem.waypoint = null;
     return destination;
   }
 
@@ -1929,11 +2115,22 @@ async function initApp() {
     }
     tickNotice(dt);
     knockdowns.update(dt);
+    // a cart, can or bench sent flying knocks down whoever it reaches: a walker goes limp, a rider comes off
+    for (const it of knockdowns.flying) {
+      const fl = it.fly;
+      if (fl.vx * fl.vx + fl.vz * fl.vz < 6 || !trafficSystem.knockBy) continue;
+      if (trafficSystem.knockBy(fl.x, fl.y, fl.z, 0.85, fl.vx, fl.vz)) {
+        fl.vx *= 0.45; fl.vz *= 0.45;
+        audioSystem?.cue('thud', { x: fl.x, y: fl.y, z: fl.z }, 0.6);
+        log(`[knock] a flying ${it.kind} knocked someone down`);
+      }
+    }
     hydrantSpray.update(dt, cameraSystem.camera);
     audioSystem?.gush?.(hydrantSpray.gushes(gushList));
     skidEffects.update(dt, controllerManager.entities.car, controllerManager.activeMode === 'car', cameraSystem.camera);
 
     // Update 3rd-person controllers, camera, signals, traffic & vehicle collisions, building LODs, and dynamic shadow focus
+    championPad(f.pads[0]);
     gamepadControls.supply(f.pads[0]);
     gamepadControls.update(dt);
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
@@ -2053,6 +2250,7 @@ async function initApp() {
     mark('street details');
     lightingSystem.update(cameraSystem.currentPos);
     mapSystem.update();
+    placeChampionSign();
     if (lightingSystem.activePresetId === 'now' && elapsed - nowCheckedAt > 60) {
       nowCheckedAt = elapsed;
       selectTime('now');
@@ -2244,15 +2442,18 @@ async function initApp() {
         elFps.className = currentFps >= 50 ? 'fps-ok' : currentFps >= 30 ? 'fps-warn' : 'fps-bad';
       }
       const jumping = !!controllerManager.exitJump();
-      if (jumping !== jumpOut) {
+      const getIn = getInNow();
+      if (jumping !== jumpOut || getIn !== getInWords) {
         jumpOut = jumping;
+        getInWords = getIn;
         renderControlHints(mode);
-        touchControls.setGetOutWords(mode === 'person' ? 'Get in' : jumping ? 'Jump out' : 'Get out');
+        touchControls.setGetOutWords(mode === 'person' ? getIn || 'Get in' : jumping ? 'Jump out' : 'Get out');
       }
       buildDial(mode, activeEnt.drive);
       if (elAltitude) elAltitude.textContent = altFt.toLocaleString('en-US');
       // The street corner of the player on the follow cameras, of the camera itself on the scenic ones
       const where = cameraSystem.getActivePreset().category === 'follow' ? activeEnt.position : cameraSystem.currentPos;
+      updateChampion(now, where);
       renderLocation(getLocationLabel(where.x, where.z));
     }
   };

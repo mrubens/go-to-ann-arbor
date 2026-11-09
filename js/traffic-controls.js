@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundHeight } from './terrain.js';
 import { color, mix, uniform } from 'three/tsl';
-import { signalPhase } from './city-config.js';
+import { signalPhase, nearestRoads } from './city-config.js';
 import { log } from '../lamp-game.js';
 
 // Lamp: Ann Arbor's traffic lights and stop & yield signs, where the road network put them (road-network.js, from
@@ -159,6 +159,8 @@ function buildTrafficControls(group, network) {
     lists.get(name).push(dummy.matrix.clone());
   };
   const onRoad = (x, z) => network.isRoadClear && network.isRoadClear(x, z, 0.2);
+  // on any street's pavement, curb to curb, by the real streets' centrelines and widths
+  const onPavement = (x, z) => nearestRoads(x, z, 15).some((n) => n.dist < (n.road.w || 8) / 2 + 0.4);
   const at = (e, s, o) => [e.sx + e.dx * s + e.rx * o, e.sz + e.dz * s + e.rz * o];
   // out from the road along e's right until clear of it (null if it never is)
   const curbside = (e, s, o) => {
@@ -206,12 +208,19 @@ function buildTrafficControls(group, network) {
     const n = e.from;
     if (n.shape || e.divided || !e.lanes.length || e.len < 25 || (e.cls ?? 4) < 2) continue;
     if (nextOf.get(e.to)?.has(e.from) || (degree.get(n)?.size || 0) < 3) continue;
-    // set back from the corner, out past the curb on each side
-    const r = curbside(e, 3, e.half + 0.7);
-    if (r) oneWayPost(e, 3, r[2]);
-    for (let o = -e.half - 0.7, k = 0; k < 10; k++, o -= 0.6) {
-      const [x, z] = at(e, 3, o);
-      if (!onRoad(x, z)) { oneWayPost(e, 3, o); break; }
+    // set back from the corner past the cross street's pavement, out past the curb on each side: the first spot
+    // along the street that's off every street's pavement (the cross street's included)
+    for (const side of [1, -1]) {
+      let placed = false;
+      for (let s = 3; s <= Math.min(18, e.len - 4) && !placed; s += 1) {
+        for (let out = 0.7; out <= 3.2 && !placed; out += 0.5) {
+          const o = side * (e.half + out);
+          const [x, z] = at(e, s, o);
+          if (onRoad(x, z) || onPavement(x, z)) continue;
+          oneWayPost(e, s, o);
+          placed = true;
+        }
+      }
     }
   }
 

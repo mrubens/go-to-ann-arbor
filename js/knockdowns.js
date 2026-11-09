@@ -8,16 +8,18 @@ import { random } from '../lamp-game.js';
 // way the car was going, about its foot, speeding up as it goes as a falling pole does, and lands with a bounce; it
 // lies there from then on and stops being solid. The car loses some of its speed in the hit. A fire hydrant is made to
 // break off its flange at a bump: it's thrown ahead of the car, tumbling, bounces along the ground and comes to rest;
-// a trash can or a park bench is thrown the same way.
+// a trash can, a curb cart (curb-carts.js) or a park bench is thrown the same way.
 
 const G = 9.8;
 // The speed (m/s) at which a 1500 kg car fells each kind head on; a tree's grows with its trunk
-const GIVE = { sign: 3.5, lamp: 9, signal: 12, hydrant: 2.2, trash: 1.2, bench: 2.6, chair: 0.8, table: 1.4, picnic: 3, parasol: 2 };
+const GIVE = { sign: 3.5, lamp: 9, signal: 12, hydrant: 2.2, trash: 1.2, cart: 1.0, bench: 2.6, chair: 0.8, table: 1.4, picnic: 3, parasol: 2 };
 // What's thrown rather than tipped: its centre of mass above its foot, how far that stays off the ground lying down,
 // how fast it tumbles for its speed and how much of the car's speed it takes
 const THROWN = {
   hydrant: { lift: 0.4, rest: 0.22, spin: 1, take: 0.5 },
   trash: { lift: 0.45, rest: 0.3, spin: 1.1, take: 0.15 },
+  // a wheeled cart at the curb: light, and high for its foot, so it goes end over end
+  cart: { lift: 0.55, rest: 0.33, spin: 1.25, take: 0.1 },
   bench: { lift: 0.4, rest: 0.25, spin: 0.55, take: 0.45 },
   chair: { lift: 0.45, rest: 0.25, spin: 1.2, take: 0.08 },
   table: { lift: 0.4, rest: 0.3, spin: 0.8, take: 0.2 },
@@ -25,7 +27,10 @@ const THROWN = {
 };
 const treeGive = (trunk) => 8.5 * Math.pow(Math.max(0.06, trunk) / 0.2, 1.5);
 
-function createKnockdowns({ onFall = null, onLand = null } = {}) {
+// What's thrown can be hit again once it's come to rest, where it lies
+const AGAIN = new Set(['cart', 'trash']);
+
+function createKnockdowns({ onFall = null, onLand = null, onRest = null } = {}) {
   const falling = [];
   const turn = new THREE.Matrix4();
   const toFoot = new THREE.Matrix4();
@@ -75,6 +80,7 @@ function createKnockdowns({ onFall = null, onLand = null } = {}) {
     const give = giveOf(item, mass);
     if (speed < give) return null;
     item.down = true;
+    item.box = collider;
     collider.maxY = -1e6; // no longer in the way
     const len = Math.hypot(dx, dz) || 1;
     item.dx = dx / len;
@@ -106,10 +112,11 @@ function createKnockdowns({ onFall = null, onLand = null } = {}) {
   const spinQ = new THREE.Quaternion(), turnM = new THREE.Matrix4(), spinAxis = new THREE.Vector3();
   function throwThing(item, speed) {
     const T = THROWN[item.kind];
-    item.base = new Float32Array(16);
-    item.parts[0].getMatrixAt(item.parts[1], m);
-    m.toArray(item.base, 0);
-    const ox = item.x, oy = m.elements[13] + T.lift, oz = item.z;
+    // from where it stands, or, hit again, from where it came to rest
+    const again = item.fly && item.last;
+    item.base = again ? item.last.slice() : new Float32Array(16);
+    if (!again) { item.parts[0].getMatrixAt(item.parts[1], m); m.toArray(item.base, 0); }
+    const ox = again ? item.fly.x : item.x, oy = again ? item.fly.y : m.elements[13] + T.lift, oz = again ? item.fly.z : item.z;
     const along = speed * (0.95 + random() * 0.3), side = (random() - 0.5) * speed * 0.25;
     item.fly = {
       ox, oy, oz, x: ox, y: oy, z: oz,
@@ -130,6 +137,7 @@ function createKnockdowns({ onFall = null, onLand = null } = {}) {
     fromFoot.makeTranslation(f.x, f.y, f.z);
     m.premultiply(toFoot).premultiply(turnM).premultiply(fromFoot);
     place(item.parts[0], item.parts[1], m);
+    if (AGAIN.has(item.kind)) m.toArray(item.last ??= new Float32Array(16), 0);
   }
   function updateFlying(dt) {
     for (let n = flying.length - 1; n >= 0; n--) {
@@ -151,7 +159,17 @@ function createKnockdowns({ onFall = null, onLand = null } = {}) {
           f.vy = 0;
           const k = Math.exp(-3.5 * dt);
           f.vx *= k; f.vz *= k; f.w *= Math.exp(-5 * dt);
-          if (Math.hypot(f.vx, f.vz) < 0.15 && f.w < 0.3) flying.splice(n, 1);
+          if (Math.hypot(f.vx, f.vz) < 0.15 && f.w < 0.3) {
+            flying.splice(n, 1);
+            if (AGAIN.has(it.kind) && it.box) {
+              // lying where it stopped: solid there again, to be sent flying once more
+              it.x = f.x; it.z = f.z; it.g = groundHeight(f.x, f.z); it.down = false;
+              const c = it.box, r = it.r || 0.36;
+              c.minX = f.x - r; c.maxX = f.x + r; c.minZ = f.z - r; c.maxZ = f.z + r;
+              c.minY = it.g - 1; c.maxY = it.g + 1.2;
+              onRest?.(it, c);
+            }
+          }
         }
       }
       poseFlying(it);
@@ -180,7 +198,8 @@ function createKnockdowns({ onFall = null, onLand = null } = {}) {
     }
   }
 
-  return { hit, update, get falling() { return falling.length + flying.length; } };
+  // what's in the air or still sliding, each with `fly` { x, y, z, vx, vy, vz }, for main.js to see what it hits
+  return { hit, update, flying, get falling() { return falling.length + flying.length; } };
 }
 
 export { createKnockdowns };

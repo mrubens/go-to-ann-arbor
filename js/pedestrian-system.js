@@ -695,6 +695,31 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     onHit?.(p.x, p.z, speed);
   }
 
+  // Hit by something the player's car sent flying (a curb cart, a trash can...: knockdowns.js) at (x, y, z) going
+  // (vx, vz): anyone it reaches within r goes limp, thrown the way it was going
+  function knockBy(x, y, z, r, vx, vz) {
+    const speed = Math.hypot(vx, vz);
+    let hit = false;
+    for (let i = 0; i < NUM_PEDS; i++) {
+      const p = peds[i];
+      if (!p.placed || clock - p.hitAt < 0.5) continue;
+      const dx = p.x - x, dz = p.z - z;
+      if (dx * dx + dz * dz > r * r || y - groundHeight(p.x, p.z) > 1.9) continue;
+      p.hitAt = clock;
+      const s = Math.min(1, speed / 12);
+      if (p.ragdoll && p.rig.rag) p.rig.kickRagdoll(vx * 0.3, 1, vz * 0.3);
+      else {
+        if (p.conversation) endConversation(p.conversation);
+        p.rig.startRagdoll(vx * 0.45, 1.2 + s * 2.5, vz * 0.45, (dx * vz - dz * vx > 0 ? 1 : -1) * (1.5 + s * 3));
+        p.ragdoll = true;
+        p.shout = -1;
+      }
+      onHit?.(p.x, p.z, speed * 0.5);
+      hit = true;
+    }
+    return hit;
+  }
+
   // The ground under a limp body: the sidewalk near the person's walking line, the road beyond it
   function ragGround(p, x, z) {
     if (p.node) return pedGround(p, x, z);
@@ -843,7 +868,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   function setBusy(value) { busy = clamp(value, 0.05, 1); crowdCheck = -Infinity; }
   const stats = () => ({ out: placedCount, perf: +perf.toFixed(2), share: +crowdShare.toFixed(2), busy });
 
-  return { peds, meshes: pedCrowd.meshes, update, setBusy, stats, setHitListener(fn) { onHit = fn; }, onRiderHit: (x, z, speed) => onHit?.(x, z, speed) };
+  return { peds, meshes: pedCrowd.meshes, update, setBusy, stats, setHitListener(fn) { onHit = fn; }, knockBy, onRiderHit: (x, z, speed) => onHit?.(x, z, speed) };
 }
 
 export { createPedestrianSystem };

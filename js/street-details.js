@@ -21,6 +21,7 @@ import { createTreeField, createShrubs } from './trees.js';
 import { REAL_TREES, REAL_TREE_KINDS, REAL_TREE_HEIGHTS } from './tree-geodata.js';
 import { placeStreetTrees, dropCanopyFill } from './tree-placements.js';
 import { yardTreeSites, yardLeaves } from './drafted-yards.js';
+import { CHAMPION_TREES } from './champion-trees.js';
 import { createFoodCartParts } from './street-props.js';
 import { pavedPlazaRects, bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes } from './city-grid.js';
 import { bryantParkLawn } from './landmarks.js';
@@ -1228,7 +1229,15 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   let sidewalkTreePositions = placeStreetTrees(REAL_TREES, treePositions,
     (x, z) => !inPlaza(x, z, 1.5) && isClearOfPoles(x, z, 2.2), REAL_TREE_KINDS, REAL_TREE_HEIGHTS);
   for (const tree of sidewalkTreePositions) treePositions.push(tree);
+  // B7. The city's champion trees (champion-trees.js), at their real places, heights and crown spreads: the trees the
+  // other data put under or beside one are taken away, since it's the same tree or one its crown overshadows
+  const champions = CHAMPION_TREES.map((c) => ({ x: c.x, y: 0, z: c.z, species: c.shape, height: c.height, spread: c.spread, champion: c.name }));
+  if (champions.length) {
+    const under = (t) => champions.some((c) => (c.x - t.x) ** 2 + (c.z - t.z) ** 2 < Math.max(16, (c.spread * 0.35) ** 2));
+    for (let i = treePositions.length - 1; i >= 0; i--) if (under(treePositions[i])) treePositions.splice(i, 1);
+  }
   const keptTrees = dropCanopyFill(treePositions);
+  keptTrees.push(...champions);
   const treeField = createTreeField(scene, keptTrees, colliders,
     { stream: TIER.stream, at: TIER.stream ? groundStreamCenter() : null });
   group.add(treeField.group);
