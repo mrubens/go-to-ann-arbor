@@ -77,15 +77,17 @@ function createPostProcessing(renderer, sceneColor, reflections, options = {}) {
     return vec4(color.mul(vignette), 1.0);
   })();
 
-  function applyPreset(id) {
-    const look = LOOKS[id] || LOOKS.golden;
-    exposure.value = look.exposure;
-    contrast.value = look.contrast;
-    saturation.value = look.saturation;
-    balance.value.set(...look.balance);
+  // (`blend`: [from, to, t], two looks mixed, so "Now" eases from one to the next as the sun moves rather than jumping)
+  function applyPreset(id, blend = null) {
+    const a = LOOKS[blend ? blend[0] : id] || LOOKS.golden, b = (blend && LOOKS[blend[1]]) || a, t = blend ? blend[2] : 0;
+    const at = (x, y) => x + (y - x) * t;
+    exposure.value = at(a.exposure, b.exposure);
+    contrast.value = at(a.contrast, b.contrast);
+    saturation.value = at(a.saturation, b.saturation);
+    balance.value.set(...a.balance.map((v, i) => at(v, b.balance[i])));
     if (bloomPass) {
-      bloomPass.strength.value = look.bloom;
-      bloomPass.threshold.value = look.threshold;
+      bloomPass.strength.value = at(a.bloom, b.bloom);
+      bloomPass.threshold.value = at(a.threshold, b.threshold);
     }
   }
 

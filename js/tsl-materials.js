@@ -59,12 +59,7 @@ import {
   specularColorBlended,
   specularF90
 } from 'three/tsl';
-import {
-  BIG_PARK_BOUNDS,
-  TOWN_BOUNDS,
-  getTownBoundsAtZ,
-  streetZ
-} from './city-config.js';
+import { TOWN_BOUNDS } from './city-config.js';
 import { groundHeightNode } from './terrain.js';
 import { CASCADE_WAVES } from './cascades.js';
 import { hot } from '../lamp-game.js';
@@ -196,17 +191,13 @@ const distantWindowLight = Fn(([grid, fw, probability, seed, lod]) => {
  */
 const canyonSkyAONode = Fn(() => {
   const wp = positionWorld;
-  // Open sky inside Central Park (city-config.js BIG_PARK_BOUNDS, 5th Ave to Central Park West, 59th to 110th St)
-  const cp = BIG_PARK_BOUNDS;
-  const inParkX = smoothstep(cp.minX - 10.0, cp.minX + 20.0, wp.x).mul(float(1.0).sub(smoothstep(cp.maxX - 20.0, cp.maxX + 10.0, wp.x)));
-  const inParkZ = smoothstep(cp.minZ - 10.0, cp.minZ + 30.0, wp.z).mul(float(1.0).sub(smoothstep(cp.maxZ - 30.0, cp.maxZ + 10.0, wp.z)));
-  const inPark = inParkX.mul(inParkZ);
-
   // Lamp: heights above the ground under the point (terrain.js)
   const above = wp.y.sub(groundHeightNode(wp.xz));
-  const streetCrevice = smoothstep(0.0, 7.5, above).mul(0.22).add(0.78);
-  return mix(streetCrevice, float(1.0), inPark);
+  return smoothstep(0.0, 7.5, above).mul(0.22).add(0.78);
 });
+// The same on surfaces that lie on the ground (roads, sidewalks, curbs, paving), where it is always its foot: no
+// ground-height read for an answer that never changes
+const groundSkyAONode = () => float(0.78);
 
 // Material caches to prevent duplicate WebGPU WGSL shader compilation across blocks & landmarks
 const _curtainWallCache = new Map();
@@ -1565,7 +1556,7 @@ function createParkPavingMaterial() {
     roughness: 0.86
   });
 
-  mat.aoNode = canyonSkyAONode();
+  mat.aoNode = groundSkyAONode();
 
   mat.colorNode = Fn(() => {
     const wx = positionWorld.x;
@@ -1802,7 +1793,7 @@ function createTreeGrateMaterial() {
     roughness: 0.68
   });
 
-  mat.aoNode = canyonSkyAONode();
+  mat.aoNode = groundSkyAONode();
 
   mat.colorNode = Fn(() => {
     const r = length(positionLocal.xz);
@@ -1819,8 +1810,7 @@ function roadPuddleField(wx, wz) {
   const nMacro = noise2D(vec2(wx.mul(0.095), wz.mul(0.075)));
   const nMid = noise2D(vec2(wx.mul(0.25).add(19.4), wz.mul(0.22).add(11.8)));
   const nDetail = noise2D(vec2(wx.mul(0.68).sub(7.3), wz.mul(0.68).add(29.1)));
-  const spawnPool = smoothstep(4.2, 1.4, length(vec2(wx.sub(1.6), wz.sub(122.8)))).mul(0.10);
-  return nMacro.mul(0.52).add(nMid.mul(0.34)).add(nDetail.mul(0.14)).add(spawnPool);
+  return nMacro.mul(0.52).add(nMid.mul(0.34)).add(nDetail.mul(0.14));
 }
 
 /**
@@ -2014,7 +2004,7 @@ function createRoadSurfaceMaterial() {
   const viewDir = normalize(cameraPosition.sub(positionWorld));
   const waterFresnel = pow(float(1.0).sub(clamp(viewDir.y, 0.0, 1.0)), 5.0).mul(0.98).add(0.02);
 
-  mat.aoNode = canyonSkyAONode();
+  mat.aoNode = groundSkyAONode();
 
   mat.colorNode = Fn(() => {
     const wx = positionWorld.x;
@@ -2032,13 +2022,16 @@ function createRoadSurfaceMaterial() {
     const oilyStain = fadedDetail(camDist.lessThan(240.0), 0.0, () =>
       smoothstep(0.52, 0.84, noise2D(vec2(wx.mul(0.42), wz.mul(0.42)))).mul(detail));
     const tarSeam = float(1.0).sub(smoothstep(0.0, 0.04, abs(patchNoise.sub(0.52)))).mul(0.42).mul(detail);
-    // Binder-rich (dark) & ravelled, aggregate-exposed (pale) mottling a stride or so across
-    const mottle = noise2D(vec2(wx.mul(0.9), wz.mul(0.9)).add(41.0)).mul(0.65).add(noise2D(vec2(wx.mul(2.3), wz.mul(2.3)).add(7.0)).mul(0.35));
+    // Binder-rich (dark) & ravelled, aggregate-exposed (pale) mottling a stride or so across (its mean, 0.5, once a
+    // pixel spans 40 cm, the patches then only a few pixels across)
+    const mottle = fadedDetail(px.lessThan(0.4), 0.5, () => mix(float(0.5), smoothstep(0.3, 0.7,
+      noise2D(vec2(wx.mul(0.9), wz.mul(0.9)).add(41.0)).mul(0.65).add(noise2D(vec2(wx.mul(2.3), wz.mul(2.3)).add(7.0)).mul(0.35))),
+    smoothstep(0.4, 0.2, px)));
 
     const baseAsphalt = mix(
       cAsphaltDark,
       cAsphaltLight,
-      fineGrain.mul(0.3).add(microAggregate.mul(0.22)).add(patchNoise.mul(0.22)).add(smoothstep(0.3, 0.7, mottle).mul(0.26)).sub(0.04)
+      fineGrain.mul(0.3).add(microAggregate.mul(0.22)).add(patchNoise.mul(0.22)).add(mottle.mul(0.26)).sub(0.04)
     )
       .mul(float(1.0).sub(oilyStain.mul(0.32)))
       .mul(float(1.0).sub(tarSeam));
@@ -2097,8 +2090,9 @@ function createRoadSurfaceMaterial() {
     const fineFade = smoothstep(0.02, 0.006, px).mul(float(1.0).sub(film.mul(0.6))).toVar();
     const ramp = max(float(0.012), px.mul(2.0));
 
-    const swell = noise2D(vec2(wx.mul(0.55), wz.mul(0.55)).add(23.0)).sub(0.5).mul(0.02)
-      .add(noise2D(vec2(wx.mul(1.9), wz.mul(1.9))).sub(0.5).mul(0.005));
+    // (flat once a pixel spans 25 cm: a bump map's gentle swell no longer reads there)
+    const swell = fadedDetail(px.lessThan(0.25), 0.0, () => noise2D(vec2(wx.mul(0.55), wz.mul(0.55)).add(23.0)).sub(0.5).mul(0.02)
+      .add(noise2D(vec2(wx.mul(1.9), wz.mul(1.9))).sub(0.5).mul(0.005)).mul(smoothstep(0.25, 0.12, px)));
     const ripples = fadedDetail(px.lessThan(0.3), 0.0, () =>
       noise2D(vec2(wx.mul(3.6), wz.mul(3.6)).add(61.0)).sub(0.5).mul(0.004).mul(smoothstep(0.3, 0.1, px)));
     const coarseGrit = fadedDetail(px.lessThan(0.12), 0.0, () =>
@@ -2123,23 +2117,11 @@ function createRoadSurfaceMaterial() {
   })();
 
   mat.emissiveNode = Fn(() => {
-    const wx = positionWorld.x;
-    const wz = positionWorld.z;
-
     const roadFresnel = pow(clamp(float(1.0).sub(abs(viewDir.y)), 0.0, 1.0), 2.3);
 
-    const skyMirror = mix(cityUniforms.uSkyHorizonColor, cityUniforms.uSkyTopColor, 0.40).mul(0.10).toVar();
+    const skyMirror = mix(cityUniforms.uSkyHorizonColor, cityUniforms.uSkyTopColor, 0.40).mul(0.10);
 
-    // Neon tint only within reach of Times Square
-    const tsDist = clamp(float(1.0).sub(length(vec2(wx.add(212.0), wz.add(45.0))).div(145.0)), 0.0, 1.0).toVar();
-    const reflectCol = vec3(skyMirror).toVar();
-    If(tsDist.greaterThan(0.0), () => {
-      const neonPatch = noise2D(vec2(wx.mul(0.15), wz.mul(0.15)));
-      const neonCol = mix(color(0xff2a85), color(0x2ad4ff), neonPatch).mul(0.32);
-      reflectCol.assign(mix(skyMirror, neonCol, tsDist.mul(0.65)));
-    });
-
-    return reflectCol.mul(max(puddle, film.mul(0.35))).mul(roadFresnel).mul(cityUniforms.uInteriorGlow).mul(0.07);
+    return skyMirror.mul(max(puddle, film.mul(0.35))).mul(roadFresnel).mul(cityUniforms.uInteriorGlow).mul(0.07);
   })();
 
   mat.userData.snow = 0.18; // plowed: only a little slush (snow-cover.js)
@@ -2214,7 +2196,7 @@ function createRoadPaintMaterial() {
   const film = smoothstep(0.2, 0.8, cityUniforms.uRoadWetness);
   mat.colorNode = vec3(mix(float(1.0), float(0.72), puddle).mul(mix(float(1.0), float(0.86), film)));
   mat.roughnessNode = mix(mix(float(0.62), float(0.42), film), float(0.2), puddle);
-  mat.aoNode = canyonSkyAONode();
+  mat.aoNode = groundSkyAONode();
 
   _roadPaintMaterial = mat;
   mat.userData.snow = 0.18;
@@ -2296,7 +2278,7 @@ function createSidewalkMaterial() {
   const hasCrack = step(0.875, hash2D(flagId.add(vec2(41.7, 9.2)))).mul(float(1.0).sub(replaced));
   const crack = lineAA(crackDist, 0.0012).mul(hasCrack).mul(smoothstep(0.004, 0.02, edgeDist));
 
-  mat.aoNode = canyonSkyAONode();
+  mat.aoNode = groundSkyAONode();
 
   mat.colorNode = Fn(() => {
     const wx = positionWorld.x;
@@ -2383,7 +2365,7 @@ function createCurbMaterial() {
     roughness: 0.72
   });
 
-  mat.aoNode = canyonSkyAONode();
+  mat.aoNode = groundSkyAONode();
 
   mat.colorNode = Fn(() => {
     const wx = positionWorld.x;
@@ -3115,6 +3097,8 @@ function createWaterMaterial() {
   // the river partly clear: its bed shows through where you look down into it, the surface a mirror toward the
   // horizon, white water solid, and from underneath a bright window up to the sky
   mat.transparent = true;
+  // a flat sheet has no back-to-front order to keep: one draw a tile, not a back-face pass then a front-face one
+  mat.forceSinglePass = true;
   mat.opacityNode = mix(clamp(max(float(0.58).add(fresnel.mul(0.9)), foam), 0.0, 1.0), float(0.7), float(1).sub(float(frontFacing)));
 
   // Sediment-laden estuary: deep blue-green grey ↔ silty olive grey; thin sunlit crests transmit a greener tint
@@ -3128,154 +3112,8 @@ function createWaterMaterial() {
     return mix(mix(body, lake, pond).mul(crestTint), froth, foam);
   })();
 
-  // Night: the lit city seen along the reflected ray. The town is a stack of boxes inscribed in its edge, with a row of
-  // lit lots standing back from the water on either side, and around a big park's lakes its rim (none in Ann Arbor).
-  // Each is a row of lots with varied heights, lit windows, storefronts & riverside lamps, box-filtered by the unresolved
-  // wave slopes (vertically) & the foreshortened lateral slopes (horizontally), so distant lights smear into streaks.
-  // The boxes & shorelines come from the real geography (city-config.js): [minX, minZ, maxX, maxZ] slabs inscribed in
-  // the town ~1.1 km apart, and the far rows west and east of it every 900 m of z
-
-  const IB = TOWN_BOUNDS;
-  const TOWN_BOXES = [];
-  for (let z0 = IB.minZ; z0 < IB.maxZ - 1; z0 += 1140) {
-    const z1 = Math.min(IB.maxZ, z0 + 1140);
-    let x0 = -Infinity, x1 = Infinity;
-    for (let z = z0; z <= z1 + 0.1; z += (z1 - z0) / 8) {
-      const s = getTownBoundsAtZ(z);
-      x0 = Math.max(x0, s.westX + 40);
-      x1 = Math.min(x1, s.eastX - 40);
-    }
-    if (x1 - x0 > 100) TOWN_BOXES.push([Math.round(x0), Math.round(z0), Math.round(x1), Math.round(z1)]);
-  }
-  const westShore = [], eastShore = [];
-  for (let z = IB.minZ - 900; z <= IB.maxZ + 900; z += 900) {
-    const s = getTownBoundsAtZ(Math.max(IB.minZ, Math.min(IB.maxZ, z)));
-    westShore.push([z, s.westX - 1300]);
-    eastShore.push([z, s.eastX + 900]);
-  }
-  // A shoreline x(z) through its control points, linear from one to the next. Built as a balanced sum of independent
-  // per-segment terms: a 17-deep chain of nested mix() nodes takes TSL's node build exponentially long (getNodeType
-  // recurses unmemoized into every path) and stalls the page
-  const shoreAt = (pts, z) => {
-    let terms = [];
-    for (let i = 1; i < pts.length; i++) {
-      const [za, xa] = pts[i - 1];
-      const [zb, xb] = pts[i];
-      const t = clamp(z.sub(za).div(zb - za), 0.0, 1.0);
-      const before = float(1.0).sub(step(zb, z));
-      const inSeg = i === 1 ? before : i === pts.length - 1 ? step(za, z) : step(za, z).mul(before);
-      terms.push(inSeg.mul(mix(float(xa), float(xb), t)));
-    }
-    while (terms.length > 1) {
-      const next = [];
-      for (let i = 0; i < terms.length; i += 2) next.push(i + 1 < terms.length ? terms[i].add(terms[i + 1]) : terms[i]);
-      terms = next;
-    }
-    return terms[0];
-  };
-  const CPB = BIG_PARK_BOUNDS;
-  const zSt = (n) => streetZ(n);
-  mat.emissiveNode = Fn(() => {
-    const emit = vec3(0.0).toVar();
-    const night = smoothstep(0.55, 1.35, cityUniforms.uInteriorGlow);
-    // Uniform time-of-day gate: skips reflection vector, derivatives & skyline raycast completely in daytime presets
-    If(night.greaterThan(0.0001), () => {
-      const P = positionWorld.xz;
-      // The analytic skyline only models the rivers along the detailed island: fade it out up the Hudson & Harlem River
-      // and down the Upper Bay, where its shorelines no longer match the boroughs
-      const region = smoothstep(IB.minZ - 400.0, IB.minZ - 100.0, P.y)
-        .mul(float(1.0).sub(smoothstep(IB.maxZ + 200.0, IB.maxZ + 600.0, P.y)));
-      const weight = night.mul(region);
-
-      const R = reflect(viewDir.negate(), waterNormal);
-      const horiz = max(length(R.xz), 0.001);
-      const dir = R.xz.div(horiz).toVar();
-      const tanEl = R.y.div(horiz).toVar();
-      // Materialize derivatives in uniform control flow (.toVar() emits before the spatial region branch)
-      const fwPSum = fwidth(P.x.add(P.y)).toVar();
-      const fwDirSum = fwidth(dir.x.add(dir.y)).toVar();
-      const fwTanEl = fwidth(tanEl).toVar();
-
-      If(weight.greaterThan(0.0001), () => {
-        const sgn = vec2(mix(float(-1.0), float(1.0), step(0.0, dir.x)), mix(float(-1.0), float(1.0), step(0.0, dir.y)));
-        const inv = sgn.div(max(abs(dir), vec2(0.0001))).toVar();
-
-        // Nearest Manhattan face entered from outside
-        const tIsland = float(1e5).toVar();
-        for (const [x0, z0, x1, z1] of TOWN_BOXES) {
-          const ta = vec2(x0, z0).sub(P).mul(inv);
-          const tb = vec2(x1, z1).sub(P).mul(inv);
-          const tn = max(min(ta.x, tb.x), min(ta.y, tb.y));
-          const tf = min(max(ta.x, tb.x), max(ta.y, tb.y));
-          tIsland.assign(min(tIsland, mix(float(1e5), tn, step(0.0, tn).mul(step(tn, tf)))));
-        }
-        // Across the rivers: the New Jersey waterfront to the west, Queens & Brooklyn to the east
-        const xWest = shoreAt(westShore, P.y).toVar();
-        const xEast = shoreAt(eastShore, P.y).toVar();
-        const tShoreRaw = mix(xWest, xEast, step(0.0, dir.x)).sub(P.x).mul(inv.x).toVar();
-        const tShore = mix(float(8000.0), clamp(tShoreRaw, 60.0, 8000.0), step(0.0, tShoreRaw)).toVar();
-        const onIsland = step(tIsland, tShore);
-        // Park lakes: the walls of buildings around Central Park's rectangle, seen from inside it
-        const ca = vec2(CPB.minX, CPB.minZ).sub(P).mul(inv);
-        const cb = vec2(CPB.maxX, CPB.maxZ).sub(P).mul(inv);
-        const tPark = clamp(min(max(ca.x, cb.x), max(ca.y, cb.y)), 60.0, 4200.0);
-        const lake = step(0.5, pond);
-
-        const tHit = mix(min(tIsland, tShore), tPark, lake).toVar();
-        const hit = P.add(dir.mul(tHit)).toVar();
-        const hRefl = tHit.mul(tanEl); // height up the facades that this reflection sees
-        const u = hit.x.add(hit.y); // runs along whichever face was hit
-
-        // Skyline heights: Midtown (60th to 28th St) & the Financial District (south of Chambers St) stand tallest
-        const midtown = smoothstep(zSt(80), zSt(60), hit.y).mul(float(1.0).sub(smoothstep(zSt(28), zSt(14), hit.y)));
-        const townS = mix(float(70.0), float(215.0), max(midtown, smoothstep(4400.0, 4950.0, hit.y)));
-        // Across the rivers: the Jersey City towers (Newport to Exchange Place) & Long Island City (opposite 60th-26th St)
-        const jerseyCity = smoothstep(3300.0, 3900.0, hit.y).mul(float(1.0).sub(smoothstep(6100.0, 6500.0, hit.y))).mul(step(hit.x, 0.0));
-        const lic = smoothstep(zSt(62), zSt(57), hit.y).mul(float(1.0).sub(smoothstep(zSt(30), zSt(25), hit.y))).mul(step(0.0, hit.x));
-        const S = mix(mix(mix(float(30.0), float(120.0), max(jerseyCity, lic)), townS, onIsland), float(120.0), lake);
-        const brightness = mix(mix(float(0.6), float(1.0), onIsland), float(0.8), lake);
-
-        // Footprint on the facades (m): unresolved slopes tilt the reflection ±2σ, laterally foreshortened at grazing views
-        const sigma2 = sqrt(variance).mul(2.0);
-        const fwH = tHit.mul(fwTanEl).add(abs(tanEl).mul(fwPSum));
-        const fwU = fwPSum.add(tHit.mul(fwDirSum));
-        const sV = tHit.mul(sigma2).add(fwH).add(0.5).toVar();
-        const sU = tHit.mul(sigma2).mul(max(viewDir.y, 0.05)).add(fwU).add(0.3).toVar();
-
-        // Lots 24 m wide with heights 0.3-1.3x the district skyline (averaged once a footprint spans several lots)
-        const lot = floor(u.div(24.0));
-        const r1 = hash2D(vec2(lot, 5.1));
-        const r2 = hash2D(vec2(lot, 9.7));
-        const r3 = hash2D(vec2(lot, 13.3));
-        const lotMix = smoothstep(5.0, 20.0, sU);
-        const upper = mix(boxCoverage(hRefl, 4.5, S.mul(r1.mul(r1).add(0.3)), sV), boxCoverage(hRefl, 4.5, S.mul(0.63), sV), lotMix);
-        const ground = boxCoverage(hRefl, 0.0, 4.5, sV);
-
-        // Lit windows (3.2 m bays × 3.6 m floors), resolving to each lot's mean occupancy, then the street's
-        const dens = mix(float(0.2), float(0.6), r2);
-        const bayF = u.div(3.2);
-        const floorF = hRefl.div(3.6);
-        const litWin = step(hash2D(floor(vec2(bayF, floorF)).add(lot.mul(0.731))), dens);
-        const pane = filteredPulse(fract(bayF), 0.16, 0.84, sU.div(3.2)).mul(filteredPulse(fract(floorF), 0.3, 0.88, sV.div(3.6)));
-        const winDetail = float(1.0).sub(smoothstep(0.7, 1.8, max(sU.div(3.2), sV.div(3.6))));
-        const windows = mix(mix(dens.mul(0.394), litWin.mul(pane), winDetail), float(0.4 * 0.394), lotMix);
-        const tint = mix(mix(color(0xffc58a), color(0xdde6ff), step(0.62, r3)), color(0xf6d3aa), lotMix);
-        const shopLit = mix(mix(float(0.1), float(1.0), step(0.35, r3)), float(0.7), lotMix);
-
-        // Riverside promenade / highway lamps every 30 m, heads at ~8.5 m
-        const lampDist = abs(fract(u.div(30.0)).sub(0.5)).mul(30.0);
-        const lampU = mix(boxCoverage(lampDist, -0.45, 0.45, sU), float(0.9 / 30.0), smoothstep(5.0, 14.0, sU));
-        const lamps = lampU.mul(boxCoverage(hRefl, 8.2, 8.8, sV)).mul(70.0);
-
-        const city = tint.mul(windows.mul(upper).mul(0.95))
-          .add(color(0xffcf9a).mul(ground.mul(shopLit).mul(0.4)))
-          .add(color(0xffd9b0).mul(lamps));
-        const treeline = mix(float(1.0), smoothstep(0.2, 0.42, tanEl), lake); // lake shores: only towers above the trees
-        emit.assign(city.mul(brightness).mul(treeline).mul(fresnel).mul(weight));
-      });
-    });
-    return emit;
-  })();
+  // No analytic night skyline on the water: New York's (a lit wall of towers round a park's lake, rows of them across
+  // the rivers) stood, here, 60 m off round the Huron's every reach and in the countryside beyond town
 
   mat.userData.snow = 0; // open water (snow-cover.js)
   return mat;

@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
-import { Fn, float, floor, hash, instanceIndex, normalize, positionLocal, sin, uniform, vec3 } from 'three/tsl';
+import { Fn, float, floor, hash, instanceIndex, mix, normalize, positionLocal, sin, smoothstep, uniform, vec3 } from 'three/tsl';
+import { cityUniforms } from './tsl-materials.js';
 
 // Lamp: Ann Arbor's weather as it is now, from the National Weather Service's latest observation at Ann Arbor
 // Municipal Airport (KARB, api.weather.gov, a US government work in the public domain), asked for when the city opens
@@ -54,7 +55,8 @@ async function askOnce() {
       headers: { Accept: 'application/geo+json' },
       // never an earlier answer kept by the web view: "latest" changes every few minutes, and a kept one showed this
       // morning's 28°F at noon
-      cache: 'no-store'
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000)
     });
     if (!res.ok) return null;
     const props = (await res.json()).properties || {};
@@ -138,10 +140,15 @@ function createPrecipitation() {
   const geometry = new THREE.InstancedBufferGeometry().copy(new THREE.PlaneGeometry(1, 1));
   geometry.instanceCount = 0;
   const material = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  // camera-facing streaks have no back and front to order: one draw, not a back-face pass then a front-face one
+  material.forceSinglePass = true;
   const uColor = uniform(new THREE.Color(0xc8d2dc));
   const uOpacity = uniform(0.3);
   const uSize = uniform(new THREE.Vector2(0.014, 0.7));
-  material.colorNode = uColor;
+  // lit as the air round them is (they are drawn unlit): full by day; at night about a tenth, with the sky's horizon in
+  // it, so the snow is not a flurry of self-lit white dots over the dark street (night as moon.js reads it)
+  const night = smoothstep(0.7, 1.45, cityUniforms.uInteriorGlow);
+  material.colorNode = uColor.mul(mix(vec3(1), cityUniforms.uSkyHorizonColor.mul(0.6).add(0.1), night));
   material.opacityNode = uOpacity;
   material.positionNode = Fn(() => {
     const i = float(instanceIndex);

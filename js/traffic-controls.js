@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundHeight } from './terrain.js';
-import { color, mix, uniform } from 'three/tsl';
+import { attribute, color, float, floor, mix, step, abs, texture, uniform, uv, vec2 } from 'three/tsl';
 import { signalPhase, nearestRoads } from './city-config.js';
 import { log } from '../lamp-game.js';
 
@@ -18,18 +18,6 @@ const postedMph = (e) => e.mph || CLASS_MPH[e.cls ?? 4] || 25;
 
 const HEAD_Y = 5.42;
 const ARM_Y = 6.05;
-
-function signTexture(draw, h = 256) {
-  const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = h;
-  const ctx = c.getContext('2d');
-  draw(ctx);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  return tex;
-}
 
 const octagon = (ctx, r) => {
   ctx.beginPath();
@@ -128,36 +116,51 @@ function limitFace(mph) {
     ctx.fillText(String(mph), 128, 228);
   };
 }
-const silhouette = (shape) => (ctx) => {
-  shape(ctx);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-};
 
 // The lamps of a head, top to bottom, each lit through its part of the cycle traffic obeys (city-config.js's
-// signalPhase, for the main road (axisIndex 0) or the cross street), switched by update() every frame
-const LAMPS = ['red', 'amber', 'green'];
+// signalPhase, for the main road (axisIndex 0) or the cross street), switched by update() every frame. Lamp: every
+// head's three lamps are one mesh: each vertex knows its lamp (attribute `lamp`, 0-2) and each head its road
+// (instance attribute `road`, 0 main, 1 cross), read against two uniforms of which lamp is lit on each road.
 const LAMP_COLORS = { red: 0xff2a1e, amber: 0xffa20e, green: 0x1cff7a };
-function lampMaterial(lamp) {
-  const lit = color(LAMP_COLORS[lamp]);
-  const on = uniform(0);
+function lampMaterial() {
+  const onMain = uniform(new THREE.Vector3()), onCross = uniform(new THREE.Vector3());
+  const k = attribute('lamp', 'float'), road = attribute('road', 'float');
+  const amber = step(0.5, k), green = step(1.5, k);
+  const lit = mix(mix(color(LAMP_COLORS.red), color(LAMP_COLORS.amber), amber), color(LAMP_COLORS.green), green);
+  const ons = mix(onMain, onCross, road);
+  const on = mix(mix(ons.x, ons.y, amber), ons.z, green);
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.colorNode = mix(lit.mul(0.08), lit.mul(2.2), on); // a dark, tinted lens when off; bright enough to bloom when on
-  mat.userData.on = on;
+  mat.userData.on = [onMain, onCross];
   return mat;
 }
+
+// Lamp: every sign's face and back drawn from one atlas, a 256 x 320 cell per picture (each stretched to fill it, as
+// its face's plane stretches it back), with a gutter round each
+const TILE_W = 256, TILE_H = 320, PAD = 8, COLS = 4;
 
 function buildTrafficControls(group, network) {
   group.name = 'TrafficControls';
   const dummy = new THREE.Object3D();
   const lists = new Map(); // name -> matrices
+  const extra = new Map(); // name -> each copy's own numbers (a head's road; a sign's face and back pictures)
   let standing = null; // the pole or post being put up: each piece of it noted, so it can be knocked over as one
-  const put = (name) => {
+  // Lamp: poles, arms and posts are one mesh of one metal (the arm's turn on its side in its matrix), every sign's face
+  // and back another; `data` is what that copy's instance attribute holds
+  const ARM_TURN = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+  const put = (name, data = null) => {
     dummy.updateMatrix();
-    if (!lists.has(name)) lists.set(name, []);
+    const m = dummy.matrix.clone();
+    if (name === 'arm') m.multiply(ARM_TURN);
+    if (name === 'pole' || name === 'arm' || name === 'post') name = 'metal';
+    if (!lists.has(name)) { lists.set(name, []); extra.set(name, []); }
     standing?.parts.push(name, lists.get(name).length);
-    lists.get(name).push(dummy.matrix.clone());
+    lists.get(name).push(m);
+    if (data !== null) extra.get(name).push(...[data].flat());
   };
+  const tiles = new Map(); // picture -> its cell in the atlas
+  const tileOf = (name) => { if (!tiles.has(name)) tiles.set(name, tiles.size); return tiles.get(name); };
+  const sign = (face, back) => put('sign', [tileOf(face), tileOf(back)]);
   const onRoad = (x, z) => network.isRoadClear && network.isRoadClear(x, z, 0.2);
   // on any street's pavement, curb to curb, by the real streets' centrelines and widths
   const onPavement = (x, z) => nearestRoads(x, z, 15).some((n) => n.dist < (n.road.w || 8) / 2 + 0.4);
@@ -200,8 +203,7 @@ function buildTrafficControls(group, network) {
     dummy.rotation.set(0, Math.atan2(-e.dz, e.dx), 0);
     dummy.position.set(px, g + 2.3, pz);
     dummy.scale.set(0.92, 0.31, 1);
-    put('oneWay');
-    put('oneWayBack');
+    sign('oneWay', 'oneWayBack');
     oneWaySigns++;
   };
   for (const e of network.edges) {
@@ -257,8 +259,7 @@ function buildTrafficControls(group, network) {
     put('post');
     dummy.position.set(px, g + 2.0, pz);
     dummy.scale.set(0.61, 0.76, 1);
-    put('limit' + mph);
-    put('limitBack');
+    sign('limit' + mph, 'limitBack');
     limits.set(mph, (limits.get(mph) || 0) + 1);
     return true;
   };
@@ -319,7 +320,7 @@ function buildTrafficControls(group, network) {
         dummy.position.set(hx, groundHeight(hx, hz) + HEAD_Y, hz);
         dummy.scale.set(1, 1, 1);
         put('head');
-        for (const lamp of LAMPS) put(lamp + (e.axisIndex === 0 ? 'A' : 'B'));
+        put('lamps', e.axisIndex === 0 ? 0 : 1);
         lights++;
       }
     } else if (e.control) {
@@ -335,13 +336,11 @@ function buildTrafficControls(group, network) {
       dummy.position.set(px, g + 2.1, pz);
       dummy.scale.set(0.76, 0.76, 1);
       const yieldSign = e.control === 'yield';
-      put(yieldSign ? 'yield' : 'stop');
-      put(yieldSign ? 'yieldBack' : 'stopBack');
+      sign(yieldSign ? 'yield' : 'stop', yieldSign ? 'yieldBack' : 'stopBack');
       if (!yieldSign && n.allStop) {
         dummy.position.set(px, g + 1.6, pz);
         dummy.scale.set(0.46, 0.46, 1);
-        put('plaque');
-        put('plaqueBack');
+        sign('plaque', 'plaqueBack');
       }
       signs++;
     }
@@ -359,46 +358,82 @@ function buildTrafficControls(group, network) {
       .rotateX(Math.PI / 2).translate(0, ly, D / 2 + 0.12))
   ]);
   // one lamp each: red on top, amber, green at the bottom, facing the drivers coming up to the head
-  const lampGeo = LY.map((ly) => new THREE.CircleGeometry(R, 20).translate(0, ly, D / 2 + 0.004));
+  const lampGeo = mergeGeometries(LY.map((ly, i) => {
+    const g = new THREE.CircleGeometry(R, 20).translate(0, ly, D / 2 + 0.004);
+    g.setAttribute('lamp', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(i), 1));
+    return g;
+  }));
   // a sign's face stands just in front of its post (5 cm round), bolted to it from behind, so the post shows only
-  // behind the sign and above and below it
-  const plane = new THREE.PlaneGeometry(1, 1).translate(0, 0, 0.07);
-  const back = new THREE.PlaneGeometry(1, 1).rotateY(Math.PI).translate(0, 0, 0.06);
-  const face = (draw) => new THREE.MeshStandardNodeMaterial({ map: signTexture(draw), alphaTest: 0.5, roughness: 0.5 });
-  const backOf = (shape) => new THREE.MeshStandardNodeMaterial({
-    color: 0x9a9ea2, alphaMap: signTexture(silhouette(shape)), alphaTest: 0.5, roughness: 0.6, metalness: 0.5
-  });
+  // behind the sign and above and below it; its back (attribute `side` 1) just behind the face
+  const sided = (g, side) => g.setAttribute('side', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(side), 1));
+  const signGeo = mergeGeometries([
+    sided(new THREE.PlaneGeometry(1, 1).translate(0, 0, 0.07), 0),
+    sided(new THREE.PlaneGeometry(1, 1).rotateY(Math.PI).translate(0, 0, 0.06), 1)
+  ]);
+  // the pictures: each face, and the backs (bare grey metal cut to the sign's shape; the ONE WAY sign's back is printed)
+  const BACK = '#9a9ea2';
+  const fill = (shape) => (ctx) => { shape(ctx); ctx.fillStyle = BACK; ctx.fill(); };
   const plaqueShape = (ctx) => { ctx.beginPath(); ctx.rect(0, 64, 256, 128); };
+  const pictures = {
+    stop: [stopFace, 256], yield: [yieldFace, 256], plaque: [plaqueFace, 256],
+    stopBack: [fill((ctx) => octagon(ctx, 126)), 256], yieldBack: [fill((ctx) => triangle(ctx, 140)), 256],
+    plaqueBack: [fill(plaqueShape), 256],
+    oneWay: [oneWayFace(false), 86, true], oneWayBack: [oneWayFace(true), 86, true],
+    limitBack: [(ctx) => { ctx.fillStyle = BACK; ctx.fillRect(0, 0, 256, 320); }, 320, true],
+    ...Object.fromEntries([...limits.keys()].map((mph) => ['limit' + mph, [limitFace(mph), 320, true]]))
+  };
+  const rows = Math.max(1, Math.ceil(tiles.size / COLS));
+  const atlasW = COLS * (TILE_W + 2 * PAD), atlasH = rows * (TILE_H + 2 * PAD);
+  const atlas = document.createElement('canvas');
+  atlas.width = atlasW;
+  atlas.height = atlasH;
+  const actx = atlas.getContext('2d');
+  for (const [name, t] of tiles) {
+    const [draw, h, opaque] = pictures[name];
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = h;
+    draw(c.getContext('2d'));
+    const x = (t % COLS) * (TILE_W + 2 * PAD), y = Math.floor(t / COLS) * (TILE_H + 2 * PAD);
+    // (an edge-to-edge picture carried out into its gutter, so its edges stay put as the far mip levels blur)
+    if (opaque) actx.drawImage(c, x, y, TILE_W + 2 * PAD, TILE_H + 2 * PAD);
+    actx.drawImage(c, x + PAD, y + PAD, TILE_W, TILE_H);
+  }
+  const atlasTex = new THREE.CanvasTexture(atlas);
+  atlasTex.colorSpace = THREE.SRGBColorSpace;
+  atlasTex.anisotropy = 4;
+  const signMat = new THREE.MeshStandardNodeMaterial({ alphaTest: 0.5 });
+  {
+    const side = attribute('side', 'float'), pics = attribute('tile', 'vec2');
+    const t = mix(pics.x, pics.y, side);
+    const row = floor(t.add(0.5).div(COLS)), col = t.sub(row.mul(COLS));
+    const p = uv();
+    const u = col.mul(TILE_W + 2 * PAD).add(PAD).add(p.x.mul(TILE_W)).div(atlasW);
+    const v = float(1).sub(row.mul(TILE_H + 2 * PAD).add(PAD).add(float(1).sub(p.y).mul(TILE_H)).div(atlasH));
+    signMat.colorNode = texture(atlasTex, vec2(u, v));
+    // the grey backs are bare metal; the faces (and the printed ONE WAY back) aren't
+    const printed = tiles.has('oneWayBack') ? step(abs(t.sub(tiles.get('oneWayBack'))), 0.25) : float(0);
+    signMat.metalnessNode = side.mul(float(1).sub(printed)).mul(0.5);
+    signMat.roughnessNode = mix(float(0.5), float(0.6), side);
+  }
   const kinds = {
-    pole: [new THREE.CylinderGeometry(1, 1, 1, 10), metal, true],
-    arm: [new THREE.CylinderGeometry(1, 1, 1, 8).rotateX(Math.PI / 2), metal, false],
+    metal: [new THREE.CylinderGeometry(1, 1, 1, 8), metal, true],
     head: [headGeo, housing, false],
-    ...Object.fromEntries(LAMPS.flatMap((lamp, i) => [
-      [lamp + 'A', [lampGeo[i], lampMaterial(lamp), false]],
-      [lamp + 'B', [lampGeo[i], lampMaterial(lamp), false]]
-    ])),
-    post: [new THREE.CylinderGeometry(1, 1, 1, 6), metal, false],
-    stop: [plane, face(stopFace), false],
-    stopBack: [back, backOf((ctx) => octagon(ctx, 126)), false],
-    yield: [plane, face(yieldFace), false],
-    yieldBack: [back, backOf((ctx) => triangle(ctx, 140)), false],
-    plaque: [plane, face(plaqueFace), false],
-    plaqueBack: [back, backOf(plaqueShape), false],
-    oneWay: [plane, new THREE.MeshStandardNodeMaterial({ map: signTexture(oneWayFace(false), 86), roughness: 0.5 }), true],
-    oneWayBack: [back, new THREE.MeshStandardNodeMaterial({ map: signTexture(oneWayFace(true), 86), roughness: 0.5 }), false],
-    limitBack: [back, new THREE.MeshStandardNodeMaterial({ color: 0x9a9ea2, roughness: 0.6, metalness: 0.5 }), false],
-    ...Object.fromEntries([...limits.keys()].map((mph) => ['limit' + mph,
-      [plane, new THREE.MeshStandardNodeMaterial({ map: signTexture(limitFace(mph), 320), roughness: 0.5 }), true]]))
+    lamps: [lampGeo, lampMaterial(), false, 'road', 1],
+    // (no shadows from the plates: the shadow pass doesn't read the atlas's cut-outs)
+    sign: [signGeo, signMat, false, 'tile', 2]
   };
   const meshOf = new Map();
   for (const [name, matrices] of lists) {
-    const [geo, mat, shadow] = kinds[name];
+    const [geo0, mat, shadow, attr, size] = kinds[name];
+    const geo = attr ? geo0.clone() : geo0;
+    if (attr) geo.setAttribute(attr, new THREE.InstancedBufferAttribute(new Float32Array(extra.get(name)), size));
     const inst = new THREE.InstancedMesh(geo, mat, matrices.length);
     meshOf.set(name, inst);
     matrices.forEach((m, i) => inst.setMatrixAt(i, m));
     inst.instanceMatrix.needsUpdate = true;
     inst.castShadow = shadow;
-    inst.userData.cullDistance = name === 'pole' || name === 'arm' || name === 'head' || name.endsWith('A') || name.endsWith('B') ? 550 : 320;
+    inst.userData.cullDistance = name === 'sign' ? 320 : 550;
     inst.name = 'TrafficControls_' + name;
     group.add(inst);
   }
@@ -411,9 +446,11 @@ function buildTrafficControls(group, network) {
   group.userData.terrain = 'set'; // each was stood on the ground as it was placed
   log(`[traffic controls] ${lights} signal heads, ${signs} stop & yield signs, ${oneWaySigns} one-way signs, `
     + `${[...limits.values()].reduce((a, b) => a + b, 0)} speed limit signs (${[...limits].sort((a, b) => a[0] - b[0]).map(([m, n]) => `${n} at ${m}`).join(', ')})`);
-  const lamps = LAMPS.flatMap((lamp) => [[lamp, true, kinds[lamp + 'A'][1]], [lamp, false, kinds[lamp + 'B'][1]]]);
+  const [onMain, onCross] = kinds.lamps[1].userData.on;
+  const lit = (u, phase) => u.value.set(phase === 'red' ? 1 : 0, phase === 'amber' ? 1 : 0, phase === 'green' ? 1 : 0);
   const update = (time) => {
-    for (const [lamp, mainRoad, mat] of lamps) mat.userData.on.value = signalPhase(time, mainRoad) === lamp ? 1 : 0;
+    lit(onMain, signalPhase(time, true));
+    lit(onCross, signalPhase(time, false));
   };
   return { lights, signs, update, obstacles };
 }

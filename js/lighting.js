@@ -192,7 +192,8 @@ function presetForSun({ alt, az }) {
   }
   const t = hi === lo ? 0 : Math.min(1, Math.max(0, (alt - lo[0]) / (hi[0] - lo[0])));
   const a = TIME_PRESETS[lo[1]], b = TIME_PRESETS[hi[1]];
-  const p = { id: 'now', look: t < 0.5 ? a.id : b.id };
+  // (and the color grade blended between the two looks, as the rest is: post-processing.js applyPreset)
+  const p = { id: 'now', look: t < 0.5 ? a.id : b.id, lookBlend: [a.id, b.id, t] };
   for (const k of Object.keys(a)) {
     if (k === 'id' || k === 'sunDir') continue;
     p[k] = /Color|^hemi(Sky|Ground)$|^sky(Top|Horizon)$/.test(k) ? mixColor(a[k], b[k], t) : a[k] + (b[k] - a[k]) * t;
@@ -203,6 +204,13 @@ function presetForSun({ alt, az }) {
   const sun = new THREE.Vector3(Math.sin(bearing) * Math.cos(lit), Math.sin(lit), -Math.cos(bearing) * Math.cos(lit));
   const night = Math.min(1, Math.max(0, (-alt - 2) / 8));
   p.sunDir = sun.lerp(TIME_PRESETS.midnight.sunDir, night).normalize();
+  // the sky's own sun (its disc and the glow round it) where the sun really is, so it sets where and when it does;
+  // its disc is gone once the sun is down (applyPreset); after dusk its glow turns with the light into the night
+  // preset's, so the night sky is as it was
+  const real = Math.max(alt, -4) * RAD;
+  p.skySunDir = new THREE.Vector3(Math.sin(bearing) * Math.cos(real), Math.sin(real), -Math.cos(bearing) * Math.cos(real))
+    .lerp(TIME_PRESETS.midnight.sunDir, night).normalize();
+  p.sunDown = alt < -1;
   return p;
 }
 
@@ -213,7 +221,7 @@ const ratio = (x, y) => Math.abs(Math.log(Math.max(x, 1e-3) / Math.max(y, 1e-3))
 function skyMoved(b, p) {
   if (!b || b.id !== p.id) return Infinity;
   const day = 1 - Math.max(b.nightFactor, p.nightFactor);
-  const turned = b.sunDir.angleTo(_sunDir.copy(p.sunDir).normalize()) / (5 * RAD);
+  const turned = b.skySunDir.angleTo(_sunDir.copy(p.skySunDir || p.sunDir).normalize()) / (5 * RAD);
   return Math.max(
     turned * day * day,
     Math.abs(p.nightFactor - b.nightFactor) / 0.12,
@@ -286,6 +294,9 @@ class LightingSystem {
       })();
     }
 
+    // drawn after the rest of the opaque city (it sits at the far plane and writes no depth): the depth test then skips
+    // its scattering and clouds wherever buildings, trees and ground already cover the sky
+    this.sky.renderOrder = 1000;
     this.scene.add(this.sky);
 
     // Reuse the environment scene and PMREM generator when the lighting preset changes.
@@ -371,6 +382,7 @@ class LightingSystem {
     this.activePresetId = p.id;
     // the color grade and the night sounds follow the preset nearest to it
     this.lookId = p.look || p.id;
+    this.lookBlend = p.lookBlend || null;
 
     this.sunLight.color.setHex(p.sunColor);
     this.sunLight.intensity = p.sunIntensity;
@@ -394,12 +406,14 @@ class LightingSystem {
     this.sky.mieDirectionalG.value = p.mieDirectionalG;
     this.sky.cloudCoverage.value = p.cloudCoverage;
     this.sky.cloudDensity.value = p.cloudDensity;
-    this.sky.sunPosition.value.copy(p.sunDir);
+    // the sky's sun where the sun really is under "Now" (the light keeps its floor above the horizon: presetForSun)
+    this.sky.sunPosition.value.copy(p.skySunDir || p.sunDir);
     this.uSkyExposure.value = p.skyExposure;
     this.uNightFactor.value = p.nightFactor;
     // once night has come in, the sky's own sun disc would shine through the night color as a bright, always full
-    // moon where the moonlight comes from: the only moon then is moon.js's, in its real phase (none at new moon)
-    this.sunDisc = p.nightFactor > 0.3 ? 0 : 1;
+    // moon where the moonlight comes from: the only moon then is moon.js's, in its real phase (none at new moon).
+    // Under "Now" the disc goes as the real sun sets
+    this.sunDisc = p.nightFactor > 0.3 || p.sunDown ? 0 : 1;
     this.sky.showSunDisc.value = this.sunDisc;
 
     cityUniforms.uSunColor.value.setHex(p.sunColor);
@@ -418,7 +432,7 @@ class LightingSystem {
     // sky, since the night color covers it), how far night has come in, and the relative change of the sky's
     // brightness, clouds and air. About three bakes an hour by day and at most six in the hour of sunset
     if (this.envRenderTarget === null || skyMoved(this.baked, p) >= 1) {
-      this.baked = { ...p, sunDir: p.sunDir.clone().normalize() };
+      this.baked = { ...p, sunDir: p.sunDir.clone().normalize(), skySunDir: (p.skySunDir || p.sunDir).clone().normalize() };
       this.bakeEnvironmentMap();
     }
   }

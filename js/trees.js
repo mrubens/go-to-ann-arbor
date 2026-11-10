@@ -1478,6 +1478,8 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     for (const mesh of instanced) {
       dropBuffers([mesh.instanceMatrix, mesh.geometry.attributes.aTreeData, mesh.geometry.attributes.aTreeKind].filter(Boolean));
       for (const type of types) { const k = type.meshes.indexOf(mesh); if (k >= 0) type.meshes.splice(k, 1); }
+      // the renderer's own objects for it (its render objects and bindings) go too; its shared shape is not disposed
+      mesh.dispose();
     }
   }
   return { group, update, info, pose, instanced, dispose, get N() { return N; }, indexOf, list };

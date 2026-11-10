@@ -1,4 +1,6 @@
 import * as THREE from 'three/webgpu';
+import { color, float, mix, smoothstep } from 'three/tsl';
+import { cityUniforms } from './tsl-materials.js';
 import { groundHeight } from './terrain.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
@@ -199,8 +201,9 @@ function burtonTower(B, site) {
       const P = (u, y) => [cx + nx * (H - 0.3 + 0.2) + tx * u, Y(33.7) + y, cz + nz * (H - 0.3 + 0.2) + tz * u];
       B.quad(B.stone, P(-uy * w, ux * w), P(ux * len - uy * w, uy * len + ux * w), P(ux * len + uy * w, uy * len - ux * w), P(uy * w, -ux * w), LOUVER);
     };
-    hand(Math.PI / 2 - (10 + 10 / 60) / 12 * Math.PI * 2, 1.05, 0.07);
-    hand(Math.PI / 2 - (10 / 60) * Math.PI * 2, 1.6, 0.05);
+    // u runs toward the viewer's left as they face the dial, so clockwise is measured with +θ
+    hand(Math.PI / 2 + (10 + 10 / 60) / 12 * Math.PI * 2, 1.05, 0.07);
+    hand(Math.PI / 2 + (10 / 60) * Math.PI * 2, 1.6, 0.05);
   }
   // a cornice, then the bell chamber, set back, with three tall louvered openings a face
   B.box(cx - H - 0.15, cx + H + 0.15, Y(BELL), Y(BELL + 1.2), cz - H - 0.15, cz + H + 0.15, LIMESTONE_DARK);
@@ -755,10 +758,18 @@ function buildCampusLandmarks(group, colliders, sites) {
   };
   const stone = mesh(B.stone, new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide, flatShading: true }));
   stone.name = 'CampusLandmarkMasonry';
-  const glass = mesh(B.glass, new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.15, metalness: 0.5, side: THREE.DoubleSide, emissive: 0x1c1409 }));
+  const glass = mesh(B.glass, landmarkGlass());
   glass.name = 'CampusLandmarkGlass';
   group.add(stone, glass);
   return built;
 }
 
-export { buildCampusLandmarks, builder, groundOf, strips };
+// The hand-modeled landmarks' glass: dark by day, lit warm from inside at dusk and night as the survey buildings'
+// windows round them are (cityUniforms.uInteriorGlow)
+function landmarkGlass() {
+  const mat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.15, metalness: 0.5, side: THREE.DoubleSide });
+  mat.emissiveNode = color(0xffcf8a).mul(mix(float(0.012), float(0.75), smoothstep(0.35, 1.3, cityUniforms.uInteriorGlow)));
+  return mat;
+}
+
+export { buildCampusLandmarks, builder, groundOf, strips, landmarkGlass };

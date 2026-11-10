@@ -223,25 +223,28 @@ function createBallDiamonds(group, data) {
   inst(new THREE.BoxGeometry(0.38, 0.09, 0.38).translate(0, 0.045, 0), white, placed.bases, Y + 0.01, 200);
   inst(plate, white, placed.plates, Y + 0.01, 160, false);
   inst(new THREE.BoxGeometry(0.61, 0.04, 0.15).translate(0, 0.02, 0), white, placed.rubbers, Y + 0.02, 160, false);
-  inst(panelGeometry(2.4, 3.6), linkMat, placed.tall, Y, 260, false);
-  inst(frameGeometry(2.4, 3.6), steel, placed.tall, Y, 260);
-  inst(panelGeometry(2.4, 1.2), linkMat, placed.low, Y, 200, false);
-  inst(frameGeometry(2.4, 1.2), steel, placed.low, Y, 200);
+  const tallLink = inst(panelGeometry(2.4, 3.6), linkMat, placed.tall, Y, 260, false);
+  const tallFrame = inst(frameGeometry(2.4, 3.6), steel, placed.tall, Y, 260);
+  const lowLink = inst(panelGeometry(2.4, 1.2), linkMat, placed.low, Y, 200, false);
+  const lowFrame = inst(frameGeometry(2.4, 1.2), steel, placed.low, Y, 200);
   inst(benchGeometry(), alum, placed.benches, Y, 200);
 
   // the chain link, its frames and the benches are solid: a thin turned box for each fence panel (the helicopter
-  // passes over them), and one round each bench
+  // passes over them), and one round each bench. A car hitting a fence panel hard enough knocks that panel flat, chain
+  // link and frame together, tipping about its foot the way the car went (knockdowns.js: a backstop panel takes more)
   const colliders = [];
-  const solid = (list, hx, hz, h, thin) => {
-    for (const [x, z, yaw] of list) {
+  const solid = (list, hx, hz, h, thin, knock = null) => {
+    list.forEach(([x, z, yaw], i) => {
       const c = Math.cos(yaw), s = Math.sin(yaw), g = groundHeight(x, z);
       const ex = Math.abs(c) * hx + Math.abs(s) * hz, ez = Math.abs(s) * hx + Math.abs(c) * hz;
+      const parts = knock ? knock.meshes.flatMap((m) => (m ? [m, i] : [])) : null;
       colliders.push({ minX: x - ex, maxX: x + ex, minZ: z - ez, maxZ: z + ez, minY: g - 0.2, maxY: g + h,
-        obb: { cx: x, cz: z, hx, hz, cs: c, sn: s }, ...(thin ? { thin: true } : {}) });
-    }
+        obb: { cx: x, cz: z, hx, hz, cs: c, sn: s }, ...(thin ? { thin: true } : {}),
+        ...(parts?.length ? { knock: { kind: knock.kind, x, z, g, height: h, parts, down: false } } : {}) });
+    });
   };
-  solid(placed.tall, 1.2, 0.08, 3.6, true);
-  solid(placed.low, 1.2, 0.08, 1.2, true);
+  solid(placed.tall, 1.2, 0.08, 3.6, true, { kind: 'backstop', meshes: [tallLink, tallFrame] });
+  solid(placed.low, 1.2, 0.08, 1.2, true, { kind: 'fence', meshes: [lowLink, lowFrame] });
   solid(placed.benches, 2.25, 0.3, 0.9, false);
 
   const lifted = setOnTerrain(group);

@@ -90,7 +90,14 @@ const WATERFRONT_PIERS = [];
 const SUSPENSION_BRIDGES = [];
 
 // Named roads (the real centreline of each OpenStreetMap way) — maps, labels & lookups
-const ROADS = GEO.roads.map(([name, w, dir, lanes, hw, flat]) => ({ name, raw: name, w, dir, lanes, highway: !!hw, pts: toPts(flat) }));
+// (a freeway known only by its OpenStreetMap refs, 'US 23;M 14', is shown as 'US-23 / M-14'; `raw` keeps the refs)
+const REF = /^(?:BUS )?(?:US|M|I) \d+(?: BL| BUS)?$/;
+const refName = (name) => {
+  const parts = name.split(';');
+  if (!parts.every((p) => REF.test(p))) return name;
+  return parts.map((p) => p.replace(/(US|M|I) (\d+)/, '$1-$2')).join(' / ');
+};
+const ROADS = GEO.roads.map(([name, w, dir, lanes, hw, flat]) => ({ name: refName(name), raw: name, w, dir, lanes, highway: !!hw, pts: toPts(flat) }));
 
 // Nearest-road index (labels, sidewalk tests): uniform grid of road segments
 const ROAD_CELL = 64;
@@ -301,16 +308,8 @@ const TELEPORT_LOCATIONS = {
   yost: view(648, 1256, 607, 1320, 1.5), // Yost Ice Arena
   market: view(206, -500, 155, -478, 0.5), // the Farmers Market sheds
   towerplaza: view(548, 203, 496, 182, 7), // Tower Plaza, looking up
-  cube: { ...view(536.5, 424.5, 535.3, 416.2, 1.5), foot: true }, // the Cube on foot, from the Union's side, to push it
   skatepark: { ...view(-2566, -536, -2546, -570, 0), foot: true }, // on the plaza at Veterans Memorial Park's skate park, looking at the bowl
   westparkdiamond: { ...view(-532.4, -492.8, -553.6, -458.9, 0), foot: true }, // behind home plate at West Park's ball field
-  // public art (art-places.js), on foot, each checked clear of the buildings
-  bookstoremural: { ...view(602, 26, 602, 43, 1.5), foot: true }, // the Bookstore Mural from across Liberty
-  challengemural: { ...view(64, -200, 64, -181, 8), foot: true }, // "Challenge Everything" from Huron St, looking up its ten stories
-  orion: { ...view(636, 438, 656, 415, 5), foot: true }, // Orion from the State St side, looking up its beams
-  millesfountain: { ...view(834, 14, 834, 38, 1), foot: true }, // the Milles fountain from the League's side
-  wavefield: { ...view(3046, -1485, 3018, -1485, 0), foot: true }, // across the Wave Field's grass waves
-  therock: { ...view(1624, 770, 1638, 783, 0.5), foot: true }, // the Rock at Hill and Washtenaw
   // the outer neighborhoods (places, not modelled landmarks: their buildings are the city's survey)
   briarwood: view(97, 4508, 140, 4365, 2), // Briarwood Mall from its south lot
   pioneer: view(-686, 2059, -583, 2132, 2), // Pioneer High from its lot on Seventh St

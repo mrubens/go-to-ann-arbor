@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { asset, log } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
 import { nativeFeed, decodeVehiclePositions, toWorld } from './live-feeds.js';
@@ -141,13 +142,33 @@ function createSchedule(data, network) {
     const today = servicesOn(date, now.weekday);
     const before = (now.weekday + 6) % 7;
     const yesterday = servicesOn(inFeed(dayBefore(now.date), before), before);
+    // only the trips whose start lies in the window that can be on the road now are looked at (by start, with the
+    // longest trip and the live feed's largest delays either way as the slack)
+    let minDelay = 0, maxDelay = 0;
+    for (const l of live.values()) { if (l.delay < minDelay) minDelay = l.delay; if (l.delay > maxDelay) maxDelay = l.delay; }
+    const isToday = (t, sec) => today.has(t[3]) && sec >= tripStart(t) - 30 && sec <= tripEnd(t);
     const out = [];
-    for (const t of data.trips) {
+    for (let i = firstStartingAt(now.sec - maxDelay - longestTrip), n = byStart.length; i < n; i++) {
+      const t = byStart[i];
+      if (tripStart(t) > now.sec - minDelay + 30) break;
       const sec = now.sec - delayOf(t);
-      if (today.has(t[3]) && sec >= tripStart(t) - 30 && sec <= tripEnd(t)) out.push({ trip: t, sec });
-      else if (yesterday.has(t[3]) && sec + 86400 >= tripStart(t) - 30 && sec + 86400 <= tripEnd(t)) out.push({ trip: t, sec: sec + 86400 });
+      if (isToday(t, sec)) out.push({ trip: t, sec });
+    }
+    for (let i = firstStartingAt(now.sec + 86400 - maxDelay - longestTrip), n = byStart.length; i < n; i++) {
+      const t = byStart[i];
+      if (tripStart(t) > now.sec + 86400 - minDelay + 30) break;
+      const sec = now.sec - delayOf(t);
+      if (!isToday(t, sec) && yesterday.has(t[3]) && sec + 86400 >= tripStart(t) - 30 && sec + 86400 <= tripEnd(t)) out.push({ trip: t, sec: sec + 86400 });
     }
     return out;
+  }
+  // the trips by start time, for activeTrips' window, and the longest a trip runs
+  const byStart = data.trips.slice().sort((a, b) => tripStart(a) - tripStart(b));
+  const longestTrip = byStart.reduce((m, t) => Math.max(m, tripEnd(t) - tripStart(t)), 0);
+  function firstStartingAt(sec) {
+    let lo = 0, hi = byStart.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tripStart(byStart[mid]) < sec) lo = mid + 1; else hi = mid; }
+    return lo;
   }
   // How far into the trip's service day it is at `ms`
   function secondsInto(trip, ms) {
@@ -396,7 +417,7 @@ function createSchedule(data, network) {
 // ---- The stop signs ---------------------------------------------------------------------------------------------------
 // A plain bus-stop sign at each stop in the map: a green plate on a grey pole at the back of the curb, set beside the road
 // nearest the stop and facing the traffic that stops there
-function buildStopSigns(stops, network) {
+function placeStopSigns(stops, network) {
   const { edges } = network;
   const placed = [];
   // every road by 50 m cell, each in every cell within its width (and 2 m) of it, to tell whether a spot is on one
@@ -456,11 +477,21 @@ function buildStopSigns(stops, network) {
   }
 
   log(`[bus] ${placed.length} of ${stops.length} stop signs placed off the road`);
+  return placed;
+}
+
+// Lamp: every timetable's stop signs as one mesh (pole and plate one geometry on one texture), holding only the signs
+// near the players: `add(stops, network)` places a timetable's signs, `near(points, reach)` keeps those within reach
+// of any of the points (x, z), refilled now and then by traffic.js. Nothing is drawn where no stop is near.
+function createStopSigns(group) {
   const c = document.createElement('canvas');
   c.width = 128;
-  c.height = 192;
+  c.height = 200;
   const g = c.getContext('2d');
-  // Lamp: a plain city bus-stop plate (no transit agency's logo or colors): green, a bus, "BUS STOP"
+  // Lamp: a plain city bus-stop plate (no transit agency's logo or colors): green, a bus, "BUS STOP"; below it a
+  // strip of the pole's grey
+  g.fillStyle = '#8c9196';
+  g.fillRect(0, 192, 128, 8);
   g.fillStyle = '#ffffff';
   g.fillRect(0, 0, 128, 192);
   g.fillStyle = '#1f6b45';
@@ -486,24 +517,49 @@ function buildStopSigns(stops, network) {
 
   const plateGeo = new THREE.PlaneGeometry(0.46, 0.69);
   plateGeo.translate(0.27, 2.45, 0);
-  const plateMat = new THREE.MeshStandardNodeMaterial({ map: tex, roughness: 0.55, side: THREE.DoubleSide });
+  const plateUv = plateGeo.attributes.uv;
+  for (let i = 0; i < plateUv.count; i++) plateUv.setY(i, 0.04 + plateUv.getY(i) * 0.96); // the plate's part
   const poleGeo = new THREE.CylinderGeometry(0.035, 0.035, 2.9, 6);
   poleGeo.translate(0, 1.45, 0);
-  const poleMat = new THREE.MeshStandardNodeMaterial({ color: 0x8c9196, roughness: 0.5, metalness: 0.6 });
-  const plates = new THREE.InstancedMesh(plateGeo, plateMat, placed.length);
-  const poles = new THREE.InstancedMesh(poleGeo, poleMat, placed.length);
+  const poleUv = poleGeo.attributes.uv;
+  for (let i = 0; i < poleUv.count; i++) poleUv.setXY(i, 0.5, 0.02); // the grey strip
+  const geo = mergeGeometries([plateGeo, poleGeo]);
+  const mat = new THREE.MeshStandardNodeMaterial({ map: tex, roughness: 0.55, metalness: 0.15, side: THREE.DoubleSide });
+
+  const all = []; // { x, z, m: the sign's 16 matrix numbers }
+  let mesh = null;
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
   const up = new THREE.Vector3(0, 1, 0);
-  placed.forEach((st, i) => {
-    // the plate stands out over the sidewalk from the pole, its face to the traffic coming (against the edge's way)
-    q.setFromAxisAngle(up, st.yaw + Math.PI);
-    p.set(st.x, groundHeight(st.x, st.z), st.z);
-    m.compose(p, q, one);
-    plates.setMatrixAt(i, m);
-    poles.setMatrixAt(i, m);
-  });
-  plates.castShadow = poles.castShadow = true;
-  return { plates, poles, placed };
+  function add(stops, network) {
+    for (const st of placeStopSigns(stops, network)) {
+      // the plate stands out over the sidewalk from the pole, its face to the traffic coming (against the edge's way)
+      q.setFromAxisAngle(up, st.yaw + Math.PI);
+      p.set(st.x, groundHeight(st.x, st.z), st.z);
+      all.push({ x: st.x, z: st.z, m: m.compose(p, q, one).toArray(new Float32Array(16)) });
+    }
+    if (mesh) { group.remove(mesh); mesh.dispose(); }
+    mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, all.length));
+    mesh.name = 'BusStopSigns';
+    mesh.castShadow = true;
+    mesh.count = 0;
+    mesh.visible = false;
+    group.add(mesh);
+  }
+  function near(points, reach) {
+    if (!mesh) return;
+    const r2 = reach * reach, arr = mesh.instanceMatrix.array;
+    let n = 0;
+    for (const st of all) {
+      if (!points.some((pt) => (pt.x - st.x) ** 2 + (pt.z - st.z) ** 2 < r2)) continue;
+      arr.set(st.m, n * 16);
+      n++;
+    }
+    if (n === 0 && mesh.count === 0) return;
+    mesh.count = n;
+    mesh.visible = n > 0;
+    if (n) { mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }
+  }
+  return { add, near, get count() { return all.length; } };
 }
 
 // Asks the app around the page for TheRide's live positions and moves the schedule's trips to them; how many buses
@@ -520,4 +576,4 @@ async function fetchTheRideLive(sched) {
   }
 }
 
-export { loadTheRide, createSchedule, buildStopSigns, localTime, fetchTheRideLive };
+export { loadTheRide, createSchedule, createStopSigns, localTime, fetchTheRideLive };

@@ -1,7 +1,9 @@
 import * as THREE from 'three/webgpu';
 import { curbCuts } from './yards.js';
 import { PARKING_LOTS } from './city-config.js';
-import { BODY_SPECS, buildCarGeometry, buildCarProxyGeometry, buildSteerableWheelGeo, createLoftedCarMaterial, annArborCar } from './cars.js';
+import { GEO } from './city-geodata.js';
+import { BODY_SPECS, buildCarGeometry, buildCarProxyGeometry, buildSteerableWheelGeo, createLoftedCarMaterial, createCarWheelMaterial, annArborCar } from './cars.js';
+import { MOTO_SPECS, buildMotoGeometry, createMotoMaterial } from './motorcycles.js';
 import { groundHeight, groundTilt } from './terrain.js';
 import { curbStalls } from './curb-parking.js';
 import { vehicleContact, resolveVehicleContact } from './vehicle-physics.js';
@@ -27,6 +29,8 @@ const MASS = { sedan: 1600, suv: 2100, minivan: 2000, pickup: 2400, van: 2700, s
 const KINDS = ['sedan', 'tesla', 'suv', 'sedan', 'suv', 'minivan', 'ioniq', 'pickup', 'sedan', 'suv', 'van', 'sedan', 'suv', 'pickup', 'sports',
   'sedan', 'suv', 'tesla', 'sedan', 'suv', 'minivan', 'suv', 'pickup', 'sedan', 'ioniq', 'van', 'sedan', 'suv', 'pickup', 'sedan',
   'tesla', 'suv', 'sedan', 'r1s', 'cybertruck', 'sedan', 'suv', 'minivan', 'r1t', 'sedan'];
+// a car's body, or a two-wheeler's (a bike the player rode, left standing where they got off it)
+const specOf = (kind) => BODY_SPECS[kind] || MOTO_SPECS[kind];
 const hash = (x, z, k = 0) => { const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453; return v - Math.floor(v); };
 
 function inside(ring, x, z) {
@@ -56,6 +60,24 @@ function lotFrame(ring) {
 function lotCars(out) {
   // a stall is taken once, where lots mapped over each other share it
   const used = new Set();
+  // and none stands on a light pole (the lots' post-top lamps: GEO.streetlights, which street-details.js puts up)
+  const poles = new Map(), L = GEO.streetlights || [];
+  for (let i = 0; i + 3 < L.length; i += 4) {
+    const k = Math.floor(L[i] / 10) * 100000 + Math.floor(L[i + 1] / 10);
+    if (!poles.has(k)) poles.set(k, []);
+    poles.get(k).push(L[i], L[i + 1]);
+  }
+  const onPole = (x, z, f) => {
+    const gx = Math.floor(x / 10), gz = Math.floor(z / 10);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+      const c = poles.get((gx + i) * 100000 + gz + j);
+      if (c) for (let k = 0; k < c.length; k += 2) {
+        const dx = c[k] - x, dz = c[k + 1] - z;
+        if (Math.abs(dx * f.ax + dz * f.az) < 1.05 + 0.35 && Math.abs(dx * f.nx + dz * f.nz) < 2.5 + 0.35) return true;
+      }
+    }
+    return false;
+  };
   for (const rings of PARKING_LOTS) {
     const ring = rings[0];
     if (ring.length < 3) continue;
@@ -82,7 +104,7 @@ function lotCars(out) {
           for (const [du, dv] of [[-1.05, -2.5], [1.05, -2.5], [1.05, 2.5], [-1.05, 2.5]]) {
             if (!inLot(rings, x + f.ax * du + f.nx * dv, z + f.az * du + f.nz * dv)) { ok = false; break; }
           }
-          if (!ok) continue;
+          if (!ok || onPole(x, z, f)) continue;
           // most pull in nose first, some back in
           used.add(key);
           const way = hash(x, z, 2) < 0.8 ? facing : -facing;
@@ -93,24 +115,26 @@ function lotCars(out) {
   }
 }
 
-function streetCars(out) {
-  const cuts = [];
-  const C = curbCuts();
-  for (let i = 0; i < C.length; i += 5) cuts.push(C[i], C[i + 1]);
+// Whether (x, z) is within `r` of a curb cut (a driveway's or an alley's mouth)
+function curbCutTest() {
   const cutGrid = new Map();
-  for (let i = 0; i < cuts.length; i += 2) {
-    const k = `${Math.floor(cuts[i] / 20)},${Math.floor(cuts[i + 1] / 20)}`;
+  const C = curbCuts();
+  for (let i = 0; i < C.length; i += 5) {
+    const k = `${Math.floor(C[i] / 20)},${Math.floor(C[i + 1] / 20)}`;
     if (!cutGrid.has(k)) cutGrid.set(k, []);
-    cutGrid.get(k).push(cuts[i], cuts[i + 1]);
+    cutGrid.get(k).push(C[i], C[i + 1]);
   }
-  const nearCut = (x, z) => {
+  return (x, z, r = 4.5) => {
     const gx = Math.floor(x / 20), gz = Math.floor(z / 20);
     for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
       const c = cutGrid.get(`${gx + i},${gz + j}`);
-      if (c) for (let k = 0; k < c.length; k += 2) if (Math.hypot(c[k] - x, c[k + 1] - z) < 4.5) return true;
+      if (c) for (let k = 0; k < c.length; k += 2) if (Math.hypot(c[k] - x, c[k + 1] - z) < r) return true;
     }
     return false;
   };
+}
+
+function streetCars(out, nearCut = curbCutTest()) {
   // about seven in ten of the stalls marked along the parking lanes (curb-parking.js), facing the way traffic goes
   for (const st of curbStalls()) {
     if (hash(st.x, st.z, 3) > 0.72 || nearCut(st.x, st.z)) continue;
@@ -168,16 +192,16 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
     const [pitch, roll] = deck ? [0, 0] : groundTilt(s.x, s.z, s.yaw);
     // `home`: the spot it was parked in, which stays its own after a crash shoves it (taking it empties that spot)
     const car = { x: s.x, z: s.z, home: [s.x, s.z], yaw: s.yaw, y: s.y || 0, street: s.street, kind, hex, paint: [col.r, col.g, col.b], style, g, pitch, roll, deck };
-    const spec = BODY_SPECS[kind];
-    const hz = (spec.zFront - spec.zRear) / 2, hx = 0.95, mid = (spec.zFront + spec.zRear) / 2;
+    const spec = specOf(kind);
+    const hz = (spec.zFront - spec.zRear) / 2, hx = spec.moto ? spec.halfWidth : 0.95, mid = (spec.zFront + spec.zRear) / 2;
     const cs = Math.cos(s.yaw), sn = Math.sin(s.yaw);
     const cx = s.x + sn * mid, cz = s.z + cs * mid;
     const ex = Math.abs(cs) * hx + Math.abs(sn) * hz, ez = Math.abs(sn) * hx + Math.abs(cs) * hz;
     car.collider = { minX: cx - ex, maxX: cx + ex, minZ: cz - ez, maxZ: cz + ez, minY: g + car.y, maxY: g + car.y + 1.6,
       obb: { cx, cz, hx, hz, cs, sn }, parked: car };
-    Object.assign(car, { mid, halfL: hz, halfW: hx, mass: MASS[kind] ?? 1600, vx: 0, vz: 0, w: 0 });
+    Object.assign(car, { mid, halfL: hz, halfW: hx, mass: MASS[kind] ?? spec.mass ?? 1600, vx: 0, vz: 0, w: 0 });
     car.mat = matrixOf(car);
-    car.wheelMats = wheelsOf(car);
+    car.wheelMats = spec.moto ? null : wheelsOf(car); // (a bike's wheels are part of its model)
     return car;
   };
   const carOf = (s) => {
@@ -224,8 +248,9 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
   // for two neighborhoods, since in split screen the cells round each player are made
   const SPARE = 12;
   const setFor = (kind, cars = []) => {
-    const spec = BODY_SPECS[kind];
-    const mat = createLoftedCarMaterial(spec, null); // traffic's material; each car's state turns its lamps off (put)
+    const spec = specOf(kind);
+    // traffic's material; each car's state turns its lamps off (put)
+    const mat = spec.moto ? createMotoMaterial() : createLoftedCarMaterial(spec, null);
     const capacity = (streamed ? (most[kind] || 0) * 2 : cars.length) + SPARE;
     const make = (geo, shadow = true) => {
       geo.setAttribute('paintColor', new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3));
@@ -239,14 +264,20 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
       group.add(m);
       return m;
     };
-    return { kind, capacity, cars, left: [],
-      near: make(buildCarGeometry(spec, false), true), far: make(buildCarProxyGeometry(spec), false) };
+    return { kind, capacity, cars, left: [], moto: !!spec.moto,
+      near: make(spec.moto ? buildMotoGeometry(spec, true) : buildCarGeometry(spec, false), true),
+      far: make(spec.moto ? buildMotoGeometry(spec, false) : buildCarProxyGeometry(spec), false) };
   };
   const sets = Object.entries(byKind).map(([kind, cars]) => setFor(kind, cars));
-  const wheelMat = createLoftedCarMaterial(BODY_SPECS.sedan, 0xffbe14);
+  // the traffic's own wheel material (traffic.js), each wheel in its car's style (wheel design, blackout trim): the
+  // same wheels as the stand-in's further off, and no shader of their own
+  const wheelMat = createCarWheelMaterial({ instanced: true });
+  const wheelRoom = Math.max(1, (streamed ? Math.min(1600, spots.length * 2) : spots.length * 2) + SPARE * 4);
+  const wheelStyles = new THREE.InstancedBufferAttribute(new Float32Array(wheelRoom), 1);
   const wheelMesh = (side) => {
-    const wheels = streamed ? Math.min(1600, spots.length * 2) : spots.length * 2;
-    const m = new THREE.InstancedMesh(buildSteerableWheelGeo(BODY_SPECS.sedan, side), wheelMat, Math.max(1, wheels + SPARE * 4));
+    const geo = buildSteerableWheelGeo(BODY_SPECS.sedan, side);
+    geo.setAttribute('wheelStyle', wheelStyles);
+    const m = new THREE.InstancedMesh(geo, wheelMat, wheelRoom);
     m.count = 0;
     m.frustumCulled = false;
     m.castShadow = false;
@@ -263,7 +294,9 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
     c.slot = mesh; c.n = n;
     mesh.setMatrixAt(n, c.mat);
     mesh.geometry.attributes.paintColor.array.set(c.paint, n * 3);
-    mesh.geometry.attributes.carState.array.set([-1, 0, 0, c.style], n * 4); // -1: engine off, lamps dark
+    const st = mesh.geometry.attributes.carState.array;
+    // -1: engine off, lamps dark (a bike's tail lamp just unlit: its material reads the brake as a brightness)
+    st[n * 4] = set.moto ? 0 : -1; st[n * 4 + 1] = 0; st[n * 4 + 2] = 0; st[n * 4 + 3] = c.style;
   };
   // streamed: the cells within reach made, those well out of it let go; each set's cars are then its cells' and the ones
   // left by the player. `onColliders(added, removed)` hands the boxes to the player's colliders.
@@ -311,6 +344,13 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
     if (added.length || removed.size) onColliders?.(added, removed);
   }
 
+  // upload only the first `n` items of an attribute (as traffic.js does)
+  function flagRange(attr, n) {
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(0, n * attr.itemSize);
+    attr.needsUpdate = true;
+  }
+
   // `camera2`: the second player's in split screen, whose half shows the cars near them too
   let lastX = Infinity, lastZ = Infinity, last2X = Infinity, last2Z = Infinity;
   function update(camera, camera2 = null) {
@@ -332,24 +372,30 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
         const d2 = camera2 ? Math.min((c.x - px) ** 2 + (c.z - pz) ** 2, (c.x - qx) ** 2 + (c.z - qz) ** 2) : (c.x - px) ** 2 + (c.z - pz) ** 2;
         if (d2 > far2) continue;
         put(d2 < near2 ? set.near : set.far, 0, set, k);
-        if (d2 < near2 && wheelL.count + 2 <= wheelL.instanceMatrix.count) {
+        if (d2 < near2 && c.wheelMats && wheelL.count + 2 <= wheelL.instanceMatrix.count) {
           const w = c.wheelMats;
           c.wn = wheelL.count;
+          wheelStyles.array[c.wn] = wheelStyles.array[c.wn + 1] = c.style;
           wheelL.setMatrixAt(wheelL.count++, w[0]); wheelL.setMatrixAt(wheelL.count++, w[1]);
           wheelR.setMatrixAt(wheelR.count++, w[2]); wheelR.setMatrixAt(wheelR.count++, w[3]);
         }
       }
       for (const m of [set.near, set.far]) {
         // an empty one isn't set up for a draw at all (most are, where few cars are within reach)
+        // and only the cars drawn are sent again, none for an empty one
         m.visible = m.count > 0;
-        m.instanceMatrix.needsUpdate = true;
-        m.geometry.attributes.paintColor.needsUpdate = true;
-        m.geometry.attributes.carState.needsUpdate = true;
+        if (!m.count) continue;
+        flagRange(m.instanceMatrix, m.count);
+        flagRange(m.geometry.attributes.paintColor, m.count);
+        flagRange(m.geometry.attributes.carState, m.count);
       }
     }
-    wheelL.instanceMatrix.needsUpdate = true;
-    wheelR.instanceMatrix.needsUpdate = true;
     wheelL.visible = wheelR.visible = wheelL.count > 0;
+    if (wheelL.count) {
+      flagRange(wheelL.instanceMatrix, wheelL.count);
+      flagRange(wheelR.instanceMatrix, wheelR.count);
+      flagRange(wheelStyles, wheelL.count);
+    }
   }
 
   // The parked car nearest (x, z) within `reach` metres, or null
@@ -449,7 +495,7 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
       col.minY = c.g + c.y; col.maxY = c.g + c.y + 1.6;
       if (!c.set) continue;
       matrixOf(c, c.mat);
-      wheelsOf(c, c.wheelMats);
+      if (c.wheelMats) wheelsOf(c, c.wheelMats);
       if (c.slot) {
         c.slot.setMatrixAt(c.n, c.mat);
         c.slot.instanceMatrix.needsUpdate = true;
@@ -465,7 +511,8 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
     return moved;
   }
 
-  // The player takes `car` and leaves their own (`drop`: { kind, hex, style, x, z, yaw, y }) parked where it stood. Says
+  // The player takes `car` and leaves their own (`drop`: { kind, hex, style, x, z, yaw, y }) parked where it stood (a
+  // bike or scooter they rode, standing there, as solid and as takeable again as a car). Says
   // what the taken car looks like, and the box of the one left, for the player's colliders.
   const history = [];
   // (car null: only `drop` is left, when the player took a car out of traffic instead)
@@ -477,7 +524,7 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
       goneAt.add(spotKey(car.home[0], car.home[1]));
     }
     let left = null;
-    if (drop && BODY_SPECS[drop.kind]) {
+    if (drop && specOf(drop.kind)) {
       let set = sets.find((s) => s.kind === drop.kind);
       if (!set) sets.push(set = setFor(drop.kind));
       if (set.cars.length < set.capacity) {
@@ -565,4 +612,11 @@ function buildParkedCars(group, nearTrack = null, decks = []) {
     set onColliders(fn) { onColliders = fn; } };
 }
 
-export { buildParkedCars };
+// The curb stalls that hold a parked car, and the curb-cut test, for the curb carts to keep out of (curb-carts.js)
+function curbParking() {
+  const nearCut = curbCutTest(), spots = [];
+  streetCars(spots, nearCut);
+  return { spots, nearCut };
+}
+
+export { buildParkedCars, curbParking };

@@ -760,12 +760,13 @@ function buildRoadWork(group, closures) {
     it.cell = kk;
   }
   const moving = new Set();
-  // the body that hits them: [half width, half length] of the player's car, bike, bicycle or self
-  const bodyOf = (ent, mode) => mode === 'car' ? (ent.bike ? [0.45, 1.15] : [1.0, 2.35]) : mode === 'cyclist' ? [0.35, 0.9] : mode === 'person' ? [0.3, 0.3] : null;
+  // the body that hits them: [half width, half length] of the player's car (its own size: a dump truck is far longer),
+  // bike, bicycle or self
+  const bodyOf = (ent, mode) => mode === 'car' ? (ent.bike ? [0.45, 1.15] : [ent.boxW ?? 1.0, ent.boxL ?? 2.35]) : mode === 'cyclist' ? [0.35, 0.9] : mode === 'person' ? [0.3, 0.3] : null;
   // a body moving through the work zone sends what it runs into flying; returns how much of its speed is left
   function strike(px, py, pz, heading, sp, hw, hl, who) {
     const sn = Math.sin(heading), cs = Math.cos(heading);
-    const reach = hl + 1.2;
+    const reach = Math.max(hl, hw) + 1.2;
     const c0x = Math.floor((px - reach) / CELL), c1x = Math.floor((px + reach) / CELL);
     const c0z = Math.floor((pz - reach) / CELL), c1z = Math.floor((pz + reach) / CELL);
     let keep = 1;

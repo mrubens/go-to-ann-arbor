@@ -451,9 +451,11 @@ function setupSceneCulling(scene, roots, shadow = null) {
   }
 
   // Preserve the shadow stand-ins above before splitting their visible geometry.
-  // Split large static objects into 600 m cells and cull cells beyond STATIC_FAR_CULL.
+  // Split large static objects into 600 m cells and cull cells beyond STATIC_FAR_CULL. (A caster is left whole only
+  // where there are shadows to keep; without them its castShadow costs nothing and it is cut up like the rest.)
+  const hasShadows = cams.length > 0 || shadow === true;
   for (const mesh of largeMeshes) {
-    if (!mesh.castShadow) {
+    if (!mesh.castShadow || !hasShadows) {
       for (const chunk of replaceWithChunks(mesh, STATIC_CELL)) {
         const sphere = chunk.boundingSphere.clone().applyMatrix4(chunk.matrixWorld);
         pushCulled(chunk, sphere, STATIC_FAR_CULL);
@@ -461,14 +463,16 @@ function setupSceneCulling(scene, roots, shadow = null) {
     }
   }
 
-  state.culled.push(...culled);
+  for (const c of culled) state.culled.add(c);
   return culled;
 }
 
-const state = { culled: [] };
+// (a Set: main.js hands every part's chunks in again with cullAlso, those this run cut up as well as the kept ones,
+// and each is culled once)
+const state = { culled: new Set() };
 // Lamp: this list is this version's: the page keeps a module it replaced for as long as it's open, and with it
 // whatever the module's variables still point at. A kept part's chunks are handed to the next version (`cullAlso`).
-hot(import.meta).dispose(() => { state.culled.length = 0; });
+hot(import.meta).dispose(() => { state.culled.clear(); });
 
 // The sun shadow's cascade cameras, which render the stand-ins.
 function shadowCameras(shadow) {
@@ -487,7 +491,7 @@ function shadowCameras(shadow) {
 // by an earlier run of this module: its chunks are culled again from here, and its stand-ins drawn in the new sun's
 // shadow.
 function cullAlso(culled) {
-  state.culled.push(...culled);
+  for (const c of culled) state.culled.add(c);
 }
 function showShadowStandIns(shadow) {
   for (const cam of shadowCameras(shadow)) cam.layers.enable(SHADOW_PROXY_LAYER);

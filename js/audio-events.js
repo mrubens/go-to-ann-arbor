@@ -1,4 +1,5 @@
 import { setControlRate } from './audio-synthesis.js';
+import { XBOX } from './device-tier.js';
 
 const TAU = Math.PI * 2;
 const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
@@ -548,42 +549,62 @@ function clang(ctx, seed) {
   }, 0.6, ANIMAL_RATE);
 }
 
+// A buffer (or set) made the first time it's asked for, then kept: a rarely heard sound costs nothing at start-up
+function lazy(target, key, build) {
+  Object.defineProperty(target, key, {
+    configurable: true, enumerable: true,
+    get() { const value = build(); Object.defineProperty(target, key, { value, enumerable: true }); return value; }
+  });
+}
+
+// The everyday sounds (footsteps, speech, horns, signals, the wind's gusts) are made at once; the rarer ones (crashes,
+// splashes, the door, the train's horn, the squirrel and the deer) on first use, or one set at a time in idle moments
+// after (`warm`), so none of them lands on one frame. The Cube's clang and the birds' calls are made only if something
+// calls for them (neither the Cube nor the birds are in the city now); the squirrel's and deer's are not warmed on the
+// Xbox, which hides the animals.
 export function createEventResources(ctx, resources) {
   const speakers = [
     { pitch: 99, formants: 0.88, breath: 0.06 }, { pitch: 119, formants: 0.94, breath: 0.10 },
     { pitch: 143, formants: 1.00, breath: 0.08 }, { pitch: 166, formants: 1.04, breath: 0.12 },
     { pitch: 191, formants: 1.10, breath: 0.09 }, { pitch: 216, formants: 1.14, breath: 0.13 }
   ];
-  return {
+  const out = {
     ...resources,
     footsteps: Array.from({ length: 8 }, (_, i) => footstep(ctx, i + 1)),
     syllables: speakers.map((speaker, voice) => Array.from({ length: 4 }, (_, i) => speechFragment(ctx, speaker, i + voice * 4 + 20))),
     horns: [0.22, 0.37, 0.55].map((duration, i) => horn(ctx, duration, 17 + i)),
-    trainHorn: trainHorn(ctx),
-    crashes: {
-      body: Array.from({ length: 3 }, (_, i) => crashBody(ctx, i + 301)),
-      metal: Array.from({ length: 3 }, (_, i) => crashMetal(ctx, i + 401)),
-      debris: Array.from({ length: 3 }, (_, i) => crashDebris(ctx, i + 501))
-    },
+    crashes: {},
     gusts: gustBuffer(ctx),
     signalTick: signal(ctx, false),
     signalWalk: signal(ctx, true),
-    splashes: Array.from({ length: 4 }, (_, i) => splash(ctx, i + 701)),
-    door: door(ctx),
-    clang: [clang(ctx, 1701), clang(ctx, 1702)],
-    animals: {
-      chatter: [chatter(ctx, 1301), chatter(ctx, 1302)],
-      quack: [quack(ctx, 1401), quack(ctx, 1402)],
-      honk: [honk(ctx, 1501), honk(ctx, 1502)],
-      hiss: hiss(ctx),
-      wingbeat: wingbeat(ctx, 1601),
-      hawk: hawkCry(ctx),
-      snort: [snort(ctx, 1801), snort(ctx, 1802)],
-      coo: [coo(ctx, 1901), coo(ctx, 1902)],
-      caw: [caw(ctx, 2001), caw(ctx, 2002), caw(ctx, 2003)],
-      chirp: [chirp(ctx, 2101), chirp(ctx, 2102), chirp(ctx, 2103)]
-    }
+    animals: {}
   };
+  lazy(out, 'trainHorn', () => trainHorn(ctx));
+  lazy(out.crashes, 'body', () => Array.from({ length: 3 }, (_, i) => crashBody(ctx, i + 301)));
+  lazy(out.crashes, 'metal', () => Array.from({ length: 3 }, (_, i) => crashMetal(ctx, i + 401)));
+  lazy(out.crashes, 'debris', () => Array.from({ length: 3 }, (_, i) => crashDebris(ctx, i + 501)));
+  lazy(out, 'splashes', () => Array.from({ length: 4 }, (_, i) => splash(ctx, i + 701)));
+  lazy(out, 'door', () => door(ctx));
+  lazy(out, 'clang', () => [clang(ctx, 1701), clang(ctx, 1702)]);
+  const animals = {
+    chatter: () => [chatter(ctx, 1301), chatter(ctx, 1302)],
+    quack: () => [quack(ctx, 1401), quack(ctx, 1402)],
+    honk: () => [honk(ctx, 1501), honk(ctx, 1502)],
+    hiss: () => hiss(ctx),
+    wingbeat: () => wingbeat(ctx, 1601),
+    hawk: () => hawkCry(ctx),
+    snort: () => [snort(ctx, 1801), snort(ctx, 1802)],
+    coo: () => [coo(ctx, 1901), coo(ctx, 1902)],
+    caw: () => [caw(ctx, 2001), caw(ctx, 2002), caw(ctx, 2003)],
+    chirp: () => [chirp(ctx, 2101), chirp(ctx, 2102), chirp(ctx, 2103)]
+  };
+  for (const kind in animals) lazy(out.animals, kind, animals[kind]);
+  const warm = [(o) => o.crashes.body, (o) => o.door, (o) => o.splashes, (o) => o.crashes.metal, (o) => o.trainHorn,
+    (o) => o.crashes.debris, ...(XBOX ? [] : [(o) => o.animals.chatter, (o) => o.animals.snort])];
+  const idle = globalThis.requestIdleCallback ? (f) => requestIdleCallback(f, { timeout: 3000 }) : (f) => setTimeout(f, 80);
+  const next = () => { if (warm.length) { warm.shift()(out); idle(next); } };
+  idle(next);
+  return out;
 }
 
 export function playEvent(ctx, resources, kind, output, options = {}) {

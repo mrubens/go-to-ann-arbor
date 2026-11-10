@@ -8,11 +8,12 @@ import { random } from '../lamp-game.js';
 // way the car was going, about its foot, speeding up as it goes as a falling pole does, and lands with a bounce; it
 // lies there from then on and stops being solid. The car loses some of its speed in the hit. A fire hydrant is made to
 // break off its flange at a bump: it's thrown ahead of the car, tumbling, bounces along the ground and comes to rest;
-// a trash can, a curb cart (curb-carts.js) or a park bench is thrown the same way.
+// a trash can, a curb cart (curb-carts.js) or a park bench is thrown the same way. A ball diamond's fence panel
+// (ball-diamonds.js) is pushed over flat, the low ones easily, the tall backstop's at a brisker speed.
 
 const G = 9.8;
 // The speed (m/s) at which a 1500 kg car fells each kind head on; a tree's grows with its trunk
-const GIVE = { sign: 3.5, lamp: 9, signal: 12, hydrant: 2.2, trash: 1.2, cart: 1.0, bench: 2.6, chair: 0.8, table: 1.4, picnic: 3, parasol: 2 };
+const GIVE = { sign: 3.5, lamp: 9, signal: 12, hydrant: 2.2, trash: 1.2, cart: 1.0, bench: 2.6, chair: 0.8, table: 1.4, picnic: 3, parasol: 2, fence: 4, backstop: 6 };
 // What's thrown rather than tipped: its centre of mass above its foot, how far that stays off the ground lying down,
 // how fast it tumbles for its speed and how much of the car's speed it takes
 const THROWN = {

@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { polygonContains } from './building-collision.js';
 
 // Ann Arbor's churches: the survey's buildings on the city's religious parcels, drawn as churches rather than as
 // windowed blocks. Stone or brick walls up to the eaves, a steep slate gable along the long side, a square bell tower
@@ -38,6 +39,42 @@ export function churchPlan(b) {
   return { cx: cu * ux - cv * uz, cz: cu * uz + cv * ux, ax, az, L, W, fill: Math.abs(area / 2) / (L * W) };
 }
 
+const hash = (ch, k) => { const s = Math.sin((ch.cx * 12.9898 + ch.cz * 78.233 + k * 37.719)) * 43758.5453; return s - Math.floor(s); };
+
+/** How a church (a churches item: the building with its ground and plan) is drawn: a gabled box or its outline, and
+ * where its tower stands (inside an irregular outline, at whichever end it fits, or none). buildings.js builds its
+ * colliders from the same. */
+export function churchLayout(ch) {
+  const { plan, ground, height } = ch;
+  const { ax, az } = plan, bx = -az, bz = ax;
+  const rect = plan.fill > 0.78 && ch.polygons.length === 1;
+  const hl = plan.L / 2, hw = plan.W / 2;
+  // the roof: a steep gable (about 50°) whose ridge is the surveyed height; irregular plans keep a flat top
+  const roofH = rect ? Math.min(plan.W * 0.6, height * 0.5, 14) : 0;
+  const eave = ground + Math.max(4.5, height - roofH);
+  const ridge = ground + height + 0.22;
+  const tw = Math.max(3.6, Math.min(plan.W * 0.38, 7));
+  let towerEnd = hash(ch, 2) < 0.5 ? -1 : 1;
+  let hasTower = plan.L > 12 && height > 6;
+  // (over an outline, the tower stands inside it: at the other end if not the first, or not at all)
+  const at = (end) => end * (hl - tw / 2 + 0.8);
+  if (hasTower && !rect) {
+    const fits = (end) => {
+      const u = at(end) - end * 0.8; // pulled in to the outline's end
+      return [[-1, -1], [1, -1], [1, 1], [-1, 1]].every(([su, sv]) => {
+        const uu = u + su * tw / 2, vv = sv * tw / 2;
+        return polygonContains({ outer: ch.polygons[0].outer, holes: [] }, plan.cx + ax * uu + bx * vv, plan.cz + az * uu + bz * vv);
+      });
+    };
+    if (fits(towerEnd)) { /* keep */ } else if (fits(-towerEnd)) towerEnd = -towerEnd;
+    else hasTower = false;
+  }
+  const towerU = rect ? at(towerEnd) : at(towerEnd) - towerEnd * 0.8;
+  const towerTop = ridge + Math.max(3, tw * 0.9);
+  const spireH = Math.min(26, Math.max(7, tw * 2.8));
+  return { rect, hl, hw, roofH, eave, ridge, tw, towerEnd, towerU, hasTower, towerTop, spireH };
+}
+
 export function buildChurches(items) {
   const stone = { pos: [], col: [] }, glass = { pos: [], col: [] };
   // colors are written as seen (sRGB); the vertex colors want them linear
@@ -49,27 +86,17 @@ export function buildChurches(items) {
   for (const ch of items) {
     const { plan, ground, minGround = ground, height, tone } = ch;
     const base = Math.min(minGround, ground) - 0.5;
-    const r = (k) => { const s = Math.sin((ch.cx * 12.9898 + ch.cz * 78.233 + k * 37.719)) * 43758.5453; return s - Math.floor(s); };
+    const r = (k) => hash(ch, k);
     const wall = WALLS[Math.floor(tone * WALLS.length) % WALLS.length];
     const pane = GLASS[Math.floor(r(1) * GLASS.length)];
     const { ax, az } = plan, bx = -az, bz = ax;
-    const rect = plan.fill > 0.78 && ch.polygons.length === 1;
-    const hl = plan.L / 2, hw = plan.W / 2;
+    const { rect, hl, hw, eave, ridge, tw, towerEnd, towerU, hasTower, towerTop, spireH } = churchLayout(ch);
     const P = (u, v, y) => [plan.cx + ax * u + bx * v, y, plan.cz + az * u + bz * v];
-
-    // the roof: a steep gable (about 50°) whose ridge is the surveyed height; irregular plans keep a flat top
-    const roofH = rect ? Math.min(plan.W * 0.6, height * 0.5, 14) : 0;
-    const eave = ground + Math.max(4.5, height - roofH);
-    const ridge = ground + height + 0.22;
 
     // the walls: the box for a plain nave, the surveyed outline otherwise
     const rings = rect
       ? [[P(-hl, -hw, 0), P(hl, -hw, 0), P(hl, hw, 0), P(-hl, hw, 0)].map(([x, , z]) => ({ x, z }))]
       : ch.polygons.map((p) => p.outer);
-    const towerEnd = r(2) < 0.5 ? -1 : 1;
-    const tw = Math.max(3.6, Math.min(plan.W * 0.38, 7));
-    const towerU = towerEnd * (hl - tw / 2 + 0.8);
-    const hasTower = plan.L > 12 && height > 6;
     for (const ring of rings) {
       let area = 0;
       for (let i = 0; i < ring.length; i++) { const p = ring[i], q = ring[(i + 1) % ring.length]; area += p.x * q.z - q.x * p.z; }
@@ -135,7 +162,6 @@ export function buildChurches(items) {
 
     // the bell tower: a square shaft a little out from the end wall, open belfry arches, a spire and a cross
     if (hasTower) {
-      const towerTop = ridge + Math.max(3, tw * 0.9);
       const h2 = tw / 2;
       const C = [P(towerU - h2, -h2, 0), P(towerU + h2, -h2, 0), P(towerU + h2, h2, 0), P(towerU - h2, h2, 0)];
       for (let i = 0; i < 4; i++) {
@@ -155,7 +181,6 @@ export function buildChurches(items) {
         quad(stone, K(-h2 - 0.25, towerTop - 0.05, 0.25), K(h2 + 0.25, towerTop - 0.05, 0.25), K(h2 + 0.25, towerTop + 0.35, 0.25), K(-h2 - 0.25, towerTop + 0.35, 0.25), wall);
       }
       // the spire: eight-sided, slate or green copper
-      const spireH = Math.min(26, Math.max(7, tw * 2.8));
       const spire = r(4) < 0.3 ? COPPER : SLATE;
       const apex = P(towerU, 0, towerTop + 0.35 + spireH);
       const sr = h2 * 0.92;
@@ -171,7 +196,7 @@ export function buildChurches(items) {
       };
       bar(-0.07, 0.07, cy, cy + 1.6);
       bar(-0.45, 0.45, cy + 0.95, cy + 1.12);
-      door(towerEnd * (hl + 0.8 + 0.08), 0, towerEnd);
+      door(towerU + towerEnd * (tw / 2 + 0.08), 0, towerEnd);
     }
 
     // an arched wooden door in the end wall at u, facing along `dir`

@@ -31,7 +31,7 @@ import {
 import { groundHeight, groundTilt } from './terrain.js';
 import { MOTO_SPECS, HELMET_OF, HELMET_PAINTS, buildMotoGeometry, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
-import { loadTheRide, createSchedule, buildStopSigns, fetchTheRideLive } from './theride.js';
+import { loadTheRide, createSchedule, createStopSigns, fetchTheRideLive } from './theride.js';
 
 // Cars and buses follow the road graph, obey signals, yield at crossings and react to collisions.
 // Vehicles replenish around the player; pedestrian-system.js manages the nearby walking population.
@@ -270,7 +270,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const car = createVehicle(false, kind.half, kind.halfWidth, kind.axle, CAR_DRIVER, 10 + (i % 5) * 0.9);
     // paint as float32 values, so renderCar() can tell whether an instance slot's paint changes by comparing
     const paint = [Math.fround(col.r), Math.fround(col.g), Math.fround(col.b)];
-    Object.assign(car, { isPolice, bodyType, paint, style, halfL: kind.halfL, mass: kind.mass, engine: kind.engine, moto, curb });
+    // Lamp: a cruiser (`cruiser`) mostly drives as everyone does, its bar dark; now and then it goes on a call for a
+    // minute or two (`isPolice`: lights and siren, through the reds), a few minutes apart (policeCalls)
+    Object.assign(car, { isPolice: false, cruiser: isPolice, nextCall: isPolice ? 60 + Math.random() * 240 : 0, callUntil: 0,
+      bodyType, paint, style, halfL: kind.halfL, mass: kind.mass, engine: kind.engine, moto, curb });
     if (curb) car.curbSpeed = MOTO_SPECS[bodyType].curbSpeed * (0.85 + (i % 7) * 0.05);
     cars.push(car);
   }
@@ -378,7 +381,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     sedan: new THREE.InstancedMesh(buildLightbarGeometry(BODY_SPECS.sedan), lightbarMat, Math.max(1, policeCounts.sedan)),
     suv: new THREE.InstancedMesh(buildLightbarGeometry(BODY_SPECS.suv), lightbarMat, Math.max(1, policeCounts.suv))
   };
-  const policeLightbarMeshes = [policeLightbars.sedan, policeLightbars.suv];
+  // the same bars, dark, on cruisers that aren't on a call
+  const darkLightbarMat = new THREE.MeshStandardNodeMaterial({ color: 0x1a1d21, roughness: 0.2, metalness: 0.25 });
+  const darkLightbars = {
+    sedan: new THREE.InstancedMesh(policeLightbars.sedan.geometry, darkLightbarMat, Math.max(1, policeCounts.sedan)),
+    suv: new THREE.InstancedMesh(policeLightbars.suv.geometry, darkLightbarMat, Math.max(1, policeCounts.suv))
+  };
+  const policeLightbarMeshes = [policeLightbars.sedan, policeLightbars.suv, darkLightbars.sedan, darkLightbars.suv];
   const carShadowInst = new THREE.InstancedMesh(unitPlane, contactShadowMat, NUM_CARS);
   carShadowInst.renderOrder = 998;
 
@@ -644,9 +653,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     }
     return true;
   }
+  let lastGround = 0; // the ground's height at the point visible() last looked at (renderCar, renderBus reuse it)
   function visible(x, z, r) {
     if (!hasView) return false;
-    const y = groundHeight(x, z) + 1; // Lamp: on the ground
+    lastGround = groundHeight(x, z);
+    const y = lastGround + 1; // Lamp: on the ground
     return inFrustum(frustum, x, y, z, r) || (hasView2 && inFrustum(frustum2, x, y, z, r));
   }
 
@@ -1854,14 +1865,17 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   const tripsDone = new Set();
   // every bus stop, TheRide's and the U's, for the map (city-map.js)
   const busStops = [];
+  // both timetables' stop signs, one mesh holding those near the players (refilled in scheduleBuses)
+  const stopSigns = createStopSigns(group);
+  const signPoints = [{ x: 0, z: 0 }, { x: 0, z: 0 }, { x: 0, z: 0 }];
   loadTheRide().then((data) => {
     if (!data) return;
     for (const [, x, z] of data.stops) busStops.push({ x, z });
     const sched = createSchedule(data, network);
     sched.um = false;
     schedules.push(sched);
-    const signs = buildStopSigns(data.stops, network);
-    group.add(signs.poles, signs.plates);
+    stopSigns.add(data.stops, network);
+    scheduleTimer = 0;
     followLive(sched);
   });
   loadTheRide('./data/umbus.json.gz', 'umbus').then((data) => {
@@ -1870,8 +1884,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     sched.um = true;
     schedules.push(sched);
     for (const [, x, z] of data.stops) busStops.push({ x, z });
-    const signs = buildStopSigns(data.stops, network);
-    group.add(signs.poles, signs.plates);
+    stopSigns.add(data.stops, network);
+    scheduleTimer = 0;
   });
   // asked again every 30 s of play, counted in scheduleBuses (the game reads no clock of its own for this)
   let liveSched = null, liveWait = 0, liveBusy = false, liveLogged = false;
@@ -1904,6 +1918,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     scheduleTimer -= dt;
     if (scheduleTimer > 0 && !jump) return;
     scheduleTimer = 0.5;
+    signPoints[0].x = focusX; signPoints[0].z = focusZ;
+    signPoints[1].x = camX; signPoints[1].z = camZ;
+    signPoints[2].x = hasView2 ? cam2X : camX; signPoints[2].z = hasView2 ? cam2Z : camZ;
+    stopSigns.near(signPoints, Math.max(120, 320 * TIER.farCut));
     for (const b of buses) {
       if (!b.edge || b === ridden) continue;
       if (Math.hypot(b.x - focusX, b.z - focusZ) > VEHICLE_RADIUS) releaseBus(b, false);
@@ -1975,12 +1993,18 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     if (!v.dwellUntil && d < 1.5 && v.speed < 0.4) {
       const late = st.dep - v.sched.secondsInto(v.trip, Date.now());
       v.dwellUntil = clock + Math.max(8 + Math.random() * 10, Math.min(late, 90));
+      v.dwellLatest = v.dwellUntil + 10;
+      v.doorGap = Infinity;
+      v.approaching = false;
     }
     if (v.dwellUntil) {
-      // the driver waits for the player walking up to the door
+      // the driver waits for the player walking up to the door (coming closer, or at it), but not for someone just
+      // standing about nearby, and no more than 10 s past when it would have left
       if (!ridden && player.active && player.mode === 'person') {
         const [dx, dz] = busDoor(v, 0);
-        if (Math.hypot(player.x - dx, player.z - dz) < 14) v.dwellUntil = Math.max(v.dwellUntil, clock + 2.5);
+        const gap = Math.hypot(player.x - dx, player.z - dz);
+        if (clock - (v.doorAt || 0) >= 0.5) { v.approaching = gap < v.doorGap - 0.2; v.doorGap = gap; v.doorAt = clock; }
+        if (gap < 14 && (gap < 3 || v.approaching)) v.dwellUntil = Math.max(v.dwellUntil, Math.min(clock + 2.5, v.dwellLatest ?? Infinity));
       }
       if (clock >= v.dwellUntil) {
         v.dwellUntil = 0;
@@ -2015,6 +2039,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   let wheelCars = 0;
   let visibleCars = 0;
   const policeDrawn = { sedan: 0, suv: 0 };
+  const darkDrawn = { sedan: 0, suv: 0 };
   let visibleBuses = 0;
   let updates = 0;
 
@@ -2056,22 +2081,27 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     array[o + 2] = blinkOn && v.blink > 0 ? 1 : 0;
   }
 
-  // Lamp: where a vehicle stands on the ground, and the slope under it (terrain.js), kept for its lights
+  // Lamp: whether a vehicle is in view, and where it stands on the ground (kept for its lights and sound: the height
+  // the view test just read); the slope under it (terrain.js) only for one that's drawn
+  function seen(v, r) {
+    const shown = !hasView || visible(v.x, v.z, r);
+    v._gy = hasView ? lastGround : groundHeight(v.x, v.z);
+    return shown;
+  }
   function settle(v, rotY, length, width) {
-    v._gy = groundHeight(v.x, v.z);
     [v._tp, v._tr] = groundTilt(v.x, v.z, rotY, length, width);
   }
 
   function renderCar(c) {
     const rotY = c.yaw + c.yawOffset;
-    settle(c, rotY, 4.4, 1.8);
     const sinY = Math.sin(rotY);
     const cosY = Math.cos(rotY);
     const spec = specOf(c.bodyType);
     const forwardDist = (c.x - c.prevX) * sinY + (c.z - c.prevZ) * cosY;
     const rawStep = forwardDist / spec.wheelRadius;
     c.wheelSpin = (c.wheelSpin + Math.sign(rawStep) * Math.min(Math.abs(rawStep), 0.48)) % (Math.PI * 2);
-    if (hasView && !visible(c.x, c.z, 18)) return;
+    if (!seen(c, 18)) return;
+    settle(c, rotY, 4.4, 1.8);
 
     const near = Math.hypot(c.x - focusX, c.z - focusZ) < CAR_PROXY_DISTANCE;
     const bodyInst = near ? bodies[c.bodyType].near : bodies[c.bodyType].far;
@@ -2083,9 +2113,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     dummy.updateMatrix();
     bodyInst.setMatrixAt(slot, dummy.matrix);
     if (c.riderRig && !c.riderOff) poseRider(c, Math.hypot(c.x - camX, c.z - camZ));
-    if (c.isPolice) {
-      const lb = policeLightbars[c.bodyType];
-      if (lb) lb.setMatrixAt(policeDrawn[c.bodyType]++, dummy.matrix);
+    if (c.cruiser) {
+      const lb = (c.isPolice ? policeLightbars : darkLightbars)[c.bodyType];
+      if (lb) lb.setMatrixAt((c.isPolice ? policeDrawn : darkDrawn)[c.bodyType]++, dummy.matrix);
     }
 
     const attrs = bodyInst.geometry.attributes;
@@ -2169,13 +2199,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   function renderBus(b) {
     const rotY = b.yaw + b.yawOffset;
-    settle(b, rotY, 11, 2.6);
     const sinY = Math.sin(rotY);
     const cosY = Math.cos(rotY);
     const forwardDist = (b.x - b.prevX) * sinY + (b.z - b.prevZ) * cosY;
     const rawStep = forwardDist / BUS_SPEC.wheelRadius;
     b.wheelSpin = (b.wheelSpin + Math.sign(rawStep) * Math.min(Math.abs(rawStep), 0.48)) % (Math.PI * 2);
-    if (hasView && !visible(b.x, b.z, 22)) return;
+    if (!seen(b, 22)) return;
+    settle(b, rotY, 11, 2.6);
 
     const i = visibleBuses++;
     dummy.position.set(b.x, b._gy + 0.018, b.z);
@@ -2221,6 +2251,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   function updateTrafficLights() {
     litVehicles.length = litVehicleCount;
+    // (no lights to place once main.js has taken the small lights out of the scene: no clustered lighting)
+    if (!headlightPool[0]?.parent) return;
     if (litVehicleCount > 1) {
       litVehicles.sort((a, b) => a._effDist - b._effDist);
     }
@@ -2337,6 +2369,16 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   let vehicleCursor = 0;
 
   let spawnTick = 0;
+  // a cruiser's calls: on one for 60-150 s, then 4-10 min of plain driving (each ends off a junction, not mid-way
+  // through a red it was running)
+  function policeCalls(v) {
+    if (v.isPolice) {
+      if (clock >= v.callUntil && !v.conn) { v.isPolice = false; v.nextCall = clock + 240 + Math.random() * 360; }
+    } else if (clock >= v.nextCall) {
+      v.isPolice = true;
+      v.callUntil = clock + 60 + Math.random() * 90;
+    }
+  }
   function update(dt, elapsed, focusPos = null, playerEntity = null, activeMode = 'car', camera = null, camera2 = null) {
     clock = elapsed;
     avePhase = signalPhase(elapsed, true);
@@ -2419,10 +2461,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     visibleCars = 0;
     policeDrawn.sedan = 0;
     policeDrawn.suv = 0;
+    darkDrawn.sedan = 0;
+    darkDrawn.suv = 0;
     visibleBuses = 0;
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
       if (!v.edge) continue;
+      if (v.cruiser) policeCalls(v);
 
       v.prevX = v.x;
       v.prevZ = v.z;
@@ -2484,6 +2529,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     if (dirtyWheelStyles && wheelCars > 0) flagRange(carWheelStyles, wheelCars * 2);
     syncInst(policeLightbars.sedan, policeDrawn.sedan);
     syncInst(policeLightbars.suv, policeDrawn.suv);
+    syncInst(darkLightbars.sedan, darkDrawn.sedan);
+    syncInst(darkLightbars.suv, darkDrawn.suv);
     syncInst(carShadowInst, visibleCars);
     syncInst(busBodyInst, visibleBuses);
     syncInst(busHeaderInst, visibleBuses);
@@ -2624,6 +2671,8 @@ function createHighwayTraffic(scene, lanes) {
   const group = new THREE.Group();
   group.name = 'HighwayTraffic';
   scene.add(group);
+  // Ann Arbor's city map has no highway lanes: build no fleet, meshes or per-frame work for an empty road
+  if (!lanes?.length) return { group, update() {}, cars: [], lanes: lanes ?? [] };
   const KINDS = Object.keys(CAR_KINDS).filter((kind) => !CAR_KINDS[kind].moto);
   let seed = 20240917;
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;

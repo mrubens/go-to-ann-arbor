@@ -11,7 +11,7 @@ const toRoot = new THREE.Matrix4();
 function mergeable(o) {
   return o.isMesh && !o.isInstancedMesh && !o.isSkinnedMesh && !o.isBatchedMesh && !o.children.length &&
     o.material && !Array.isArray(o.material) && o.geometry?.attributes.position &&
-    !Object.keys(o.geometry.morphAttributes).length && !o.geometry.groups.length && !o.onBeforeRender?.length &&
+    !Object.keys(o.geometry.morphAttributes).length && !o.onBeforeRender?.length &&
     !(o.geometry.drawRange.count < Infinity && o.geometry.drawRange.count !== (o.geometry.index ?? o.geometry.attributes.position).count);
 }
 
@@ -96,6 +96,7 @@ export function mergeStatic(root, cell = 400, { share = false } = {}) {
     const geos = list.map((o) => {
       const g = o.geometry.clone();
       g.applyMatrix4(toRoot.multiplyMatrices(rootInverse, o.matrixWorld));
+      g.clearGroups(); // a box's or cylinder's groups mean nothing under one material: the whole geometry is drawn
       return g;
     });
     const merged = mergeGeometries(geos);

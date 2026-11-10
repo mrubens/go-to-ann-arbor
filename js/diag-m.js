@@ -36,7 +36,8 @@ function buildDiagM(group) {
   const H = WIDTH * 0.75;
   const shape = new THREE.Shape(M.map(([u, v]) => new THREE.Vector2((u - 0.5) * WIDTH, (v - 0.5) * H)));
   const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.025, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.012, bevelSegments: 1 });
-  geo.rotateX(-Math.PI / 2);
+  geo.rotateX(-Math.PI / 2); // lays it flat, its top toward -z
+  geo.rotateY(Math.PI); // turns its top north (+z), toward the library, so it reads upright from the Diag's south walk
   const letter = new THREE.Mesh(geo, bronze);
   letter.position.set(AT.x, top - 0.012, AT.z);
   letter.name = 'DiagBlockM';

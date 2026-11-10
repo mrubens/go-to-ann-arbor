@@ -2,6 +2,11 @@ import { createSynthResources, createMotorVoice, setControlRate } from './audio-
 import { createEventResources, playEvent, createWindVoice } from './audio-events.js';
 import { CityAudioSources } from './audio-sources.js';
 import { CityAcoustics } from './audio-acoustics.js';
+import { TIER, XBOX } from './device-tier.js';
+
+// the Xbox, a phone and a slower computer: fewer voices, and plain stereo panning in place of HRTF convolution
+const SMALL_DEVICE = XBOX || TIER.name === 'phone' || TIER.name === 'slow';
+const PANNING = SMALL_DEVICE ? 'equalpower' : 'HRTF';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const smooth = (param, value, now, time = 0.035, immediate = false) => {
@@ -19,6 +24,47 @@ function motorVoice(context, resources, kind, output, player) {
     if (kind !== 'electric' || !(error instanceof RangeError)) throw error;
     return createMotorVoice(context, resources, player ? 'sedan' : 'cyclist', output);
   }
+}
+
+// The sound's buffers, made while the city loads: an AudioBuffer needs no context and no click or key to make, so the
+// synthesis (a few hundred ms) is not left to the first key press's handler. Made at 48 kHz, which a context at another
+// rate resamples as it plays; the periodic waves (which belong to a context) are made when it is, and the reverb's
+// impulse, which a convolver takes only at the context's own rate, is resampled then (fitResources).
+const PREPARED_RATE = 48000;
+function prepareResources() {
+  if (typeof AudioBuffer !== 'function') return null;
+  try {
+    const shim = {
+      sampleRate: PREPARED_RATE,
+      createBuffer: (numberOfChannels, length, sampleRate) => new AudioBuffer({ numberOfChannels, length, sampleRate }),
+      createPeriodicWave: (...args) => ({ deferredWave: args })
+    };
+    return createEventResources(shim, createSynthResources(shim));
+  } catch (error) {
+    console.warn('[audio] Unable to prepare sound ahead', error);
+    return null;
+  }
+}
+
+function fitResources(context, resources) {
+  for (const key of Object.keys(resources)) {
+    const wave = Object.getOwnPropertyDescriptor(resources, key).value?.deferredWave;
+    if (wave) resources[key] = context.createPeriodicWave(...wave);
+  }
+  const impulse = resources.impulse;
+  if (impulse.sampleRate !== context.sampleRate) {
+    const ratio = impulse.sampleRate / context.sampleRate;
+    const fitted = context.createBuffer(impulse.numberOfChannels, Math.floor(impulse.length / ratio), context.sampleRate);
+    for (let channel = 0; channel < impulse.numberOfChannels; channel++) {
+      const from = impulse.getChannelData(channel), to = fitted.getChannelData(channel);
+      for (let i = 0; i < to.length; i++) {
+        const at = i * ratio, j = Math.floor(at), f = at - j;
+        to[i] = from[j] * (1 - f) + (from[j + 1] ?? 0) * f;
+      }
+    }
+    resources.impulse = fitted;
+  }
+  return resources;
 }
 
 // [ref distance, range] (m) of each animal's call
@@ -46,7 +92,7 @@ class SpatialEmitter {
       this.panner.positionX, this.panner.positionY, this.panner.positionZ,
       this.panner.orientationX, this.panner.orientationY, this.panner.orientationZ
     );
-    this.panner.panningModel = 'HRTF';
+    this.panner.panningModel = PANNING;
     this.panner.distanceModel = 'inverse';
     this.panner.refDistance = refDistance;
     this.panner.rolloffFactor = 1.15;
@@ -103,8 +149,12 @@ class CityAudioSystem {
     this.supported = !!(globalThis.AudioContext || globalThis.webkitAudioContext);
     this.enabled = true;
     try { this.enabled = localStorage.getItem('nyc-sound') !== 'off'; } catch { /* Private browsing. */ }
-    const smallDevice = navigator.hardwareConcurrency <= 4 || matchMedia('(pointer: coarse)').matches;
-    this.limits = smallDevice ? { motors: 6, sirens: 1, events: 5 } : { motors: 8, sirens: 2, events: 8 };
+    // fewer voices where the processor is the limit: the Xbox fewest, a phone or slower computer fewer
+    const smallDevice = SMALL_DEVICE || navigator.hardwareConcurrency <= 4 || matchMedia('(pointer: coarse)').matches;
+    this.limits = XBOX ? { motors: 4, sirens: 1, events: 4 } : smallDevice ? { motors: 6, sirens: 1, events: 5 } : { motors: 8, sirens: 2, events: 8 };
+    // the buffers made while the city loads, not at the first key (prepareResources)
+    this.prepared = null;
+    if (this.supported && this.enabled) setTimeout(() => { if (!this.context && !this.disposed) this.prepared ??= prepareResources(); }, 0);
     this.motors = new Map();
     this.sirens = new Map();
     this.events = [];
@@ -172,7 +222,9 @@ class CityAudioSystem {
       listener.forwardX, listener.forwardY, listener.forwardZ,
       listener.upX, listener.upY, listener.upZ
     );
-    this.resources = createEventResources(context, createSynthResources(context));
+    const prepared = this.prepared ?? prepareResources();
+    this.prepared = null;
+    this.resources = prepared ? fitResources(context, prepared) : createEventResources(context, createSynthResources(context));
     this.mix = context.createGain();
     this.compressor = context.createDynamicsCompressor();
     this.compressor.threshold.value = -16;
@@ -229,6 +281,7 @@ class CityAudioSystem {
     this.states = new WeakMap();
     this.collisionPairs = new WeakMap();
     this.haveListener = false;
+    this.jumping = false;
     this.accumulator = 0;
     if (this.master) {
       this.master.gain.cancelScheduledValues(this.context.currentTime);
@@ -368,8 +421,9 @@ class CityAudioSystem {
     if (this.events.length >= this.limits.events) return false;
     const emitter = new SpatialEmitter(this.context, this.mix, this.reflections, this.acoustics,
       ref, kind === 'talk' || kind === 'shout' ? 1.5 : 0, kind === 'horn');
-    // Do not fade away the first few milliseconds of a crash: its spatial gain and filtering are ready at onset.
-    emitter.update(source, this.listener, now, range, true, crash);
+    // Do not fade away the first few milliseconds of an event (a heel strike, a latch's click, a crash): nothing is
+    // sounding through the new emitter yet, so its spatial gain and filtering can be ready at onset without a click.
+    emitter.update(source, this.listener, now, range, true, true);
     const voice = playEvent(this.context, this.resources, kind, emitter.input, { seed: source.seed, ...options });
     this.events.push({ kind, voice, emitter, id: source.id, range, severity, position: { ...source }, follow: kind === 'talk' || kind === 'shout' || kind === 'horn' });
     return true;
@@ -433,7 +487,7 @@ class CityAudioSystem {
     if (!this.ready || !this.enabled || this.context?.state !== 'running' || entity?.type !== 'car') return;
     const now = this.context.currentTime;
     if (now - this.lastHorn < 0.8) return;
-    if (this.emit('horn', { id: entity, ...entity.position, heading: entity.heading, seed: 4 }, { intensity: 0.7 })) this.lastHorn = now;
+    if (this.emit('horn', { id: entity, ...entity.position, heading: entity.heading, seed: 4 }, { intensity: 0.7, priority: true })) this.lastHorn = now;
   }
 
   // The player's tires sliding (handbrake, hard braking, a drifting tail): a rubbery squeal that rises with how hard
@@ -464,8 +518,11 @@ class CityAudioSystem {
       v = this.skidVoice = { noise, lfo, squeal, body, gain, nodes: [noise, lfo, squeal, body, bodyGain, lfoDepth, gain] };
     }
     const on = this.enabled && this.context.state === 'running' ? level : 0;
+    // silent and already told so: nothing to schedule (this is called every frame)
+    if (on <= 0.02 && v.quiet) return;
+    v.quiet = on <= 0.02;
     const loud = Math.min(1, speed / 10);
-    smooth(v.gain.gain, on > 0.02 ? 0.55 * Math.min(1, on * 1.4) * (0.35 + 0.65 * loud) : 0, now, on > 0.02 ? 0.05 : 0.12);
+    smooth(v.gain.gain,on > 0.02 ? 0.55 * Math.min(1, on * 1.4) * (0.35 + 0.65 * loud) : 0, now, on > 0.02 ? 0.05 : 0.12);
     smooth(v.squeal.frequency, 850 + Math.min(speed, 35) * 28 + on * 250, now, 0.08);
     smooth(v.body.frequency, 1800 + Math.min(speed, 35) * 40, now, 0.08);
   }
@@ -490,7 +547,7 @@ class CityAudioSystem {
         const lowGain = ctx.createGain(); lowGain.gain.value = 1.4;
         const gain = ctx.createGain(); gain.gain.value = 0;
         const panner = ctx.createPanner();
-        panner.panningModel = 'HRTF'; panner.distanceModel = 'inverse';
+        panner.panningModel = PANNING; panner.distanceModel = 'inverse';
         panner.refDistance = 6; panner.rolloffFactor = 1.1; panner.maxDistance = 400;
         noise.connect(band).connect(gain);
         noise.connect(low).connect(lowGain).connect(gain);
@@ -540,7 +597,7 @@ class CityAudioSystem {
       lfo.connect(lfoDepth).connect(swell.gain);
       const gain = ctx.createGain(); gain.gain.value = 0;
       const panner = ctx.createPanner();
-      panner.panningModel = 'HRTF'; panner.distanceModel = 'inverse';
+      panner.panningModel = PANNING; panner.distanceModel = 'inverse';
       panner.refDistance = 3; panner.rolloffFactor = 1.4; panner.maxDistance = 120;
       noise.connect(low).connect(swell);
       noise.connect(scrape).connect(scrapeGain).connect(swell);
@@ -570,7 +627,15 @@ class CityAudioSystem {
     this.accumulator %= 0.1;
     const now = this.context.currentTime;
     const position = camera.position;
-    if (this.haveListener && Math.hypot(position.x - this.listener.x, position.y - this.listener.y, position.z - this.listener.z) > 60) this.reset();
+    // a teleport or a far camera cut: everything playing fades out over a few ms (cut off at full level it clicks), and
+    // the voices go on the next update, when it's silent; the new place's voices then fade in
+    if (this.jumping) this.reset();
+    else if (this.haveListener && Math.hypot(position.x - this.listener.x, position.y - this.listener.y, position.z - this.listener.z) > 60) {
+      this.master.gain.cancelScheduledValues(now);
+      this.master.gain.setTargetAtTime(0, now, 0.005);
+      this.jumping = true;
+      return;
+    }
     this.listener.x = position.x; this.listener.y = position.y; this.listener.z = position.z;
     camera.updateMatrixWorld();
     const m = camera.matrixWorld.elements;

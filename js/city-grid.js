@@ -1530,6 +1530,9 @@ function buildCityGrid(scene, yards = null) {
   const roadMat = createRoadSurfaceMaterial();
   const roadMesh = createFlatPolygonMesh(TOWN_EDGE, 0.0, roadMat, true);
   roadMesh.userData.terrainTolerance = 0.16; // Lamp: as the other ground layers; the road markings sit a few millimetres over it (road-paint.js)
+  // (drawn after the other opaque ground, renderOrder 2, so the lawns, slabs and driveways laid over most of it hide it
+  // by the depth test rather than after its material is shaded under them)
+  roadMesh.renderOrder = 2;
   group.add(roadMesh);
 
   // =========================================================================
@@ -1551,7 +1554,6 @@ function buildCityGrid(scene, yards = null) {
   const roadSidewalks = []; // the curbs road-network.js bounds the roads with (medians go in as footprints)
   const slabGeos = [];
   const curbGeos = [];
-  const hedgeGeos = [];
   const SW_TOP = LIFT.slab;
   // Ann Arbor: a park's or a golf course's slab (an odd-shaped lawn block) is only its sidewalk ring (and a little under the lawn's edge), so on a hill the
   // concrete, draped on the ground apart from the lawn, can't show through it
@@ -1671,7 +1673,7 @@ function buildCityGrid(scene, yards = null) {
       const curb = createExtrudedPolygonMesh(b.poly, 0.0, LIFT.curb, curbMat).geometry;
       curbGeos.push(withoutBottom(curb));
       const inner = offsetPolygonInward(b.poly, 0.25);
-      if (b.lawn && !b.median && b.area > 400 && ringSlab(b)) { /* only its sidewalk ring */ }
+      if (b.lawn && b.area > 400 && ringSlab(b)) { /* only its sidewalk ring */ }
       else if (inner) slabGeos.push(withoutBottom(createExtrudedPolygonMesh(inner, 0.03, SW_TOP - 0.03, sidewalkMat).geometry));
       // rect cover for the consumers that work on rectangles: the lot rects grown back out to the curb
       for (const [x0, x1, z0, z1] of b.rects) {
@@ -1681,18 +1683,12 @@ function buildCityGrid(scene, yards = null) {
       }
       if (b.median) addFootprint((b.minX + b.maxX) * 0.5, (b.minZ + b.maxZ) * 0.5, b.maxX - b.minX, b.maxZ - b.minZ);
     }
-    // Planted malls down the middle of Park Ave, Broadway (Upper West Side), Allen St...: a clipped hedge on the slab
-    if (b.median && Math.min(b.maxX - b.minX, b.maxZ - b.minZ) > 2.2) {
-      const hedge = offsetPolygonInward(b.poly, 1.0);
-      if (hedge) {
-        hedgeGeos.push(createExtrudedPolygonMesh(hedge, SW_TOP, 0.55, medianHedgeMat).geometry);
-        addStreetGround(hedge, SW_TOP + 0.55);
-      }
-    }
+    // (no clipped hedge on a street's island: Ann Arbor's medians and cul-de-sac circles are mown grass with the
+    // survey's trees, tree-placements.js, laid as any other small lawn block)
   }
   // One batch per material, laid on the ground and cut into 800 m tiles (terrain.js): batches of a few hundred in
   // the order built each spanned the city, so every tile cut from each was drawn as its own piece
-  const mergeInto = (geos, mat, cast = false) => {
+  const mergeInto = (geos, mat, cast = false, order = 0) => {
     if (!geos.length) return;
     const flat = geos.map((g) => (g.index ? g.toNonIndexed() : g));
     // only what every piece has (a parking lot's stripes keep their lot frame)
@@ -1702,6 +1698,7 @@ function buildCityGrid(scene, yards = null) {
       const m = new THREE.Mesh(mergeGeometries(flat.slice(i, i + 20000), false), mat);
       m.receiveShadow = true;
       m.castShadow = cast;
+      m.renderOrder = order;
       group.add(m);
     }
   };
@@ -1712,9 +1709,8 @@ function buildCityGrid(scene, yards = null) {
     for (const g of flat) for (const k of Object.keys(g.attributes)) if (!common.includes(k)) g.deleteAttribute(k);
     return mergeGeometries(flat, false);
   };
-  mergeInto(curbGeos, curbMat, false);
+  mergeInto(curbGeos, curbMat, false, 1); // (after the slabs and lawns, before the road deck: renderOrder above)
   mergeInto(slabGeos, sidewalkMat);
-  mergeInto(hedgeGeos, medianHedgeMat, true);
 
   const rectSlabs = blockSidewalks.filter((s) => !s.cover);
   const swInstanced = new THREE.InstancedMesh(unitBox, sidewalkMat, rectSlabs.length);
@@ -1954,7 +1950,7 @@ function buildCityGrid(scene, yards = null) {
   // Their painted stalls (parking-stripes.js)
   if (stripeGeos.length) mergeInto(stripeGeos, createStripeMaterial());
   // The river sunk into its banks, with its bridges (river.js)
-  buildRiver(group, [...WATER_POLYGONS, ...cascadeGaps(), ...riverGaps()].map((rings) => flatGeo(rings, 0)), waterMat);
+  const bridgeColliders = buildRiver(group, [...WATER_POLYGONS, ...cascadeGaps(), ...riverGaps()].map((rings) => flatGeo(rings, 0)), waterMat);
   // Woods (kind 0: oaks & maples, close together), park and cemetery trees (1) and yard trees (2)
   const W = woodsTrees();
   for (let i = 0; i < W.length; i += 3) {
@@ -2053,7 +2049,7 @@ function buildCityGrid(scene, yards = null) {
   // roadway, handed over with the footprints)
   const sidewalks = roadSidewalks;
   // Player colliders of the South Street Viaduct's columns, ramps and portal, and the playgrounds' swing sets
-  const colliders = [...((fdrViaduct && fdrViaduct.colliders) || []), ...(playgrounds.colliders || [])];
+  const colliders = [...((fdrViaduct && fdrViaduct.colliders) || []), ...(playgrounds.colliders || []), ...(bridgeColliders || [])];
   // Lamp: what the other parts read from this module, handed back with the grid, so a kept grid gives them back when
   // the module runs again in place (restoreCityGrid) instead of leaving them empty (the parks' and woods' trees)
   const shared = { bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes, pavedPlazaRects, sidewalkBlocks, fdrViaduct,

@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { positionWorld, attribute, mx_noise_float, smoothstep, mix, float, vec3, abs, fract, max, min, time } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { asset, log } from '../lamp-game.js';
-import { groundHeight } from './terrain.js';
+import { groundHeight, GROUND_ORDER } from './terrain.js';
 import { LIFT } from './ground-lifts.js';
 import { splitByCell } from './merge-static.js';
 
@@ -289,7 +289,8 @@ function createPools(group, data) {
           const t = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez || 1)));
           d = Math.min(d, Math.hypot(x - ax - ex * t, z - az - ez * t));
         }
-        if (!insidePoly(pts, x, z)) return level - 0.03;
+        // (outside the outline, the grid's margin past the walls, it's kept under the lawn and the coping)
+        if (!insidePoly(pts, x, z)) return Math.min(level - 0.03, groundHeight(x, z) - 0.1);
         if (d >= bowl) return base;
         const u = 1 - d / bowl;
         return base + (level - 0.03 - base) * u ** 1.6;
@@ -474,7 +475,9 @@ function createPools(group, data) {
       return m;
     };
     // The basin is drawn first, then the water's outline just under its surface fills the depth there without any
-    // colour, so the lawn the ground draws over the pool afterwards is hidden and the basin shows through the water
+    // colour, so the lawn the ground draws over the pool afterwards is hidden and the basin shows through the water.
+    // The opening draws after everything else opaque but before the ground (terrain.js GROUND_ORDER): a swimmer, a car
+    // sunk to the floor or a ladder's rungs under the water drew already, so it only hides the ground
     const basin = mesh({ position: [floor.pos, 3], lane: [floor.lane, 4] }, floor.idx, floorMaterial(), 'Pool floor');
     const walls = mesh({ position: [wall.pos, 3], tile: [wall.tile, 2] }, wall.idx, wallMaterial(), 'Pool walls');
     basin.renderOrder = walls.renderOrder = -2;
@@ -484,7 +487,7 @@ function createPools(group, data) {
     const cut = new THREE.Mesh(waterMesh.geometry, cutMat);
     cut.name = 'Pool opening';
     cut.position.y = -0.015;
-    cut.renderOrder = -1;
+    cut.renderOrder = GROUND_ORDER - 5;
     group.add(cut);
     // flat-shaded: each quad its own corners, so the coping's top and faces keep sharp edges
     const rimMesh = mesh({ position: [rim.pos, 3] }, rim.idx, copingMaterial(), 'Pool coping', true);
@@ -505,8 +508,11 @@ function createPools(group, data) {
       m.castShadow = m.receiveShadow = true;
       m.name = name;
       group.add(m);
+      return m;
     };
-    inst(ladderGeometry(), new THREE.MeshStandardNodeMaterial({ color: 0xd9dee3, metalness: 0.9, roughness: 0.22 }), ladders, 'Pool ladders');
+    // the ladders draw with the basin, before the opening, so their rungs under the water show through it
+    const ladderMesh = inst(ladderGeometry(), new THREE.MeshStandardNodeMaterial({ color: 0xd9dee3, metalness: 0.9, roughness: 0.22 }), ladders, 'Pool ladders');
+    if (ladderMesh) ladderMesh.renderOrder = -2;
     const paintMat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.55 });
     inst(blockGeometry(), paintMat, blocks, 'Starting blocks');
     inst(chairGeometry(), paintMat, chairs, 'Lifeguard chairs');

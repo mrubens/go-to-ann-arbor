@@ -1,5 +1,6 @@
 // People out on the Huron: kayakers paddling and tubers drifting down from the top of the Argo Cascades, through its
-// chutes and on down the river, each put back in at the top when they reach the end of their run.
+// chutes and on down the river, each put back in at the top when they reach the end of their run (only while neither
+// end is in sight of the player).
 //
 // Their way down is traced once from the river's flow (terrain.js's riverFlow, the cascades' channel and chutes in
 // cascades.js), kept off the banks; each keeps to a lane of its own across it. Hulls, paddles and tubes are drawn as
@@ -14,7 +15,9 @@ import { PersonCrowd, PersonRig } from './pedestrians.js';
 const STEP = 3; // metres between the points of the way down
 const RUN = 2400; // the longest run before they're put back in at the top
 const KAYAKS = 9, TUBES = 7;
-const DRAWN = 320, POSED = 140; // drawn within this far of the view, their people posed within this
+const DRAWN = 320, POSED = 140; // drawn within this far of the view, their people posed every frame within this (and
+// every few frames out to DRAWN, so no boat goes by empty)
+const GAP = 2.8; // how far behind whoever is ahead one keeps where the chutes squeeze everyone into the middle
 
 // The way down: from the top of the channel, along its chutes, then wherever the river runs, nudged to the middle of
 // the open water. Each point has how much room there is to each side (left, right) and how much it's lined up on a
@@ -153,7 +156,7 @@ function buildRiverPeople(group) {
       stroke: rand() * 6, spin: rand() * 6, heading: null, x: 0, y: 0, z: 0,
       rig: new PersonRig({ seed: 50 + i * 7.3, scale: 0.92 + rand() * 0.14, female: rand() < 0.5, girth: 0.9 + rand() * 0.25, hair: rand() * 0.6 }),
       root: new THREE.Object3D(),
-      hands: [new THREE.Vector3(), new THREE.Vector3()], twist: 0
+      hands: [new THREE.Vector3(), new THREE.Vector3()], twist: 0, posedAt: -Infinity
     });
     if (kayak) hulls.setColorAt(i, color.setHex(HULL_COLORS[i % HULL_COLORS.length]));
     else tubes.setColorAt(i - KAYAKS, color.setHex(TUBE_COLORS[(i - KAYAKS) % TUBE_COLORS.length]));
@@ -183,21 +186,33 @@ function buildRiverPeople(group) {
     return pull;
   }
 
+  let frame = 0;
   // `focus2`: the second player's view in split screen, near which they're drawn and posed too
   function update(dt, elapsed, focus, focus2 = null) {
     if (dt <= 0) return;
     time = elapsed;
+    frame++;
     crowd.begin();
+    const away = (x, z) => focus2 ? Math.min(Math.hypot(x - focus.x, z - focus.z), Math.hypot(x - focus2.x, z - focus2.z)) : Math.hypot(x - focus.x, z - focus.z);
+    const end = Math.min(length, RUN) - 4;
+    let kayaksShown = 0, tubesShown = 0;
     for (const p of people) {
       const pull = place(p, dt);
-      // on through the chutes a little quicker, and back in at the top at the end of the run
-      p.s += p.speed * (1 + 0.9 * pull) * dt;
-      if (p.s > Math.min(length, RUN) - 4) { p.s = rand() * 12; p.at = 0; p.heading = null; }
-      const fx = p.x - focus.x, fz = p.z - focus.z;
-      const far = focus2 ? Math.min(Math.hypot(fx, fz), Math.hypot(p.x - focus2.x, p.z - focus2.z)) : Math.hypot(fx, fz);
+      // on through the chutes a little quicker
+      let s = p.s + p.speed * (1 + 0.9 * pull) * dt;
+      // squeezed into the middle there, a boat length behind whoever is ahead, rather than through them
+      if (pull > 0.2) for (const o of people) if (o !== p && o.s > p.s && o.s - GAP < s) s = Math.max(p.s, o.s - GAP);
+      p.s = s;
+      // back in at the top at the end of the run, but only out of sight of both ends: till then they wait there
+      if (p.s > end) {
+        p.s = end;
+        if (away(p.x, p.z) > DRAWN && away(way[0].x, way[0].z) > DRAWN) { p.s = rand() * 12; p.at = 0; p.heading = null; }
+      }
+      const far = away(p.x, p.z);
       if (far > DRAWN) {
         if (p.kayak) { hulls.setMatrixAt(p.slot, none); cockpits.setMatrixAt(p.slot, none); paddles.setMatrixAt(p.slot, none); }
         else tubes.setMatrixAt(p.slot, none);
+        p.posedAt = -Infinity;
         continue;
       }
       // riding the water: bow and stern on its surface, bobbing and rolling a little
@@ -217,6 +232,7 @@ function buildRiverPeople(group) {
       p.root.position.set(p.x, p.y, p.z);
       p.root.quaternion.copy(q);
       m.compose(p.root.position, q, one);
+      if (p.kayak) kayaksShown++; else tubesShown++;
       if (p.kayak) {
         hulls.setMatrixAt(p.slot, m);
         cockpits.setMatrixAt(p.slot, m);
@@ -239,13 +255,18 @@ function buildRiverPeople(group) {
         p.hands[1].set(-0.48, 0.24, -0.12);
         p.twist = 0.15 * Math.sin(time * 0.4 + p.phase);
       }
-      if (far < POSED) {
+      // (posed every frame near, every fourth farther off)
+      if (far < POSED || frame - p.posedAt >= 4) {
         p.root.updateMatrix();
         p.rig.paddle(p.root, p.kayak ? KAYAK_SEAT : TUBE_SEAT, p.hands, p.twist);
-        crowd.add(p.rig, far);
+        p.posedAt = frame;
       }
+      crowd.add(p.rig, far);
     }
     crowd.end();
+    // a mesh with none of its boats near either view isn't drawn at all
+    hulls.visible = cockpits.visible = paddles.visible = kayaksShown > 0;
+    tubes.visible = tubesShown > 0;
     for (const mesh of meshes) mesh.instanceMatrix.needsUpdate = true;
   }
 

@@ -67,6 +67,51 @@ function plankTexture() {
   return t;
 }
 
+// The curbs and boardwalks as one mesh per CHUNK square (each triangle by its first corner), all of a kind sharing one
+// material, each hidden beyond `cull` metres by the scene's culling (`cullDistance`) and by the frustum, rather than one
+// town-wide mesh drawn from anywhere. The normals are worked out over the whole first, so no seam shows between squares.
+const CHUNK = 300;
+function chunked(group, name, { pos, idx, uv = null }, mat, cull, setup) {
+  const whole = new THREE.BufferGeometry();
+  whole.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  whole.setIndex(idx);
+  whole.computeVertexNormals();
+  const nor = whole.attributes.normal.array;
+  const cells = new Map();
+  for (let t = 0; t + 2 < idx.length; t += 3) {
+    const f = idx[t];
+    const key = Math.floor(pos[f * 3] / CHUNK) * 100003 + Math.floor(pos[f * 3 + 2] / CHUNK);
+    let c = cells.get(key);
+    if (!c) cells.set(key, (c = { at: new Map(), pos: [], nor: [], uv: [], idx: [] }));
+    for (let j = 0; j < 3; j++) {
+      const v = idx[t + j];
+      let n = c.at.get(v);
+      if (n === undefined) {
+        n = c.pos.length / 3;
+        c.at.set(v, n);
+        c.pos.push(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
+        c.nor.push(nor[v * 3], nor[v * 3 + 1], nor[v * 3 + 2]);
+        if (uv) c.uv.push(uv[v * 2], uv[v * 2 + 1]);
+      }
+      c.idx.push(n);
+    }
+  }
+  for (const c of cells.values()) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(c.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(c.nor, 3));
+    if (uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(c.uv, 2));
+    g.setIndex(c.idx);
+    g.computeBoundingSphere();
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.name = name;
+    mesh.userData.cullDistance = cull;
+    setup(mesh);
+    group.add(mesh);
+  }
+  whole.dispose();
+}
+
 function buildBikeRoutes(group, network) {
   group.name = 'BikeRoutes';
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sc = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
@@ -154,14 +199,8 @@ function buildBikeRoutes(group, network) {
     }
   }
   if (curb.idx.length) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(curb.pos, 3));
-    g.setIndex(curb.idx);
-    g.computeVertexNormals();
-    const mesh = new THREE.Mesh(g, new THREE.MeshStandardNodeMaterial({ color: 0xb9b5ac, roughness: 0.9, side: THREE.DoubleSide }));
-    mesh.name = 'BikeLaneCurbs';
-    mesh.receiveShadow = true;
-    group.add(mesh);
+    chunked(group, 'BikeLaneCurbs', curb, new THREE.MeshStandardNodeMaterial({ color: 0xb9b5ac, roughness: 0.9, side: THREE.DoubleSide }),
+      350, (mesh) => { mesh.receiveShadow = true; });
   }
 
   // --- Boardwalks and steps along the trails
@@ -215,23 +254,10 @@ function buildBikeRoutes(group, network) {
     }
   }
   if (deck.idx.length) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(deck.pos, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(deck.uv, 2));
-    g.setIndex(deck.idx);
-    g.computeVertexNormals();
-    const mesh = new THREE.Mesh(g, new THREE.MeshStandardNodeMaterial({ map: plankTexture(), roughness: 0.9, side: THREE.DoubleSide }));
-    mesh.name = 'Boardwalks';
-    mesh.receiveShadow = mesh.castShadow = true;
-    group.add(mesh);
-    const sg = new THREE.BufferGeometry();
-    sg.setAttribute('position', new THREE.Float32BufferAttribute(side.pos, 3));
-    sg.setIndex(side.idx);
-    sg.computeVertexNormals();
-    const sides = new THREE.Mesh(sg, new THREE.MeshStandardNodeMaterial({ color: 0x5e4630, roughness: 0.95, side: THREE.DoubleSide }));
-    sides.name = 'BoardwalkSides';
-    sides.receiveShadow = true;
-    group.add(sides);
+    chunked(group, 'Boardwalks', deck, new THREE.MeshStandardNodeMaterial({ map: plankTexture(), roughness: 0.9, side: THREE.DoubleSide }),
+      400, (mesh) => { mesh.receiveShadow = mesh.castShadow = true; });
+    chunked(group, 'BoardwalkSides', side, new THREE.MeshStandardNodeMaterial({ color: 0x5e4630, roughness: 0.95, side: THREE.DoubleSide }),
+      400, (mesh) => { mesh.receiveShadow = true; });
   }
   if (steps.length) {
     const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.14, 0.36).translate(0, 0.02, 0),

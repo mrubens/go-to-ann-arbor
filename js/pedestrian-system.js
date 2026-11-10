@@ -7,8 +7,12 @@ import { groundHeight } from './terrain.js';
 // Local pedestrian population: connected walks, curb queues, conversations and player avoidance.
 // Traffic supplies crossing permissions and view checks; this system owns the crowd and its animation.
 const NUM_PEDS = Math.round(520 * TIER.people); // the pool (fewer on a phone, device-tier.js); how many are out at once follows the place, the hour and the frame rate
-const PED_RADIUS = 320;
-const NEAR_RADIUS = 350;
+// The phone's and the Xbox's few people are kept nearer (within 180 m, placed 50-160 m off) than the Mac's 520 (320 m,
+// placed 60-280 m off), so the same small pool stands about three times as thick on the streets the player can see
+const LEAN = TIER.name === 'phone';
+const PED_RADIUS = LEAN ? 180 : 320;
+const NEAR_RADIUS = LEAN ? 200 : 350;
+const PLACE_MIN = LEAN ? 50 : 60, PLACE_MAX = LEAN ? 160 : 280;
 const PED_SPAWN_DISTANCE = 150;
 const PED_AVOID_INTERVAL = 0.12;
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
@@ -448,13 +452,16 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     const onSidewalk = Math.abs(side) < 4 && pedRoutes.canDodge(p, p.dodge + side);
     if (onSidewalk && ahead > 0 && across < 7) {
       if (clock < p.avoidUntil && p.avoidSpeed >= PED_ESCAPE_SPEED) return; // already running
-      const away = (dx * p.ux + dz * p.uz) >= 0 ? 1 : -1;
+      let away = (dx * p.ux + dz * p.uz) >= 0 ? 1 : -1, run = PED_ESCAPE_SPEED;
+      // on a corner's connector there's no turning back (its pending route goes on ahead, and turning drops it): they
+      // run on along it if that's away from the car, else stop where they are
+      if (!p.route?.edge && away !== p.dir) { away = p.dir; run = 0; }
       if (p.conversation) endConversation(p.conversation);
       if (!p.resumeDir) p.resumeDir = p.dir;
       if (away !== p.dir) turnPed(p, away);
       p.pause = 0;
-      p.avoidSpeed = PED_ESCAPE_SPEED;
-      p.avoidT = p.t + away * escapeRoom(p, away);
+      p.avoidSpeed = run;
+      p.avoidT = p.t + away * (run ? escapeRoom(p, away) : 0);
       p.avoidUntil = clock + 2.5 + hash(p.rig.seed, 10);
       p.restTime = Math.max(p.restTime, clock + 8);
       p.socialTime = Math.max(p.socialTime, clock + 8);
@@ -755,11 +762,15 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     return hit;
   }
 
-  // The ground under a limp body: the sidewalk near the person's walking line, the road beyond it
+  // The ground under a limp body: the sidewalk near the person's walking line, and beyond it whatever's there, the
+  // raised block (storefronts' sidewalk, a front lawn: as controllers.js isPointOnSidewalk, parks at the ground's
+  // level) or the road
   function ragGround(p, x, z) {
     if (p.node) return pedGround(p, x, z);
     const off = Math.abs((x - p.ax) * p.uz - (z - p.az) * p.ux);
-    return groundHeight(x, z) + (off < 1.8 ? SIDEWALK_Y : CROSSWALK_Y);
+    if (off < 1.8) return groundHeight(x, z) + SIDEWALK_Y;
+    const b = blockAt(x, z);
+    return groundHeight(x, z) + (b && !(b.park > 0.6 && !b.median) ? SIDEWALK_Y : CROSSWALK_Y);
   }
 
   // A limp body tumbles until it lies still, then a few seconds on the person gets up from where they fell (through
@@ -882,7 +893,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       pedBudget--;
       if (p.placed) { if (p.conversation) endConversation(p.conversation); p.placed = false; placedCount--; }
       if (placedCount >= wanted) continue;
-      if (spawnPed(p, jump ? 0 : 60, jump ? NEAR_RADIUS : 280, !jump)) placedCount++;
+      if (spawnPed(p, jump ? 0 : PLACE_MIN, jump ? NEAR_RADIUS : PLACE_MAX, !jump)) placedCount++;
     }
     for (let i = 0; i < NUM_PEDS; i++) {
       const p = peds[i];

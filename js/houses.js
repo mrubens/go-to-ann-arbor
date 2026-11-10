@@ -1023,6 +1023,8 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
         return { cx: C.x, cz: C.z, ax: F.aDir.x, az: F.aDir.z, bx: F.bDir.x, bz: F.bDir.z, ha: F.ha, hb: F.hb,
           top: s.top, rh: s.rh, type: s.type, high: s.high || 0 };
       });
+      // its top at the ridges, so what flies at rooftop height meets the roof rather than passing through it
+      for (const R of r.collider.roofs) r.collider.maxY = Math.max(r.collider.maxY, R.top + (R.type === 'flat' ? 0.35 : R.rh));
     }
     const MF = frames[0];
     // Dormers where the photo shows them, else on a storey-and-a-half house and on many foursquares' hipped roofs
@@ -1059,12 +1061,14 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
         addBox(c, p, MF.bDir.x, MF.bDir.z, 1.1, 0.62, base, MF.top - 0.4, chim);
         addBox(c, p, MF.bDir.x, MF.bDir.z, 0.72, 0.6, MF.top - 0.4, ridgeY + 0.7, chim);
         addBox(c, p, MF.bDir.x, MF.bDir.z, 0.84, 0.72, ridgeY + 0.7, ridgeY + 0.82, capRGB);
+        if (r.collider) r.collider.maxY = Math.max(r.collider.maxY, ridgeY + 0.82);
       } else {
         const b = MF.hb * 0.3 * sgn, a = (MF.ha - MF.hb > 1 ? (MF.ha - MF.hb) * 0.6 : MF.ha * 0.3) * (id(16) < 0.5 ? -1 : 1);
         const p3 = MF.W(a, b, 0), p = { x: p3[0], z: p3[2] };
         const yTop = Math.max(MF.top + MF.rh * (1 - Math.abs(b) / MF.hb) + 1.0, ridgeY + 0.4);
         addBox(c, p, MF.aDir.x, MF.aDir.z, 0.72, 0.6, MF.top, yTop, chim);
         addBox(c, p, MF.aDir.x, MF.aDir.z, 0.84, 0.72, yTop, yTop + 0.12, capRGB);
+        if (r.collider) r.collider.maxY = Math.max(r.collider.maxY, yTop + 0.12);
       }
     }
 
@@ -1409,7 +1413,11 @@ function streamHouses(records, addresses, { radius, x, z, farCut = 1 }) {
       const d = two ? Math.min(distance(k, px, pz), distance(k, px2, pz2)) : distance(k, px, pz);
       if (d > radius + (TIER.keepBeyond ?? 300)) {
         made.removeFromParent();
-        made.traverse((o) => o.geometry?.dispose());
+        // (its meshes' render objects and bindings too: a geometry's dispose leaves them in the renderer)
+        made.traverse((o) => {
+          o.geometry?.dispose();
+          if (o.isMesh) o.dispatchEvent({ type: 'dispose' });
+        });
         built.delete(k);
         continue;
       }

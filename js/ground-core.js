@@ -419,19 +419,45 @@ export function cutToGround(c, layer) {
 
 // A cut layer with each vertex the pieces share kept once (to the millimetre, every other attribute alike) and an index
 // of its triangles: the cut lays every polygon as a fan, so most vertices come several times over
+// (by number: each vertex's rounded values hashed into an open-addressed table and compared on a collision, rather
+// than made into text keys)
 export function indexLayer(layer) {
   const { attrs, count } = layer;
   const P = attrs.findIndex((a) => a.name === 'position');
-  const seen = new Map(), keep = new Int32Array(count), index = new Uint32Array(count);
+  const keep = new Int32Array(count), index = new Uint32Array(count);
+  let size = 1;
+  while (size < count * 2) size *= 2;
+  const table = new Int32Array(size).fill(-1), mask = size - 1;
+  // vertex v's values, rounded: to the millimetre for its position, the ten-thousandth for the rest
+  const qs = attrs.map((a, n) => (n === P ? 1000 : 10000));
+  const same = (v, w) => {
+    for (let n = 0; n < attrs.length; n++) {
+      const { array, itemSize } = attrs[n], q = qs[n];
+      for (let k = 0; k < itemSize; k++) {
+        const a = Math.round(array[v * itemSize + k] * q), b = Math.round(array[w * itemSize + k] * q);
+        if (a !== b && (a === a || b === b)) return false;
+      }
+    }
+    return true;
+  };
   let unique = 0;
   for (let v = 0; v < count; v++) {
-    let key = '';
+    let h = 0x811c9dc5;
     for (let n = 0; n < attrs.length; n++) {
-      const { array, itemSize } = attrs[n], q = n === P ? 1000 : 10000;
-      for (let k = 0; k < itemSize; k++) key += Math.round(array[v * itemSize + k] * q) + ',';
+      const { array, itemSize } = attrs[n], q = qs[n];
+      for (let k = 0; k < itemSize; k++) {
+        const r = Math.round(array[v * itemSize + k] * q);
+        h = Math.imul(h ^ (r | 0), 16777619);
+        h = Math.imul(h ^ ((r / 4294967296) | 0), 16777619);
+      }
     }
-    let i = seen.get(key);
-    if (i === undefined) { seen.set(key, (i = unique++)); keep[i] = v; }
+    let slot = (h ^ (h >>> 15)) & mask, i;
+    for (;;) {
+      const u = table[slot];
+      if (u < 0) { table[slot] = i = unique++; keep[i] = v; break; }
+      if (same(keep[u], v)) { i = u; break; }
+      slot = (slot + 1) & mask;
+    }
     index[v] = i;
   }
   return {

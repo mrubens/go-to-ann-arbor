@@ -53,6 +53,8 @@ function buildHelipads(group, colliders) {
     cx /= o.length / 2; cz /= o.length / 2;
     let r = Infinity;
     for (let i = 0; i < o.length; i += 2) r = Math.min(r, Math.hypot(o[i] - cx, o[i + 1] - cz));
+    // (a square's corners are its half-diagonal out: its half-side is that over √2)
+    if (p.square) r /= Math.SQRT2;
     r = Math.max(5, r);
     // the H runs along a square pad's first side; a round one's faces north
     const yaw = p.square ? Math.atan2(-(o[3] - o[1]), o[2] - o[0]) : 0;

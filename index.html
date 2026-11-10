@@ -224,8 +224,8 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
     <button id="tp-umma" class="pop-item tp-btn" data-teleport="umma" type="button"><span class="pop-name">Museum of Art</span><span class="pop-sub">S State St · UMMA</span></button>
     <div class="pop-title">Athletic Campus</div>
     <button id="tp-stadium" class="pop-item tp-btn" data-teleport="stadium" type="button"><span class="pop-name">Michigan Stadium</span><span class="pop-sub">S Main St · The Big House</span></button>
-    <button id="tp-crisler" class="pop-item tp-btn" data-teleport="crisler" type="button"><span class="pop-name">Crisler Center</span><span class="pop-sub">S State St · Athletic Campus</span></button>
-    <button id="tp-yost" class="pop-item tp-btn" data-teleport="yost" type="button"><span class="pop-name">Yost Ice Arena</span><span class="pop-sub">S State St · Athletic Campus</span></button>
+    <button id="tp-crisler" class="pop-item tp-btn" data-teleport="crisler" type="button"><span class="pop-name">Crisler Center</span><span class="pop-sub">E Stadium Blvd · Athletic Campus</span></button>
+    <button id="tp-yost" class="pop-item tp-btn" data-teleport="yost" type="button"><span class="pop-name">Yost Ice Arena</span><span class="pop-sub">E Stadium Blvd · Athletic Campus</span></button>
     <div class="pop-title">Parks & River</div>
     <button id="tp-arb" class="pop-item tp-btn" data-teleport="arb" type="button"><span class="pop-name">Nichols Arboretum</span><span class="pop-sub">Geddes Ave · Huron River</span></button>
     <button id="tp-gallup" class="pop-item tp-btn" data-teleport="gallup" type="button"><span class="pop-name">Gallup Park</span><span class="pop-sub">Canoe livery · Fuller Rd</span></button>
@@ -397,7 +397,7 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
         <img class="mta-bullet app-logo" src="img/app-icon.png" alt="" aria-hidden="true">
         <div>
           <h2>Ann Arbor Street Atlas</h2>
-          <p id="fullmap-player-info" class="fullmap-subtitle">You are at 5th Ave &amp; 35th St</p>
+          <p id="fullmap-player-info" class="fullmap-subtitle"></p>
         </div>
       </div>
       <label class="panel fullmap-search-wrap">
@@ -442,7 +442,7 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
       <span class="legend-item"><span class="legend-swatch player-swatch"></span>You</span>
       <span class="legend-item"><span class="legend-swatch landmark-swatch"></span>Landmark</span>
       <span class="legend-item"><span class="legend-swatch gps-swatch"></span>GPS route</span>
-      <span class="legend-item"><span class="legend-swatch bridge-swatch"></span>Bridge / Hwy</span>
+      <span class="legend-item"><span class="legend-swatch bridge-swatch"></span>Freeway</span>
       <span id="fullmap-counts" class="legend-counts"></span>
     </div>
   </section>
@@ -457,7 +457,7 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of Go To Ann Arbor with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"e24a971b634829ba459256a5899eb2a5ea0ea663","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"f493fd32755447d835c96758c80e4b2f1538ac30","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');

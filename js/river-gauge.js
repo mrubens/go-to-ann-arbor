@@ -14,7 +14,7 @@ function currentScale(cfs) {
 
 async function fetchRiverFlow() {
   try {
-    const res = await fetch(`https://waterservices.usgs.gov/nwis/iv/?sites=${SITE}&format=json&parameterCd=00060`);
+    const res = await fetch(`https://waterservices.usgs.gov/nwis/iv/?sites=${SITE}&format=json&parameterCd=00060`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return USUAL;
     const series = (await res.json())?.value?.timeSeries?.[0];
     const values = series?.values?.[0]?.value || [];

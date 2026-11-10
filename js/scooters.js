@@ -4,6 +4,7 @@ import { nativeJSON, toWorld } from './live-feeds.js';
 import { groundHeight } from './terrain.js';
 import { MOTO_SPECS, buildMotoGeometry, createMotoMaterial } from './motorcycles.js';
 import { ROADS, blockAt } from './city-config.js';
+import { TIER } from './device-tier.js';
 
 // Lamp: the rental e-scooters standing around Ann Arbor, where they really are: the operator's public GBFS feed
 // (free_bike_status, Bird's Spin system for the city), asked through the app around the page every two minutes of
@@ -16,7 +17,10 @@ import { ROADS, blockAt } from './city-config.js';
 const FEED = 'https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/free_bike_status';
 const POLL = 120;
 const SHOWN = 140;
-const REACH = 320; // metres from the camera
+const REACH = 320; // metres from the camera (less on the slower tiers: TIER.farCut)
+// in full detail and casting shadows within NEAR; plainer and shadowless beyond, and past FAR without wheels (a pixel
+// or two tall there): up to 140 full scooters were half a million triangles a pass
+const NEAR = 40, FAR = 120;
 
 // Scooters left about town: along each street (not a highway), now and then, one stands just past the curb on its
 // tree lawn or a little further out on its sidewalk, turned any which way, where a curb island's edge really is (the
@@ -95,11 +99,16 @@ function onSidewalk(x, z) {
 function createScooters(group) {
   group.name = 'Scooters';
   const spec = MOTO_SPECS.escooter;
-  const mesh = new THREE.InstancedMesh(buildMotoGeometry(spec, true), createMotoMaterial(0x24272b), SHOWN);
-  mesh.count = 0;
-  mesh.frustumCulled = false;
-  mesh.castShadow = true;
-  group.add(mesh);
+  const mat = createMotoMaterial(0x24272b, { parked: true });
+  const meshes = [buildMotoGeometry(spec, true), buildMotoGeometry(spec, false), buildMotoGeometry(spec, false, false)].map((g, i) => {
+    const m = new THREE.InstancedMesh(g, mat, SHOWN);
+    m.count = 0;
+    m.frustumCulled = false;
+    m.castShadow = i === 0;
+    group.add(m);
+    return m;
+  });
+  const camAt = { x: 0, z: 0 };
 
   let spots = []; // { x, z, yaw, g, lean }: the feed's, then the strewn ones
   let feed = [];
@@ -144,18 +153,19 @@ function createScooters(group) {
   const near = [], shown = [];
   const fq = new THREE.Quaternion(), fq2 = new THREE.Quaternion(), fax = new THREE.Vector3();
   function draw() {
+    const n = [0, 0, 0];
     for (let i = 0; i < shown.length; i++) {
       const s = shown[i];
+      const d2 = (s.x - camAt.x) ** 2 + (s.z - camAt.z) ** 2, lod = d2 < NEAR * NEAR ? 0 : d2 < FAR * FAR ? 1 : 2;
       if (s.fly) m4.compose(pos.set(s.x, s.fly.y, s.z), s.fly.q, one);
       else {
         e.set(0, s.yaw, s.lean); // on its kickstand, or lying on its side
         q.setFromEuler(e);
         m4.compose(pos.set(s.x, s.g + 0.02 + (s.down ? 0.2 : 0), s.z), q, one);
       }
-      mesh.setMatrixAt(i, m4);
+      meshes[lod].setMatrixAt(n[lod]++, m4);
     }
-    mesh.count = shown.length;
-    mesh.instanceMatrix.needsUpdate = true;
+    meshes.forEach((m, lod) => { m.count = n[lod]; m.instanceMatrix.needsUpdate = true; });
   }
 
   // the player's car or bike running into one: it goes flying ahead of it, tumbling, and lies where it lands
@@ -237,9 +247,11 @@ function createScooters(group) {
     if (regather > 0 || !cam) return;
     regather = 0.5;
     near.length = 0;
+    camAt.x = cam.x; camAt.z = cam.z;
+    const reach = REACH * (TIER.farCut ?? 1);
     for (const s of spots) {
       const d = Math.hypot(s.x - cam.x, s.z - cam.z);
-      if (d < REACH) near.push([d, s]);
+      if (d < reach) near.push([d, s]);
     }
     near.sort((a, b) => a[0] - b[0]);
     shown.length = 0;

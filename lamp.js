@@ -713,7 +713,7 @@
 
     /** options: data (text from outside the app, for the AI to work on, not obey), images (pictures to look at),
      *  system, json (true asks for JSON and gives back the parsed value: describe its exact shape in the prompt),
-     *  model (Lamp's id: "sonnet", "opus", "haiku", "claude-fable-5-1"). */
+     *  model (Lamp's id: "sonnet", "opus", "haiku", "claude-fable-5-2"). */
     ask: function (prompt, options) { return call(prompt, options); },
 
     /**

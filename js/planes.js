@@ -2,6 +2,8 @@ import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { asset, log, random } from '../lamp-game.js';
 import { nativeJSON, toWorld } from './live-feeds.js';
+import { groundHeight } from './terrain.js';
+import { AIRPORT } from './airport-data.js';
 
 // Lamp: the real aircraft over Ann Arbor, from the OpenSky Network's live state vectors (its free API, asked through
 // the app around the page every 20 s): airliners on the Detroit Metro approach and departures, small planes in and out
@@ -11,7 +13,7 @@ import { nativeJSON, toWorld } from './live-feeds.js';
 // The sky is never left empty: while fewer than a few real aircraft are near town (OpenSky's free API runs out of
 // asks after a while, and often few fly right over), made-up flights fill it in: airliners descending east toward
 // Detroit Metro or climbing out of it, a high cruiser now and then with its contrail, and small planes to and from
-// Ann Arbor Municipal. Planes are drawn through the haze (it hid anything more than a few km off) and cruisers leave a
+// Ann Arbor Municipal, down its runway's glide path to touch down and roll out, or off it climbing away. Planes are drawn through the haze (it hid anything more than a few km off) and cruisers leave a
 // contrail, so one seven miles up still shows.
 
 const AREA = { lamin: 41.95, lomin: -84.25, lamax: 42.6, lomax: -83.15 };
@@ -20,8 +22,16 @@ const POLL = 60; // seconds of play between asks (the free API allows a few hund
 const GROUND = 270; // m above sea level of the town's streets, the world's y = 0
 const SKY = 3; // made-up flights kept up while fewer real ones are near town
 const NEAR = 25000;
-const ARB = toWorld(42.2229, -83.7456), DTW = toWorld(42.2124, -83.3534);
+const DTW = toWorld(42.2124, -83.3534);
 const MAX = 48;
+// Ann Arbor Municipal's paved runway (6/24), which the made-up small planes land on and take off from along its heading
+const RUNWAY = (() => {
+  const r = AIRPORT.runways.find((w) => !w.grass);
+  if (!r) return null;
+  const [ax, az] = r.a, [bx, bz] = r.b, len = Math.hypot(bx - ax, bz - az);
+  return { ax, az, bx, bz, len, ux: (bx - ax) / len, uz: (bz - az) / len };
+})();
+const GLIDE = Math.tan(3 * Math.PI / 180), TOUCHDOWN = 250, WHEELS = 1.25, FINAL = 33, LIFTOFF = 32;
 
 function part(geo, x, y, z) { geo.translate(x, y, z); return geo; }
 
@@ -102,15 +112,30 @@ function createPlanes(group) {
       yaw = random() * Math.PI * 2;
       const t = (along - 0.5) * 50000;
       x = Math.cos(yaw) * off + Math.sin(yaw) * t; z = Math.sin(yaw) * off - Math.cos(yaw) * t;
-    } else { // a small plane in or out of Ann Arbor Municipal, low over town
-      kind = 'prop'; speed = 50 + random() * 12; climb = 0; y = 450 + random() * 500;
-      const out = random() < 0.5, b = random() * Math.PI * 2, far = 22000;
-      const fx = ARB.x + Math.sin(b) * far, fz = ARB.z - Math.cos(b) * far;
-      const [bx, bz, tx, tz] = out ? [ARB.x, ARB.z, fx, fz] : [fx, fz, ARB.x, ARB.z];
-      yaw = Math.atan2(tx - bx, -(tz - bz));
-      const t = along * far * 0.85;
-      x = bx + Math.sin(yaw) * t; z = bz - Math.cos(yaw) * t;
-    }
+    } else if (RUNWAY) { // a small plane in or out of Ann Arbor Municipal along its runway's heading, either way
+      kind = 'prop';
+      const R = RUNWAY, out = random() < 0.5, fwd = random() < 0.5, dx = fwd ? R.ux : -R.ux, dz = fwd ? R.uz : -R.uz;
+      // (the threshold it lands over, or the end it starts its take-off run from)
+      const tx = fwd ? R.ax : R.bx, tz = fwd ? R.az : R.bz, field = groundHeight((R.ax + R.bx) / 2, (R.az + R.bz) / 2) + WHEELS;
+      const cruise = 50 + random() * 12, level = 450 + random() * 500, far = 22000;
+      yaw = Math.atan2(dx, -dz);
+      let t, phase;
+      if (out) { // from the runway (or, filling the sky at the start, already climbing away along its heading)
+        t = along < 0.15 ? 0 : along * far * 0.85;
+        phase = t ? 'out' : 'run';
+        speed = t ? cruise : 0;
+        y = t ? Math.min(field + level, field + t * 0.08) : field;
+      } else { // in along the runway's extended centreline toward its threshold, from far out
+        t = -far + along * far * 0.85;
+        phase = 'in';
+        speed = cruise;
+        y = Math.min(field + level, field + (TOUCHDOWN - t) * GLIDE);
+      }
+      x = tx + dx * t; z = tz + dz * t; climb = 0;
+      planes.set(`sim${simId++}`, { x, y, z, vx: dx * speed, vy: 0, vz: dz * speed, yaw, kind, ex: 0, ey: 0, ez: 0, callsign: '', sim: true,
+        ground: { phase, dx, dz, tx, tz, field, cruise, level, speed } });
+      return;
+    } else return;
     planes.set(`sim${simId++}`, { x, y, z, vx: Math.sin(yaw) * speed, vy: climb, vz: -Math.cos(yaw) * speed, yaw, kind,
       ex: 0, ey: 0, ez: 0, callsign: '', sim: true });
   }
@@ -122,8 +147,8 @@ function createPlanes(group) {
     let sims = 0;
     for (const [id, p] of planes) {
       if (!p.sim) continue;
-      // gone past town, or landed at Ann Arbor
-      if (Math.hypot(p.x, p.z) > 34000 || (p.kind === 'prop' && Math.hypot(p.x - ARB.x, p.z - ARB.z) < 600 && p.vz * (ARB.z - p.z) + p.vx * (ARB.x - p.x) < 0)) { planes.delete(id); continue; }
+      // gone past town, or landed at Ann Arbor and rolled out (flyProp)
+      if (Math.hypot(p.x, p.z) > 34000 || p.ground?.phase === 'done') { planes.delete(id); continue; }
       sims++;
     }
     let near = 0;
@@ -173,6 +198,33 @@ function createPlanes(group) {
     }
   }
 
+  // a made-up small plane's flight along the runway: down the 3° glide to touch down past the threshold, rolling out
+  // and slowing to a stop (then let go), or its take-off run, lifting off and climbing to its height, then on out
+  function flyProp(p, dt) {
+    const g = p.ground, s = (p.x - g.tx) * g.dx + (p.z - g.tz) * g.dz;
+    let vy = 0;
+    if (g.phase === 'in') {
+      if (s < -3000) g.speed = g.cruise; else g.speed = Math.max(FINAL, g.speed - 1.5 * dt);
+      const want = Math.min(g.field + g.level, g.field + Math.max(0, TOUCHDOWN - s) * GLIDE);
+      if (want < p.y) vy = -g.speed * GLIDE;
+      p.y = Math.min(p.y, want);
+      if (s >= TOUCHDOWN) { g.phase = 'roll'; p.y = g.field; }
+    } else if (g.phase === 'roll') {
+      g.speed = Math.max(0, g.speed - 3 * dt);
+      p.y = g.field;
+      if (g.speed < 4) g.phase = 'done';
+    } else if (g.phase === 'run') {
+      g.speed = Math.min(g.cruise, g.speed + 2.5 * dt);
+      if (g.speed >= LIFTOFF) g.phase = 'out';
+      p.y = g.field;
+    } else if (g.phase === 'out') {
+      g.speed = Math.min(g.cruise, g.speed + 1 * dt);
+      if (p.y < g.field + g.level) { vy = 4; p.y = Math.min(g.field + g.level, p.y + vy * dt); }
+    }
+    p.vx = g.dx * g.speed; p.vz = g.dz * g.speed; p.vy = vy;
+    p.x += p.vx * dt; p.z += p.vz * dt;
+  }
+
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ');
   const pos = new THREE.Vector3(), scl = new THREE.Vector3(1, 1, 1);
   function update(dt, look = 'midday') {
@@ -188,15 +240,12 @@ function createPlanes(group) {
     let nt = 0;
     const ease = Math.min(1, dt / 4);
     for (const p of planes.values()) {
-      p.x += p.vx * dt + p.ex * ease; p.ex -= p.ex * ease;
-      if (p.sim && p.kind === 'prop') { // a small plane eases down onto Ann Arbor's runway as it nears it
-        const d = Math.hypot(p.x - ARB.x, p.z - ARB.z), toward = p.vx * (ARB.x - p.x) + p.vz * (ARB.z - p.z) > 0;
-        if (toward && d < 6000) p.vy = -Math.max(0, p.y - 20) / Math.max(1, d / Math.hypot(p.vx, p.vz));
-        else if (!toward && d < 4000) p.vy = 3;
-        else p.vy = 0;
+      if (p.ground) flyProp(p, dt);
+      else {
+        p.x += p.vx * dt + p.ex * ease; p.ex -= p.ex * ease;
+        p.y = Math.max(p.sim ? 15 : 60, p.y + p.vy * dt + p.ey * ease); p.ey -= p.ey * ease;
+        p.z += p.vz * dt + p.ez * ease; p.ez -= p.ez * ease;
       }
-      p.y = Math.max(p.sim ? 15 : 60, p.y + p.vy * dt + p.ey * ease); p.ey -= p.ey * ease;
-      p.z += p.vz * dt + p.ez * ease; p.ez -= p.ez * ease;
       const mesh = kinds[p.kind];
       if (n[p.kind] >= MAX) continue;
       const speed = Math.hypot(p.vx, p.vz) || 1;
@@ -211,10 +260,13 @@ function createPlanes(group) {
         scl.set(1, 1, 1);
       }
     }
+    // (an empty one isn't drawn at all: no draw for the contrails on most frames, or for a kind with none up)
     trails.count = nt;
+    trails.visible = nt > 0;
     trails.instanceMatrix.needsUpdate = true;
     for (const k of Object.keys(kinds)) {
       kinds[k].count = n[k];
+      kinds[k].visible = n[k] > 0;
       kinds[k].instanceMatrix.needsUpdate = true;
     }
   }

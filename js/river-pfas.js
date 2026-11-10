@@ -25,7 +25,7 @@ function foamFor(ppt) {
 async function fetchRiverPfas() {
   try {
     const q = `${LAYER}?where=1%3D1&outFields=WaterbodyName,Description,Date,PFOS_ngL,Latitude,Longitude&f=json`;
-    const res = await fetch(q);
+    const res = await fetch(q, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(res.status);
     const rows = ((await res.json())?.features || []).map((f) => f.attributes).filter((a) => a && a.Latitude);
     let best = null;
