@@ -1700,3 +1700,17 @@ body.split .split-divider {
 @media (max-width: 620px) {
   .hud-bottom-left { bottom: calc(var(--edge) + 66px); max-width: calc(100% - 2 * var(--edge)); }
 }
+
+/* Golf (golf-play.js): the hole, the distance, the stroke and the club in plain words over the key hints, with a thin
+   power meter under them while the swing's held */
+.golf-line {
+  position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 6; pointer-events: none;
+  display: none; flex-direction: column; align-items: center; gap: 8px;
+  color: #fff; font: 700 21px/1.2 system-ui, sans-serif; white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.75), 0 0 18px rgba(0, 0, 0, 0.5);
+}
+.golf-line.show { display: flex; }
+.golf-meter { width: 260px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.25); overflow: hidden; opacity: 0; transition: opacity 0.15s; }
+.golf-meter i { display: block; height: 100%; background: #fff; transform-origin: left; transform: scaleX(0); }
+.golf-line.swinging .golf-meter { opacity: 1; }
+body.touch-enabled .golf-line { bottom: 150px; font-size: 15px; }

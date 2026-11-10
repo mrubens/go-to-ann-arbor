@@ -31,6 +31,7 @@ import { reportMemory, memoryCheckpoint, MEASURE_MEMORY } from './memory-report.
 import { gpuOnly, releaseUploaded, useRenderer } from './gpu-only.js';
 import { TIER, XBOX } from './device-tier.js';
 import { FILLS, fillWindow, stageSize } from './stage.js';
+import { GolfPlay } from './golf-play.js';
 import { GamepadControls } from './gamepad-controls.js';
 import { createSecondPlayer, createSplitView } from './split-screen.js';
 import { CameraSystem, CAMERA_PRESETS } from './cameras.js';
@@ -688,6 +689,9 @@ async function initApp() {
   // a camera kept from an earlier run takes this tier's reach (the Xbox's is shorter: device-tier.js)
   if (keptCamera.far !== (TIER.far || 60000)) { keptCamera.far = TIER.far || 60000; keptCamera.updateProjectionMatrix(); }
   const cameraSystem = new CameraSystem(renderer.domElement, controllerManager, keptCamera);
+  // golf on the courses: from a tee on foot, Play golf (golf-play.js)
+  const golf = new GolfPlay({ scene, cm: controllerManager, cameraSystem, notice: (t, secs) => showNotice(t, secs),
+    soundOn: () => audioSystem.enabled, onChange: () => { getInWords = getInNow(); renderControlHints(controllerManager.activeMode); touchControls.setGetOutWords(getInWords || 'Get in'); } });
   // the window's shape (stage.js): the camera as wide as the drawing, set again on each resize
   let stage = stageSize();
   cameraSystem.onResize(stage.w, stage.h, FILLS);
@@ -972,6 +976,9 @@ async function initApp() {
   for (const [mode, hints] of Object.entries(controlHints)) {
     hints.push({ keys: ['KeyF'], pad: [BUTTON.X], does: mode === 'person' ? '' : 'Get out', getOut: mode !== 'person', getIn: mode === 'person' });
   }
+  // Lined up over a golf ball (golf-play.js): the stick or the turn keys aim, forward and back change the club, and
+  // swing is held to fill the meter and let go to hit
+  controlHints.golf = [{ keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Aim' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Hold, or drag back from the golfer, let go to hit' }, { keys: ['KeyF'], pad: [BUTTON.X], does: 'Stop golfing' }];
   // Getting out of a car on the move or the helicopter in the air is a jump, and its hint says so
   let jumpOut = false;
   // On foot, what F would do now (what's in reach, looked for each quarter second below): '' with nothing near hides it
@@ -980,6 +987,8 @@ async function initApp() {
     const cm = controllerManager, p = cm.entities.person;
     if (cm.activeMode !== 'person' || p.fallen || p.chute) return '';
     if (p.onBus) return 'Get off';
+    if (golf.active) return 'Stop golfing';
+    if (!p.sitting && golf.teeNear(p.position.x, p.position.z) >= 0) return 'Play golf';
     if (trafficSystem.boardBus(p.position.x, p.position.z, 5, true)) return 'Board the bus';
     const c = cm.enterOrExit(parkedCars, trafficSystem, true);
     if (!c) return '';
@@ -1020,6 +1029,7 @@ async function initApp() {
   function renderControlHints(mode, on = input()) {
     if (!elControlsHint) return;
     if (mode === 'helicopter' && controllerManager.entities.helicopter.craft === 'plane') mode = 'plane';
+    if (mode === 'person' && golf.active) mode = 'golf';
     const pad = on.kind === 'controller';
     const items = (controlHints[mode] || []).filter((hint) => (pad ? hint.pad : hint.keys) && !(hint.getIn && !getInWords)).map((hint) => {
       const item = document.createElement('span');
@@ -1212,6 +1222,12 @@ async function initApp() {
     cm.traffic = trafficSystem;
     // a bus: on at a stop, where its driver waits for the player, and off at the next one
     const p = cm.entities.person;
+    // golf: from a tee, a round; while playing, stopped
+    if (was === 'person' && golf.active) { golf.quit(); return; }
+    if (was === 'person' && !p.sitting && !p.fallen && !p.chute && !p.onBus) {
+      const tee = golf.teeNear(p.position.x, p.position.z);
+      if (tee >= 0) { golf.start(tee); return; }
+    }
     // on a bench, a chair or the bleachers: up again
     if (was === 'person' && p.sitting) { cm.standUp(); return; }
     if (was === 'person' && p.onBus) {
@@ -1572,7 +1588,7 @@ async function initApp() {
       elChampion.classList.add('flying', 'show');
       signH = elChampion.offsetHeight;
     } else if (viewLandmark) {
-      const l = viewLandmark, [h, w] = VIEW_SIZE[l.id] || (l.art ? [6, 18] : [30, 80]);
+      const l = viewLandmark, [h, w] = VIEW_SIZE[l.id] || (l.art === 'golf' ? [15, 120] : l.art ? [6, 18] : [30, 80]);
       cameraSystem.startFlyover(l.x, l.z, h, w);
     } else return;
     championFlying = true;
@@ -2159,6 +2175,7 @@ async function initApp() {
     championPad(f.pads[0]);
     gamepadControls.supply(f.pads[0]);
     gamepadControls.update(dt);
+    golf.update(dt);
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
     {
       const cm = controllerManager, look = cm.carLook;
@@ -2498,7 +2515,7 @@ async function initApp() {
     return { version: 2, activeMode: controllerManager.activeMode, entities, camera: cameraSystem.activePresetId,
              zoom: cameraSystem.zoomMultiplier, time: lightingSystem.activePresetId,
              map: mapSystem.isFullMapOpen, hudHidden: document.body.classList.contains('hud-minimized'),
-             split: { on: split.on, offered: split.offered, second: split.second?.snapshot() ?? null } };
+             split: { on: split.on, offered: split.offered, second: split.second?.snapshot() ?? null }, golf: golf.snapshot() };
   }
   function startFrom(state) {
     if (state?.version !== 2) return;
@@ -2517,6 +2534,7 @@ async function initApp() {
     if (typeof state.hudHidden === 'boolean' && hudToggleBtn && state.hudHidden !== document.body.classList.contains('hud-minimized')) hudToggleBtn.click();
     if (state.map === true) mapSystem.toggleFullMap(true);
     // split screen as it was: the second player where they were, drawn again once the frame sees both controllers
+    if (state.golf && controllerManager.activeMode === 'person') golf.restore(state.golf);
     if (state.split) { split.on = state.split.on === true; split.offered = state.split.offered === true; split.kept = state.split.second; }
   }
 
@@ -2531,7 +2549,7 @@ async function initApp() {
   // (on an Xbox too: the runtime's own steps, from 1920x1080, undid its smaller size and left it at 960x540 or full size)
   }, frame, touch: false, keyboard: false, snapshot, sharp: XBOX || TIER.name !== 'phone', fill: FILLS,
     // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.
-    dispose() { stopFilling?.(); groundShade.group.removeFromParent(); groundShade.dispose(); split.second?.dispose(); split.view?.dispose(); document.body.classList.remove('split');
+    dispose() { stopFilling?.(); golf.dispose(); groundShade.group.removeFromParent(); groundShade.dispose(); split.second?.dispose(); split.view?.dispose(); document.body.classList.remove('split');
       cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); scenePass.dispose(); } });
   container.appendChild(renderer.domElement);
 }

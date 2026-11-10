@@ -285,6 +285,21 @@ class CameraSystem {
     this.flyover = null;
     this.followEntity = null; // the follow view re-anchors from where the flyover left it and glides back
   }
+  // A view another part sets while it's on (golf-play.js: down the line, then after the ball): `override(dt, pos,
+  // look)` fills where the camera goes and what it looks at and returns how quickly to ease there, or false
+  updateOverride(dt) {
+    const rate = this.override?.(dt, this._desiredPos, this._desiredLook);
+    if (!rate) return false;
+    if (this.jumpCam) this.jumpCam = null;
+    const k = 1 - Math.exp(-dt * rate);
+    this.currentPos.lerp(this._desiredPos, k);
+    this.currentLookAt.lerp(this._desiredLook, k);
+    this.camera.position.copy(this.currentPos);
+    this.camera.lookAt(this.currentLookAt);
+    this.followEntity = null; // the follow view re-anchors from here once it's over
+    return true;
+  }
+
   updateFlyover(dt) {
     const f = this.flyover;
     if (!f) return false;
@@ -359,6 +374,7 @@ class CameraSystem {
 
     const totalYaw = entity.heading + this.orbitYawOffset;
 
+    if (this.updateOverride(dt)) return;
     if (this.updateJumpCam(entity, dt)) return;
     if (this.updateFlyover(dt)) return;
 

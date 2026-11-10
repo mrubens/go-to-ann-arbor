@@ -219,6 +219,11 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
     <button id="tp-buhr" class="pop-item tp-btn" data-teleport="buhr" type="button"><span class="pop-name">Buhr Park</span><span class="pop-sub">Packard St · Southeast</span></button>
     <button id="tp-countyfarm" class="pop-item tp-btn" data-teleport="countyfarm" type="button"><span class="pop-name">County Farm Park</span><span class="pop-sub">Platt Rd · Southeast</span></button>
     <button id="tp-leslie" class="pop-item tp-btn" data-teleport="leslie" type="button"><span class="pop-name">Leslie Park</span><span class="pop-sub">Traver Rd · North side</span></button>
+    <div class="pop-title">Golf</div>
+    <button id="tp-golf-huron-hills-golf-course" class="pop-item tp-btn" data-teleport="golf-huron-hills-golf-course" type="button"><span class="pop-name">Huron Hills</span><span class="pop-sub">Huron Pkwy · 18 holes</span></button>
+    <button id="tp-golf-leslie-park-golf-course" class="pop-item tp-btn" data-teleport="golf-leslie-park-golf-course" type="button"><span class="pop-name">Leslie Park</span><span class="pop-sub">Traver Rd · 18 holes</span></button>
+    <button id="tp-golf-university-of-michigan-golf-course" class="pop-item tp-btn" data-teleport="golf-university-of-michigan-golf-course" type="button"><span class="pop-name">U-M Golf Course</span><span class="pop-sub">S Main St · 18 holes</span></button>
+    <button id="tp-golf-georgetown-country-club" class="pop-item tp-btn" data-teleport="golf-georgetown-country-club" type="button"><span class="pop-name">Georgetown Country Club</span><span class="pop-sub">Southeast · 9 holes</span></button>
     <div class="pop-title">Around Town</div>
     <button id="tp-amtrak" class="pop-item tp-btn" data-teleport="amtrak" type="button"><span class="pop-name">Amtrak Station</span><span class="pop-sub">Depot St · Lower Town</span></button>
     <button id="tp-gandy" class="pop-item tp-btn" data-teleport="gandy" type="button"><span class="pop-name">The Gandy Dancer</span><span class="pop-sub">Depot St · Old Michigan Central depot</span></button>
@@ -430,12 +435,12 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
 <div id="lamp-remix" hidden>
   <div class="lamp-remix-head">Make Go To Ann Arbor yours<button type="button" id="lamp-remix-close" aria-label="Close">×</button></div>
   <p>Say what you'd change. Lamp makes the change and keeps your data.</p>
-  <button type="button" class="lamp-remix-pick">Add a night mode with glowing streetlights</button><button type="button" class="lamp-remix-pick">Let me drop a pin on the minimap</button><button type="button" class="lamp-remix-pick">Make rain and snow roll through the city</button>
+  <button type="button" class="lamp-remix-pick">Add a minimap showing where I am</button><button type="button" class="lamp-remix-pick">Let me change the time of day</button><button type="button" class="lamp-remix-pick">Make the helicopter fly faster with a boost</button>
   <textarea id="lamp-remix-ask" rows="3" placeholder="Or say it your way"></textarea>
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of Go To Ann Arbor with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"a5e36322b78a034eba0ac1117c16bd35036965e2","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"337e35cd2e4808db26b904ddc0090db4767469c2","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');

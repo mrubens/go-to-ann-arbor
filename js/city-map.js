@@ -483,6 +483,19 @@ function drawTreeSign(ctx, x, y, r) {
   ctx.beginPath(); ctx.arc(x - r * 0.15, y - r * 0.62, r * 0.26, 0, Math.PI * 2); ctx.fill();
 }
 
+// a golf course's first tee: a green disc with a white flagstick and a yellow flag, dark-rimmed like the other signs
+function drawGolfSign(ctx, x, y, r) {
+  ctx.fillStyle = MAP.halo;
+  ctx.beginPath(); ctx.arc(x, y, r + 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#2f9e44';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(x - r * 0.28, y - r * 0.62, Math.max(1, r * 0.14), r * 1.2);
+  ctx.beginPath(); ctx.ellipse(x - r * 0.21, y + r * 0.6, r * 0.42, r * 0.14, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffcb05';
+  ctx.beginPath(); ctx.moveTo(x - r * 0.14, y - r * 0.62); ctx.lineTo(x + r * 0.6, y - r * 0.38); ctx.lineTo(x - r * 0.14, y - r * 0.12); ctx.closePath(); ctx.fill();
+}
+
 function drawPlayerArrow(ctx, tipY, halfWidth, tailY) {
   ctx.beginPath();
   ctx.moveTo(0, tipY);
@@ -1351,6 +1364,7 @@ class CityMapSystem {
       const ly = toY(lm.z);
       if (Math.abs(lx) < w * 0.48 && Math.abs(ly) < h * 0.48) {
         if (lm.art === 'tree') { drawTreeSign(ctx, lx, ly, 5); continue; }
+        if (lm.art === 'golf') { drawGolfSign(ctx, lx, ly, 6); continue; }
         const r = lm.art ? 0.7 : 1;
         ctx.fillStyle = MAP.halo;
         ctx.beginPath();
@@ -1368,6 +1382,7 @@ class CityMapSystem {
       const sx = toX(site.x), sy = toY(site.z);
       if (Math.abs(sx) < w * 0.48 && Math.abs(sy) < h * 0.48) drawWorkSign(ctx, sx, sy, 5);
     }
+
 
     // Camera FOV Cone & Player Arrow at center (0, 0)
     const camDir = r.cameraSystem.currentLookAt.clone().sub(r.cameraSystem.currentPos);
@@ -1450,6 +1465,7 @@ class CityMapSystem {
       const sx = toX(site.x), sy = toY(site.z);
       if (Math.abs(sx) < v.w * 0.5 && Math.abs(sy) < v.h * 0.5) (v.s < DOTS_UNDER ? drawDot(ctx, sx, sy, '#ff8a1f', 2.2) : drawWorkSign(ctx, sx, sy, 7 * iconScale(v.s)));
     }
+
 
     // Live Player Blip & Heading Arrow, with a slow pulse to find it at a glance
     const px = toX(ent.position.x);
@@ -1577,14 +1593,14 @@ class CityMapSystem {
     const pins = [];
     // the big landmarks first, then the murals and sculptures, whose names show only once zoomed in
     // (the champion trees' badges show at every zoom, their names only zoomed in)
-    const ordered = [...LANDMARKS.filter((l) => !l.art), ...LANDMARKS.filter((l) => l.art && (s >= 0.6 || l.art === 'tree'))];
+    const ordered = [...LANDMARKS.filter((l) => !l.art), ...LANDMARKS.filter((l) => l.art && (s >= 0.6 || l.art === 'tree' || l.art === 'golf'))];
     for (const lm of ordered) {
       const lx = toX(lm.x);
       const ly = toY(lm.z);
       if (Math.abs(lx) > w * 0.48 || Math.abs(ly) > h * 0.48) continue;
       const labelW = this.textWidth(ctx, lm.short) + 6;
       const box = [lx + 6, ly - 8, lx + 8 + labelW, ly + 7];
-      const showLabel = (s >= 0.6 || !lm.art) && !overlaps(placed, box);
+      const showLabel = (s >= 0.6 || !lm.art || lm.art === 'golf') && !overlaps(placed, box);
       placed.push([lx - 6, ly - 6, lx + 6, ly + 6]);
       if (showLabel) placed.push(box);
       pins.push({ lm, lx, ly, showLabel });
@@ -1631,7 +1647,8 @@ class CityMapSystem {
     const ik = iconScale(s);
     for (const { lm, lx, ly, showLabel } of pins) {
       const r = (lm.art ? 0.7 : 1) * ik;
-      if (s < DOTS_UNDER) drawDot(ctx, lx, ly, lm.art === 'tree' ? '#43d17f' : ART_PIN[lm.art] || '#ffffff', lm.art ? 2.2 : 3);
+      if (lm.art === 'golf') drawGolfSign(ctx, lx, ly, 8 * ik); // at every zoom
+      else if (s < DOTS_UNDER) drawDot(ctx, lx, ly, lm.art === 'tree' ? '#43d17f' : ART_PIN[lm.art] || '#ffffff', lm.art ? 2.2 : 3);
       else if (lm.art === 'tree') drawTreeSign(ctx, lx, ly, 7 * ik);
       else {
         ctx.fillStyle = MAP.halo;

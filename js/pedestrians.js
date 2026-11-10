@@ -2621,7 +2621,9 @@ class PersonRig {
     for (let i = 0; i < 2; i++) {
       const side = SIDES[i];
       this.jointFrom(BONE.CHEST, LIMB.upperArm[i], _qChest, _chest, _shoulder);
-      toWorld(_target.set(side * p.hand[0], p.hand[1], p.hand[2] - 0.05));
+      // (each hand where `hands` puts it when it's given: both on a golf club's grip, golf-play.js)
+      const hd = p.hands?.[i];
+      toWorld(hd ? _target.set(hd[0], hd[1], hd[2]) : _target.set(side * p.hand[0], p.hand[1], p.hand[2] - 0.05));
       _pole.set(side * 0.6, -1, -0.4).applyQuaternion(_qRoot);
       this.limb(LIMB.upperArm[i], LIMB.forearm[i], _shoulder, _target, UPPER_ARM * s, (FOREARM + 0.07) * s, _pole, _fwd, side * ARM_BIND_ABDUCTION);
 

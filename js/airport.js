@@ -178,7 +178,7 @@ function planeGeometries() {
   white.push(airfoil(1.6, 0.12, -5.5, 5.5, wingY, 1.75));
   for (const s of [-1, 1]) {
     white.push(new THREE.SphereGeometry(0.1, 10, 6).scale(1, 1, 8).translate(s * 5.5, wingY + 0.04, 0.95));
-    (s < 0 ? red : green).push(new THREE.SphereGeometry(0.06, 8, 6).translate(s * 5.56, wingY + 0.04, 1.55));
+    (s > 0 ? red : green).push(new THREE.SphereGeometry(0.06, 8, 6).translate(s * 5.56, wingY + 0.04, 1.55));
     white.push(rod(V(s * 0.55, 1.0, 0.85), V(s * 2.8, wingY, 1.0), 0.045));
     white.push(rod(V(s * 0.55, 1.0, 0.55), V(s * 2.8, wingY, 0.4), 0.035));
   }
