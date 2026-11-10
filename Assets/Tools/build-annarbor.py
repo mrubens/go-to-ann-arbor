@@ -320,6 +320,9 @@ for w in ways:
     t = w.get('tags', {})
     if t.get('highway') not in DRIVE or t.get('area') == 'yes' or t.get('access') in ('private', 'no'):
         continue
+    # a golf course's cart paths are mapped as service roads, but they're paths for carts and walkers (drawn by golf.js)
+    if t.get('golf') in ('cartpath', 'path'):
+        continue
     pts = way_pts(w)
     if len(pts) < 2:
         continue

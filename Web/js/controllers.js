@@ -24,7 +24,7 @@ import {
   buildHelicopterTailRotorGeometry,
   createLoftedHelicopterMaterial
 } from './helicopter.js';
-import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
+import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION, PERSON_BONES } from './pedestrians.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
 import { bryantParkLawn } from './landmarks.js';
 import { groundHeight, groundTilt, nearestWater, riverDepth, riverFlow, stadiumGround, waterLevel, footbridgeTop } from './terrain.js';
@@ -151,13 +151,21 @@ function makeEarbuds(scene, who) {
   scene.add(m);
   return m;
 }
-// set the earbuds on a rig's head as it's posed now, or hide them
-function placeEarbuds(buds, rig, on) {
-  buds.visible = Boolean(on && rig.headPosition);
-  if (!buds.visible) return;
-  buds.position.copy(rig.headPosition);
-  buds.quaternion.copy(rig.headQuaternion);
-  buds.scale.setScalar(rig.s);
+// the earbuds sit on the head bone (placeOnHead, below)
+const placeEarbuds = (buds, rig, on) => placeOnHead(buds, rig, on);
+// set something worn on the head bone as the rig last posed it (read from its pose, which every way of moving writes,
+// walking included), or hide it
+const _headQ = new THREE.Quaternion();
+function placeOnHead(cap, rig, on) {
+  const a = rig.pose, o = PERSON_BONES.HEAD * 8;
+  cap.visible = Boolean(on && a && a[o + 7] > 0);
+  if (!cap.visible) return;
+  _headQ.set(a[o], a[o + 1], a[o + 2], a[o + 3]);
+  cap.quaternion.copy(_headQ);
+  cap.position.copy(rig.bind[PERSON_BONES.HEAD]).applyQuaternion(_headQ).multiplyScalar(a[o + 7]).add({ x: a[o + 4], y: a[o + 5], z: a[o + 6] });
+  cap.scale.setScalar(a[o + 7]);
+  // the world's matrices update only for its listed moving parts, so this updates its own
+  cap.updateMatrixWorld(true);
 }
 // The walking camera, which the fall and the bus change for a while and give back
 const WALK_CAMERA = { d: 4.8, h: 2.4, y: -0.35 };
@@ -1177,12 +1185,12 @@ class ThirdPersonControllerManager {
       new THREE.SphereGeometry(0.036, 8, 8),
       new THREE.MeshBasicNodeMaterial({ color: 0xff2b2b })
     );
-    navRed.position.set(-1.09, 1.54, -4.35);
+    navRed.position.set(1.09, 1.54, -4.35); // port: the left looking forward (the nose is +z, so +x)
     const navGreen = new THREE.Mesh(
       new THREE.SphereGeometry(0.036, 8, 8),
       new THREE.MeshBasicNodeMaterial({ color: 0x22ff66 })
     );
-    navGreen.position.set(1.09, 1.54, -4.35);
+    navGreen.position.set(-1.09, 1.54, -4.35);
     const navTail = new THREE.Mesh(
       new THREE.SphereGeometry(0.042, 8, 8),
       new THREE.MeshBasicNodeMaterial({ color: 0xff3b2b })
@@ -1928,13 +1936,15 @@ class ThirdPersonControllerManager {
         h.scale.setScalar(p.rig.s);
         h.updateMatrixWorld(true);
         placeEarbuds(p.earbuds, p.rig, this.earbuds && !h.isMesh); // not under a helmet
+        if (p.cap) { p.cap.removeFromParent(); p.cap = null; }
       } else if (!p.riding && !p.onBus && (this.activeMode === 'person' || dx * dx + dz * dz <= maxDistSq)) {
         p._charHidden = false;
         if (p.mesh) p.mesh.visible = true;
         const groundY = this.getGroundHeight(p.position.x, p.position.z, 'person');
         const air = p.position.y - groundY;
         const jumpAir = p.jumping ? Math.max(0.006, air) : p.jumpPrep > 0 ? -(1 - p.jumpPrep / 0.085) : air > 0.3 ? air : 0;
-        if (p.sitting) p.rig.perch(this._sitRoot(p), this._sitPose(p.sitting));
+        if (p.golf) p.rig.perch(this._sitRoot(p), p.golf.pose);
+        else if (p.sitting) p.rig.perch(this._sitRoot(p), this._sitPose(p.sitting));
         else if (p.chute) p.rig.skydive(dt, p.position.x, p.position.y + 0.5 + 0.45 * p.chute.open, p.position.z, p.heading, p.chute.flat || 0, p.chute.bank || 0, p.chute.track || 0, p.chute.open);
         else if (p.fallen?.getUp >= 0) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, 0, true, DIVE_GET_UP + p.fallen.getUp);
         else if (p.swimming) p.rig.swim(dt, p.position.x, (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1) + Math.min(0, p.position.y + 1 - (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1)), p.position.z, p.heading, Math.min(1, Math.abs(p.speed) / 1.8));
@@ -1943,8 +1953,11 @@ class ThirdPersonControllerManager {
         p.crowd.add(p.rig, 0);
         p.crowd.end();
         placeEarbuds(p.earbuds, p.rig, this.earbuds && this.activeMode === 'person');
+        if (p.cap) { p.cap.removeFromParent(); p.cap = null; }
+        if (!this._capsGone) { this._capsGone = true; for (const c of this.scene.children.filter((o) => o.name.startsWith('PlayerCap'))) c.removeFromParent(); }
       } else if (!p._charHidden) {
         p.earbuds.visible = false;
+        if (p.cap) { p.cap.removeFromParent(); p.cap = null; }
         p.rig.placed = false;
         p.crowd.begin();
         p.crowd.end();
@@ -2011,7 +2024,9 @@ class ThirdPersonControllerManager {
         k.paddlerCrowd.add(k.paddlerRig, 0);
         k.paddlerCrowd.end();
         placeEarbuds(k.earbuds, k.paddlerRig, this.earbuds && this.activeMode === 'kayak');
+        if (k.cap) { k.cap.removeFromParent(); k.cap = null; }
       } else if (!k._paddlerHidden) {
+        if (k.cap) { k.cap.removeFromParent(); k.cap = null; }
         k.paddlerCrowd.begin();
         k.paddlerCrowd.end();
         k.earbuds.visible = false;
@@ -2473,6 +2488,8 @@ class ThirdPersonControllerManager {
   updatePerson(dt) {
     if (dt <= 0) return;
     const p = this.entities.person;
+    // lined up over a golf ball (golf-play.js places and poses them)
+    if (p.golf) { p.speed = p.verticalVel = 0; p.grounded = true; return; }
     if (p.sitting) {
       const st = p.sitting, seat = st.seat;
       // moved off it some other way (a teleport, a reset), or the seat knocked over under them: no longer sitting

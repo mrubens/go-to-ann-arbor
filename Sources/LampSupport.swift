@@ -4374,9 +4374,20 @@
             windows.insert(contentsOf: NSApp.windows.filter { $0 is NSPanel && !$0.isSheet && !windows.contains($0) }, at: 0)
             // Not the clear windows a change's effect is drawn in (LampTransition), nor the chat's panel beside a window,
             // which another process draws and the app pictures as blank, nor the note pointing at the wand: the pictures
-            // are of the app.
+            // are of the app. Nor what the chat shows over its panel (its Share popover), attached to that panel.
             return windows.filter { $0.isVisible && !$0.isMiniaturized && $0.frame.width > 40 && $0.frame.height > 40
-                && !($0 is LampTransition.Glass) && !($0 is LampSidebar.Beside) && $0 !== LampSidebar.coachWindow }
+                && !($0 is LampTransition.Glass) && !($0 is LampSidebar.Beside) && !isChats($0) && $0 !== LampSidebar.coachWindow }
+        }
+
+        /// A window attached to the chat's panel beside the app, however deep: the chat's, never the app's.
+        @MainActor
+        private static func isChats(_ window: NSWindow) -> Bool {
+            var parent = window.parent
+            while let next = parent {
+                if next is LampSidebar.Beside { return true }
+                parent = next.parent
+            }
+            return false
         }
 
         /// Picture pixels per window point: at most 1024 pixels on the long side unless asked for more, a size models see unscaled and read

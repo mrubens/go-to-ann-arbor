@@ -10,9 +10,9 @@
 
 Each opens Lamp with a copy of Go To Ann Arbor and that change, ready to send:
 
-- [Add a night mode with glowing streetlights](https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&from=readme&ask=Add%20a%20night%20mode%20with%20glowing%20streetlights)
-- [Let me drop a pin on the minimap](https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&from=readme&ask=Let%20me%20drop%20a%20pin%20on%20the%20minimap)
-- [Make rain and snow roll through the city](https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&from=readme&ask=Make%20rain%20and%20snow%20roll%20through%20the%20city)
+- [Add a minimap showing where I am](https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&from=readme&ask=Add%20a%20minimap%20showing%20where%20I%20am)
+- [Let me change the time of day](https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&from=readme&ask=Let%20me%20change%20the%20time%20of%20day)
+- [Make the helicopter fly faster with a boost](https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&from=readme&ask=Make%20the%20helicopter%20fly%20faster%20with%20a%20boost)
 
 ## Open it in Lamp
 

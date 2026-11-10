@@ -586,7 +586,12 @@ function buildHelmetGeometry(type) {
     b.blob(0.1, 0.018, 0.04, 0, 0.17, 0.12, 0x1c1c1e, { rough: 0.5 });
   } else {
     b.blob(0.118, 0.085, 0.152, 0, 0.17, -0.016, 0, SHELL);
-    for (const x of [-0.045, 0, 0.045]) b.box(0.016, 0.02, 0.2, x, 0.245, -0.016, 0x1c1c1e, { rough: 0.6 });
+    // three vent slots along the top, each a dark sliver sunk into the shell so only its middle shows (straight bars
+    // stood off the curved shell at their ends as black spikes)
+    for (const x of [-0.045, 0, 0.045]) {
+      const top = 0.17 + 0.085 * Math.sqrt(1 - (x / 0.118) ** 2);
+      b.blob(0.011, 0.01, 0.065, x, top - 0.007, -0.016, 0x1c1c1e, { rough: 0.6 });
+    }
     b.box(0.2, 0.01, 0.012, 0, 0.115, 0.07, 0x1c1c1e, { rough: 0.6 });
   }
   const geo = mergeGeometries(b.parts);
