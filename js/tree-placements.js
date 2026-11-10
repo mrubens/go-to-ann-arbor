@@ -78,7 +78,10 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
     const move = !originalBlock || edge.distance < inset || (treeLawn && edge.distance > 2.6);
     const x = move ? edge.x + nx * inset : sourceX;
     const z = move ? edge.z + nz * inset : sourceZ;
-    if ((x - sourceX) ** 2 + (z - sourceZ) ** 2 > 9 || blockAt(x, z) !== edge.block) continue;
+    // a tree well back from the tree lawn (behind the sidewalk, or where the modeled curb is off the real one) stands
+    // where it was surveyed rather than being pulled to the curb or left out
+    if ((x - sourceX) ** 2 + (z - sourceZ) ** 2 > 9) { if (originalBlock) standing(); continue; }
+    if (blockAt(x, z) !== edge.block) continue;
     if (!isClear(x, z) || occupied(x, z)) continue;
 
     const crossStreet = Math.abs(edge.dx) > Math.abs(edge.dz);
@@ -116,20 +119,28 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
 
 // The canopy's fill trees (city-grid.js, `likeStreet` and no height of their own) within `reach` of a surveyed
 // park tree are left out: the survey has the park's real trees
+// (numeric cell keys, and a set of the cells beside any surveyed tree, so most of the ~370k fill trees are passed with
+// one lookup at start-up)
 function dropCanopyFill(sites, reach = 2.5) {
-  const cells = new Map();
+  const key = (cx, cz) => cx * 100000 + cz;
+  const cells = new Map(), near = new Set();
   for (const t of sites) {
     if (!t.surveyedPark) continue;
-    const key = Math.floor(t.x / reach) + ',' + Math.floor(t.z / reach);
-    if (!cells.has(key)) cells.set(key, []);
-    cells.get(key).push(t);
+    const cx = Math.floor(t.x / reach), cz = Math.floor(t.z / reach), k = key(cx, cz);
+    if (!cells.has(k)) {
+      cells.set(k, []);
+      for (let ix = cx - 1; ix <= cx + 1; ix++) for (let iz = cz - 1; iz <= cz + 1; iz++) near.add(key(ix, iz));
+    }
+    cells.get(k).push(t);
   }
   if (!cells.size) return sites;
   return sites.filter((t) => {
     if (!t.likeStreet || t.height) return true;
     const cx = Math.floor(t.x / reach), cz = Math.floor(t.z / reach);
+    if (!near.has(key(cx, cz))) return true;
     for (let ix = cx - 1; ix <= cx + 1; ix++) for (let iz = cz - 1; iz <= cz + 1; iz++) {
-      for (const s of cells.get(ix + ',' + iz) || []) if ((s.x - t.x) ** 2 + (s.z - t.z) ** 2 < reach * reach) return false;
+      const list = cells.get(key(ix, iz));
+      if (list) for (const s of list) if ((s.x - t.x) ** 2 + (s.z - t.z) ** 2 < reach * reach) return false;
     }
     return true;
   });

@@ -533,7 +533,9 @@ function createMotoMaterial(fixedHex = null) {
   const stateUniform = fixed ? uniform(new THREE.Vector4(0, 0, 0, 0)) : null;
   const part = attribute('motoPart', 'vec4');
   const state = fixed ? stateUniform : attribute('carState', 'vec4');
-  const paint = fixed ? color(fixedHex) : attribute('paintColor', 'vec3');
+  // (one bike's paint a uniform, userData.paint: a new color is set on it rather than a new shader built)
+  const paintUniform = fixed ? uniform(new THREE.Color(fixedHex)) : null;
+  const paint = fixed ? paintUniform : attribute('paintColor', 'vec3');
   const mat = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide });
   mat.colorNode = mix(attribute('color', 'vec3'), paint, part.x);
   mat.metalnessNode = part.z;
@@ -546,6 +548,7 @@ function createMotoMaterial(fixedHex = null) {
     .add(vec3(float(0)));
   if (fixed) {
     mat.userData.carState = stateUniform;
+    mat.userData.paint = paintUniform;
     return mat;
   }
   _material = mat;

@@ -10,7 +10,9 @@ import { cityUniforms } from './tsl-materials.js';
 
 const SYNODIC = 29.530588853;
 const NEW_MOON = Date.UTC(2000, 0, 6, 18, 14);
-const DIR = new THREE.Vector3(0.42, 0.68, -0.60).normalize(); // lighting.js TIME_PRESETS.midnight.sunDir
+const DIR = new THREE.Vector3(-0.42, 0.68, 0.60).normalize(); // lighting.js TIME_PRESETS.midnight.sunDir
+// its size as seen from 40 km; it's drawn inside the camera's far plane (9 km on a phone, 14 on the Xbox) and scaled to
+// keep that size
 const DISTANCE = 40000, RADIUS = 520;
 
 function moonAge(now = Date.now()) {
@@ -55,7 +57,9 @@ function createMoon(group) {
 
   function update(camera) {
     if (!mesh.visible || !camera) return;
-    mesh.position.copy(camera.position).addScaledVector(DIR, DISTANCE);
+    const distance = Math.min(DISTANCE, (camera.far || DISTANCE) * 0.9);
+    mesh.scale.setScalar(distance / DISTANCE);
+    mesh.position.copy(camera.position).addScaledVector(DIR, distance);
     mesh.lookAt(camera.position);
   }
   return { update, lit };

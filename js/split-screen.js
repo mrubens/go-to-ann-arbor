@@ -31,7 +31,16 @@ function createSecondPlayer({ scene, colliders, share, beside, map = null, kept 
     if (!cm.entities[mode]) continue;
     cm.setMode(mode);
     const p = kept?.entities?.[mode];
-    if (p && [p.x, p.y, p.z, p.heading].every(Number.isFinite)) { cm.teleportActiveTo(p.x, p.z, p.heading, p.y); continue; }
+    if (p && [p.x, p.y, p.z, p.heading].every(Number.isFinite)) {
+      // back where it was kept: the others (the person beside their car, or in it) don't push it aside as they would
+      // a teleport's arrival
+      const others = Object.values(cm.entities).filter((e) => e !== cm.entities[mode]);
+      const ys = others.map((e) => e.position.y);
+      for (const e of others) e.position.y = -1e6;
+      cm.teleportActiveTo(p.x, p.z, p.heading, p.y);
+      others.forEach((e, i) => { e.position.y = ys[i]; });
+      continue;
+    }
     const e = beside.entities[mode];
     if (!e) continue;
     // a few metres to the first player's right (more for the helicopter's rotor)
@@ -52,10 +61,21 @@ function createSecondPlayer({ scene, colliders, share, beside, map = null, kept 
   let pad = null;
   function travelBy(next) {
     if (!cm.entities[next] || next === cm.activeMode) return;
-    const here = cm.getActiveEntity(), there = cm.entities[next];
+    const was = cm.activeMode, here = cm.getActiveEntity(), there = cm.entities[next];
+    // out of a car on the move or the helicopter in the air: on foot as the get-out button does it (thrown out, or a
+    // jump); into something else, what was left goes on without them rather than stopping dead
+    const jump = was !== 'person' ? cm.exitJump() : null;
+    if (jump && next === 'person') { getInOrOut(); return; }
     const { x, y, z } = here.position, heading = here.heading;
     const far = Math.hypot(there.position.x - x, there.position.z - z) > 40;
     cm.setMode(next);
+    // in it, as getting in does: the person rides along and what they were in stands empty
+    if (next !== 'person') {
+      cm.entities.person.riding = next;
+      there.leftEmpty = false;
+      if (was !== 'person') here.leftEmpty = true;
+    }
+    if (jump) here.coasting = true;
     // a way of getting around left far behind comes to the player, as the first player's goes to its own start
     if (far) cm.teleportActiveTo(x - Math.cos(heading) * 3, z + Math.sin(heading) * 3, heading, y);
     pad.reset();

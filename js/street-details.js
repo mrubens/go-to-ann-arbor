@@ -884,7 +884,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
     ['fountain', 0.6, 0.6], ['rack', 1.4, 0.8], ['shelter', 7.6, 6.2], ['mailbox', 0.6, 0.55], ['flagpole', 0.5, 0.5],
     ['recycling', 0.6, 0.7]];
   const furnMatrices = Object.fromEntries(Object.keys(FURN_SHAPES).map((k) => [k, []]));
-  const furnSites = { trash: [], bench: [] }; // where each knockable one stands, in the order of its instance
+  const furnSites = Object.fromEntries(FURN_KINDS.map(([k]) => [k, []])); // where each stands, in the order of its instance
   const putFurniture = (kind, x, z, yaw, w, d) => {
     dummy.position.set(x, FURN_LAWN, z);
     dummy.rotation.set(0, yaw, 0);
@@ -1384,9 +1384,10 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
     return t * t * (3 - 2 * t);
   }
 
-  function update(camera) {
+  // `camera2`: the second player's in split screen, whose trees are planted and detailed from where they are too
+  function update(camera, camera2 = null) {
     if (!camera) return;
-    treeField.update(camera.position);
+    treeField.update(camera.position, camera2?.position ?? null);
     const glow = cityUniforms.uInteriorGlow.value;
     // Increase streetlight intensity toward dusk.
     const lampScale = Math.min(1.25, Math.max(0.0, (glow - 0.36) * 1.15));
@@ -1499,6 +1500,19 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   // and trash cans and park benches are thrown, tumbling, by a car that hits them
   if (furnMeshes.trash) furnSites.trash.forEach((t, i) => obstacles.push({ x: t.x, z: t.z, r: 0.3, kind: 'trash', height: 0.9, parts: [furnMeshes.trash, i] }));
   if (furnMeshes.bench) furnSites.bench.forEach((b, i) => obstacles.push({ x: b.x, z: b.z, yaw: b.yaw, r: 0.6, kind: 'bench', height: 0.8, parts: [furnMeshes.bench, i] }));
+  // picnic tables are shoved over like the cafes' and recycling carts thrown like trash cans; the rest stand fast:
+  // a shelter's four posts, a flagpole, a grill or a drinking fountain on its post, a mailbox bolted down, a bike rack
+  if (furnMeshes.table) furnSites.table.forEach((t, i) => obstacles.push({ x: t.x, z: t.z, yaw: t.yaw, r: 0.8, kind: 'picnic', height: 0.8, parts: [furnMeshes.table, i] }));
+  if (furnMeshes.recycling) furnSites.recycling.forEach((t, i) => obstacles.push({ x: t.x, z: t.z, r: 0.35, kind: 'cart', height: 1, parts: [furnMeshes.recycling, i] }));
+  for (const t of furnSites.shelter) {
+    const c = Math.cos(t.yaw), sn = Math.sin(t.yaw);
+    for (const [lx, lz] of [[-3, -2.4], [3, -2.4], [-3, 2.4], [3, 2.4]]) {
+      obstacles.push({ x: t.x + lx * c + lz * sn, z: t.z - lx * sn + lz * c, r: 0.12, kind: 'post', height: 2.6, fixed: true });
+    }
+  }
+  for (const [kind, r, height] of [['flagpole', 0.1, 9], ['grill', 0.25, 1.1], ['fountain', 0.25, 1], ['mailbox', 0.3, 1.3], ['rack', 0.4, 0.8]]) {
+    for (const t of furnSites[kind]) obstacles.push({ x: t.x, z: t.z, r, kind, height, fixed: true });
+  }
   return { group, footprints, signalClock, signalIntersections, audioSignals, treeField, obstacles, update };
 }
 

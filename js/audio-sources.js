@@ -9,6 +9,12 @@ const SIREN_RANGE = 220;
 const PEOPLE_RANGE = 45;
 const SIGNAL_RANGE = 35;
 const unit = (value) => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+// The voice each kind of car speaks with (the kinds as traffic.js's CAR_KINDS names them): the electric ones a motor's
+// whine over their tires, never an engine's revs and gear changes; SUVs, pickups and vans the bigger engine
+const ELECTRIC = new Set(['tesla', 'ioniq', 'r1s', 'r1t', 'cybertruck']);
+const BIG = new Set(['suv', 'forester', 'pickup', 'van']);
+const carVoice = (kind, engine) => ELECTRIC.has(kind) ? 'electric' : engine;
+const ownCarVoice = (kind) => ELECTRIC.has(kind) ? 'electric' : BIG.has(kind) ? 'suv' : 'sedan';
 const seedAt = (index) => ((Math.imul(index + 1, 2654435761) >>> 0) / 4294967296);
 
 function driveLoad(keys, speed, cyclist) {
@@ -159,7 +165,7 @@ class CityAudioSources {
       }
       const green = !v.edge.to.signal || signalPhase(elapsed, v.edge.axisIndex === 0) === 'green';
       const blocked = v.wait > 2 && v.speed < 0.5 && v.gap < 8 && v.leaderSpeed < 0.5 && green && !v.conn && !v.yielding;
-      this.motor(v, v.bus ? 'bus' : v.engine, v.x, (v._gy ?? 0) + 0.7, v.z,
+      this.motor(v, v.bus ? 'bus' : carVoice(v.bodyType, v.engine), v.x, (v._gy ?? 0) + 0.7, v.z,
         v.speed, roadLoad(v.speed, v.acc, v.driver.a), v.yaw + v.yawOffset, !!v.isPolice, false, seedAt(seedOffset + i), blocked);
     }
   }
@@ -186,7 +192,9 @@ class CityAudioSources {
         // Inactive bicycles stop updating and are silent, even if their stored speed is left over from riding.
         if (entity.type === 'kayak' || (!player && (entity.type === 'cyclist' || entity.type === 'car'))) continue;
         // a truck or excavator from the road work rumbles like the buses' diesel
-        const kind = entity.type === 'car' ? (entity.bike ? (entity.quiet ? 'cyclist' : 'moto') : entity.machine ? 'bus' : 'sedan') : entity.type;
+        // the player's own car by the kind they're in
+        const kind = entity.type === 'car' ? (entity.bike ? (entity.quiet ? 'cyclist' : 'moto') : entity.machine ? 'bus'
+          : ownCarVoice(entity === this.controllers.entities.car ? this.controllers.carLook?.kind : null)) : entity.type;
         const helicopter = kind === 'helicopter';
         const verticalSpeed = player && helicopter ? helicopterVerticalSpeed(entity) : 0;
         const load = player ? helicopter ? helicopterLoad(entity, keys, verticalSpeed) : driveLoad(keys, entity.speed, kind === 'cyclist') : 0;
@@ -207,7 +215,7 @@ class CityAudioSources {
       const d2 = this.distanceSq(car.x, car.y + 0.7, car.z);
       if (!Number.isFinite(d2) || d2 > MOTOR_RANGE * MOTOR_RANGE) continue;
       this.snapshot.traffic += (1 - d2 / (MOTOR_RANGE * MOTOR_RANGE)) * (0.2 + 0.8 * unit(car.v / 12));
-      this.motor(car, car.engine, car.x, car.y + 0.7, car.z,
+      this.motor(car, carVoice(car.kind, car.engine), car.x, car.y + 0.7, car.z,
         car.v, roadLoad(car.v, car.acc, 1.6), car.yaw, false, false, seedAt(2000 + i), car.v < 0.5);
     }
     this.snapshot.traffic = unit(this.snapshot.traffic / 16);

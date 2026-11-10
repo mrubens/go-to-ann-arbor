@@ -469,23 +469,42 @@ const SPECIES = [
 SPECIES[0].fall = [0xa8862e, 0x8f7a2c, 0x5c6c28];
 SPECIES[1].fall = [0xd9b42a, 0xe6c63a, 0xb8a02a];
 
-// Fall color by the day of the year where the game is played (lamp-game.js gives Date.now a fixed day in the preview,
-// so a replay shows the same trees): each species starts turning on its own day (maples first, oaks last), each tree a
-// few days either side, reaching full color about two weeks on; a month after that its leaves have gone brown
+// The season by the day of the year where the game is played (lamp-game.js gives Date.now a fixed day in the preview,
+// so a replay shows the same trees). Fall: each species starts turning on its own day (maples first, oaks last), each
+// tree a few days either side, reaching full color about two weeks on; a month after that its leaves have gone brown,
+// and soon after they're down. Winter: the leaf-losing trees stand bare (their limbs and twigs are modeled) until their
+// buds break in spring, flowering trees and maples first, oaks and honey locusts last (Ann Arbor's usual dates), in a
+// light fresh green that darkens to summer's over three weeks. Evergreens stay as they are.
 const DAY_OF_YEAR = (() => {
   const d = new Date(Date.now());
   return (d - new Date(d.getFullYear(), 0, 1)) / 864e5;
 })();
 const TURNS = { plane: 288, locust: 280, elm: 284, maple: 272, oak: 292, flowering: 278 };
-const AUTUMN = DAY_OF_YEAR > 262 && DAY_OF_YEAR < 345;
+// days after a species starts turning that its leaves are down (locusts' small leaflets go first, planes and oaks hang on)
+const DROPS = { plane: 44, locust: 26, elm: 40, maple: 44, oak: 44, flowering: 40 };
+// day of the year its buds break
+const LEAFS_OUT = { plane: 118, locust: 128, elm: 112, maple: 108, oak: 122, flowering: 104 };
 const BROWN = new THREE.Color(0x6b4a2a);
-// How far a tree of this species has turned (0 summer green, 1 full fall color) and gone brown after (0 to 1)
-function fallOf(name, r) {
+const FRESH = new THREE.Color(0xa4c44c);
+// A tree of this species' state today: how far it has turned (0 summer green, 1 full fall color), gone brown after
+// (0 to 1), whether it stands bare, and how fresh its new leaves still are (1 just out, 0 summer's)
+function seasonOf(name, r, r1) {
   const start = TURNS[name];
-  if (!AUTUMN || start == null) return [0, 0];
-  const at = DAY_OF_YEAR - start - (r - 0.5) * 12;
-  return [Math.min(1, Math.max(0, at / 14)), Math.min(1, Math.max(0, (at - 30) / 16))];
+  if (start == null) return { turned: 0, browned: 0, bare: false, fresh: 0 };
+  const jitter = (r - 0.5) * 12 + (r1 - 0.5) * 8;
+  if (DAY_OF_YEAR < 200) {
+    const out = DAY_OF_YEAR - LEAFS_OUT[name] - jitter;
+    return { turned: 0, browned: 0, bare: out < 0, fresh: Math.min(1, Math.max(0, 1 - out / 21)) };
+  }
+  const at = DAY_OF_YEAR - start - jitter;
+  return { turned: Math.min(1, Math.max(0, at / 14)), browned: Math.min(1, Math.max(0, (at - 30) / 16)),
+    bare: at >= DROPS[name], fresh: 0 };
 }
+// Where every shape of a level is drawn as one (MERGE_TREES, the Xbox and phones), a species goes bare or leafy all
+// together, on the day its middling tree does, so the merged geometry needn't carry both; elsewhere tree by tree
+const BARE_SPECIES = SPECIES.map((sp) => seasonOf(sp.name, 0.5, 0.5).bare);
+// a species any of whose trees is bare today (it's given bare shapes)
+const SOME_BARE = SPECIES.map((sp) => seasonOf(sp.name, 0, 0).bare || seasonOf(sp.name, 1, 1).bare);
 
 // =====================================================================================================================
 // 3. SKELETON
@@ -821,8 +840,9 @@ function placeCards(sp, branches, lod, tileMeters, rng, crown) {
   return cards;
 }
 
-// One species / variant: [lod0, lod1, lod2] geometries.
-function buildTreeGeometries(speciesIndex, variant, tileMeters) {
+// One species / variant: [lod0, lod1, lod2] geometries. Bare (winter): no leaf cards, and near by the twigs and
+// branches the cards stood for drawn as bark instead (far off, the limbs alone)
+function buildTreeGeometries(speciesIndex, variant, tileMeters, bare = false) {
   const sp = SPECIES[speciesIndex];
   const seed = 7919 * (speciesIndex + 1) + 104729 * (variant + 1);
   const branches = growTree(sp, seed);
@@ -852,7 +872,9 @@ function buildTreeGeometries(speciesIndex, variant, tileMeters) {
     const aoAt = (p) => crown.barkAO(p);
     // Small twigs are drawn in the leaf cards; simplify the remaining bark with distance.
     for (const b of branches) {
-      if (lod === 0 && b.level <= 2) {
+      if (bare && lod < 2 && b.level === 3 - lod) {
+        addTube(gb, b, 3, b.pts.length - 1, aoAt, swayWeight);
+      } else if (lod === 0 && b.level <= 2) {
         addTube(gb, b, [5, 3, 3][b.level], [2, 3, 4][b.level], aoAt, swayWeight);
       } else if (lod === 1 && b.level <= 1) {
         addTube(gb, b, 3, b.level === 0 ? 4 : 8, aoAt, swayWeight);
@@ -860,13 +882,13 @@ function buildTreeGeometries(speciesIndex, variant, tileMeters) {
         addTube(gb, b, 3, b.pts.length - 1, aoAt, swayWeight);
       }
     }
-    const cards = (lod === 0 ? cards0 : lod === 1 ? placeCards(sp, branches, lod, tileMeters, rng, crown) : [])
+    const cards = bare ? [] : (lod === 0 ? cards0 : lod === 1 ? placeCards(sp, branches, lod, tileMeters, rng, crown) : [])
       .map((c) => ({ ...c, mirror: rng() < 0.5, random: rng() }))
       .filter((_, i) => i % 2 === 0);
     for (const c of cards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, c.mirror, c.random, crown);
-    for (const c of canopyCards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, c.mirror, c.random, crown);
+    if (!bare) for (const c of canopyCards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, c.mirror, c.random, crown);
     const g = gb.build();
-    g.userData = { species: sp.name, variant, lod, cards: cards.length + canopyCards.length, triangles: gb.idx.length / 3 };
+    g.userData = { species: sp.name, variant, lod, cards: bare ? 0 : cards.length + canopyCards.length, triangles: gb.idx.length / 3, bare };
     geos[lod] = g;
   }
   return geos;
@@ -945,6 +967,9 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
 
   // Geometries: [species][variant][lod]
   const geos = SPECIES.map((_, s) => [0, 1].map((v) => buildTreeGeometries(s, v, atlas.tileMeters)));
+  // and bare ones, for a species with trees bare today (on the merged tiers, a species bare as a whole)
+  const bareGeos = SPECIES.map((_, s) => (MERGE_TREES ? BARE_SPECIES[s] : SOME_BARE[s])
+    ? [0, 1].map((v) => buildTreeGeometries(s, v, atlas.tileMeters, true)) : null);
   const clearOfBuildings = createTreeClearance(colliders);
   const treeBounds = geos.map((variants) => variants.map((levels) => {
     const bounds = new THREE.Box3();
@@ -952,7 +977,10 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     const height = Math.max(Math.abs(bounds.min.y), Math.abs(bounds.max.y));
     // Maximum wind sway, with clearance for flutter and facade trim.
     const margin = Math.hypot(0.2, 0.06) * Math.hypot(0.86, 0.51) * (height / 11) ** 2 + 0.5;
-    return { bounds, margin };
+    // how far its farthest point is from its foot, at scale 1
+    const reach = Math.hypot(Math.max(-bounds.min.x, bounds.max.x), Math.max(-bounds.min.y, bounds.max.y),
+      Math.max(-bounds.min.z, bounds.max.z));
+    return { bounds, margin, reach };
   }));
   const heightOf = treeBounds.map((variants) => variants.map((v) => Math.max(1, v.bounds.max.y)));
   const worldBounds = new THREE.Box3();
@@ -971,7 +999,12 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
   const meshIndex = SPECIES.map((sp, s) => ({
     l0: [0, 1].map((v) => makeType(geos[s][v][0], `Trees_${sp.name}_v${v}_lod0`)),
     l1: [0, 1].map((v) => makeType(geos[s][v][1], `Trees_${sp.name}_v${v}_lod1`)),
-    l2: [0, 1].map((v) => makeType(geos[s][v][2], `Trees_${sp.name}_v${v}_lod2`))
+    l2: [0, 1].map((v) => makeType(geos[s][v][2], `Trees_${sp.name}_v${v}_lod2`)),
+    bare: bareGeos[s] && {
+      l0: [0, 1].map((v) => makeType(bareGeos[s][v][0], `Trees_${sp.name}_bare_v${v}_lod0`)),
+      l1: [0, 1].map((v) => makeType(bareGeos[s][v][1], `Trees_${sp.name}_bare_v${v}_lod1`)),
+      l2: [0, 1].map((v) => makeType(bareGeos[s][v][2], `Trees_${sp.name}_bare_v${v}_lod2`))
+    }
   }));
   // Lamp: on the Xbox, where setting up each draw is what costs, a level's shapes of every species are one geometry
   // (each vertex knowing its shape, `aKind`) and each tree its shape (`aTreeKind`): the material folds the others away,
@@ -980,7 +1013,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     const parts = [];
     let verts = 0, tris = 0;
     geos.forEach((variants, s) => variants.forEach((levels, v) => {
-      const g = levels[l];
+      const g = (bareGeos[s] ? bareGeos[s][v] : levels)[l];
       parts.push({ g, kind: s * 2 + v });
       verts += g.attributes.position.count;
       tris += g.index.count / 3;
@@ -1059,8 +1092,15 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     return { sp, variant, s, y, r1, r2, r3 };
   }
 
-  // Plants `list` as one field of its own: its cells, meshes and levels of detail
+  // Plants `list` as one field of its own: its cells, meshes and levels of detail. A generator, so a streamed square
+  // kilometre can be planted a few hundred trees a frame (it yields between trees, and before making the meshes);
+  // plant() runs one through at once. `cleared`: the sites are known to be clear of buildings (or a site's own
+  // `cleared`).
   function plant(list, cleared = false) {
+    const steps = planting(list, cleared);
+    for (;;) { const r = steps.next(); if (r.done) return r.value; }
+  }
+  function* planting(list, cleared = false) {
   const group = new THREE.Group();
   group.name = 'TreeField';
   // Allocate for candidate sites; N counts only trees clear of buildings.
@@ -1081,15 +1121,18 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
   const indexOf = new Map();
   const trunkR = new Float32Array(capacity);
   const treeH = new Float32Array(capacity);
+  const reach = new Float32Array(capacity); // how far the tree reaches from its mid-crown point (m)
   let standing = null; // the matrices as planted, once one is posed
 
   const cells = new Map();
   const meshes = [];
   const counts = [];
 
-  list.forEach((t) => {
-    const at = placeOf(t, cleared);
-    if (!at) return;
+  for (let n = 0; n < list.length; n++) {
+    if ((n & 31) === 31) yield;
+    const t = list[n];
+    const at = placeOf(t, cleared || t.cleared);
+    if (!at) continue;
     const { sp, variant, s, y, r1, r2, r3 } = at;
     const i = N++;
     plantedSites.add(t);
@@ -1099,14 +1142,16 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     dummy.matrix.toArray(mats, i * 16);
     const { tints, fall, name } = SPECIES[sp];
     tint.setHex(tints[Math.floor(r3 * tints.length * 0.9999)]);
-    const [turned, browned] = fall ? fallOf(name, r2) : [0, 0];
-    if (turned > 0) tint.lerp(fallTint.setHex(fall[Math.floor(r3 * fall.length * 0.9999)]), turned);
-    if (browned > 0) tint.lerp(BROWN, browned * 0.8);
+    const season = seasonOf(name, r2, r1);
+    if (season.fresh > 0) tint.lerp(FRESH, season.fresh * 0.6);
+    if (season.turned > 0) tint.lerp(fallTint.setHex(fall[Math.floor(r3 * fall.length * 0.9999)]), season.turned);
+    if (season.browned > 0) tint.lerp(BROWN, season.browned * 0.8);
     tint.multiplyScalar(0.82 + r1 * 0.36);
     data.set([tint.r, tint.g, tint.b, sp + r2 * 0.999], i * 4);
     px[i] = t.x;
     py[i] = y + 6 * s;
     pz[i] = t.z;
+    reach[i] = treeBounds[sp][variant].reach * Math.max(dummy.scale.x, dummy.scale.y, dummy.scale.z) + 6 * s;
     tier[i] = Math.min(2, t.tier || 0);
     const cellAt = (size, far) => {
       const key = (far ? 'far' : '') + Math.floor(t.x / size) + ',' + Math.floor(t.z / size);
@@ -1124,7 +1169,8 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     };
     const near = cellOf[i] = cellAt(TREE_CELL_SIZE, false);
     const far = farOf[i] = cellAt(FAR_CELL_SIZE, true);
-    const mi = meshIndex[sp];
+    const bare = MERGE_TREES ? BARE_SPECIES[sp] : season.bare;
+    const mi = bare && meshIndex[sp].bare || meshIndex[sp];
     const treeTypes = [mi.l0[variant], mi.l1[variant], mi.l2[variant]];
     kindOf[i] = sp * 2 + variant;
     for (let l = 0; l < 3; l++) {
@@ -1139,7 +1185,8 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
       meshOf[i * 3 + l] = index;
       meshes[index].capacity++;
     }
-  });
+  }
+  yield;
 
   // Finalize per-cell 3D bounding spheres, tier cutoffs, and typed index arrays for cell-hierarchical LOD checks.
   const cellList = Array.from(cells.values(), (cell) => {
@@ -1164,13 +1211,15 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     const cx = (minX + maxX) * 0.5;
     const cy = (minY + maxY) * 0.5;
     const cz = (minZ + maxZ) * 0.5;
-    let maxR2 = 0;
+    let maxR2 = 0, maxReach = 0;
     for (let k = 0; k < trees.length; k++) {
       const i = trees[k];
       const dx = px[i] - cx, dy = py[i] - cy, dz = pz[i] - cz;
       const r2 = dx * dx + dy * dy + dz * dz;
       if (r2 > maxR2) maxR2 = r2;
+      if (reach[i] > maxReach) maxReach = reach[i];
     }
+    cell.reach = maxReach;
     cell.trees = trees;
     cell.meshIndices = Int32Array.from(cell.meshes.values());
     cell.cx = cx;
@@ -1200,6 +1249,10 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     geo.setAttribute('aTreeData', treeData);
     if (m.type.merged) geo.setAttribute('aTreeKind', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
     const mesh = new THREE.InstancedMesh(geo, m.type.merged ? mergedMaterial : material, cap);
+    // Bounded once, by its cell's trees wherever they lean in the wind or lie felled, rather than measured instance by
+    // instance at every change of level
+    mesh.boundingSphere = new THREE.Sphere(new V3(m.cell.cx, m.cell.cy, m.cell.cz),
+      m.cell.radius + m.cell.reach + m.type.windPadding);
     mesh.name = m.name;
     mesh.count = 0;
     mesh.visible = false;
@@ -1266,8 +1319,6 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
             attr.addUpdateRange(0, n * attr.itemSize);
             attr.needsUpdate = true;
           }
-          mesh.computeBoundingSphere();
-          mesh.boundingSphere.radius += meshes[mi].type.windPadding;
         }
       }
       // Hidden cells avoid traversing all their dormant species/variant/LOD meshes in every render pass.
@@ -1294,16 +1345,18 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
   function setCellUniformLod(cell, target) {
     if (cell.uniformLod === target) return false;
     const trees = cell.trees;
-    let cellChanged = false;
+    let cellChanged = false, farChanged = false;
     for (let k = 0; k < trees.length; k++) {
       const i = trees[k];
       if (lod[i] !== target) {
+        if (lod[i] === 2 || target === 2) farChanged = true;
         lod[i] = target;
         cellChanged = true;
       }
     }
     cell.uniformLod = target;
-    if (cellChanged) { dirtyCells.add(cell); dirtyCells.add(cell.farCell); }
+    if (cellChanged) dirtyCells.add(cell);
+    if (farChanged) dirtyCells.add(cell.farCell);
     return cellChanged;
   }
 
@@ -1352,7 +1405,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
 
       // Only cells straddling an LOD / hysteresis boundary evaluate per-tree squared distances.
       const trees = cell.trees;
-      let cellChanged = false;
+      let cellChanged = false, farChanged = false;
       let firstLod = 0;
       let allSame = true;
       for (let k = 0; k < trees.length; k++) {
@@ -1374,6 +1427,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
         }
         const next = nextL === 3 ? 255 : nextL;
         if (next !== cur) {
+          if (cur === 2 || next === 2) farChanged = true;
           lod[i] = next;
           cellChanged = true;
         }
@@ -1383,7 +1437,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
       cell.uniformLod = allSame ? firstLod : -1;
       if (cellChanged) {
         dirtyCells.add(cell);
-        dirtyCells.add(cell.farCell);
+        if (farChanged) dirtyCells.add(cell.farCell);
         changed = true;
       }
     }
@@ -1412,8 +1466,9 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     if (i === undefined) return;
     if (!standing) standing = mats.slice();
     _m.fromArray(standing, i * 16).premultiply(turn).toArray(mats, i * 16);
-    dirtyCells.add(cellOf[i]);
-    dirtyCells.add(farOf[i]);
+    // only the cell drawing it at its level now (a level-2 tree is in the far cell, a hidden one in neither)
+    if (lod[i] === 255) return;
+    dirtyCells.add(lod[i] === 2 ? farOf[i] : cellOf[i]);
     rebuild();
   }
 
@@ -1464,19 +1519,25 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
       info: field.info, pose: field.pose, obstacles: () => obstaclesOf(field) };
   }
 
-  // Streamed: the sites clear of the buildings, packed by square kilometre (x, y, z, scale, species, yaw, sx, sz, tier,
-  // height, world), planted as the camera comes within `stream` of one and let go 400 m further off
-  const PACK = 11, CHUNK = FAR_CELL_SIZE;
+  // Streamed: the sites packed by square kilometre (x, y, z, scale, species, yaw, sx, sz, tier, height, world, a
+  // champion's crown spread, cleared), planted as the camera comes within `stream` of one and let go 400 m further off.
+  // The canopy's fill trees (`likeStreet`, most of the sites) are checked against the buildings as they're planted,
+  // not all at start-up; the others now, since the street details ask which of their street trees were planted.
+  const PACK = 13, CHUNK = FAR_CELL_SIZE;
   const chunkKey = (x, z) => Math.floor(x / CHUNK) * 100000 + Math.floor(z / CHUNK);
   const lists = new Map();
   for (const t of sites) {
-    if (!placeOf(t)) continue;
-    plantedSites.add(t);
+    const later = t.likeStreet && !t.spread;
+    if (!later) {
+      if (!placeOf(t)) continue;
+      plantedSites.add(t);
+    }
     stats.trees++;
     const k = chunkKey(t.x, t.z);
     let l = lists.get(k);
     if (!l) lists.set(k, (l = []));
-    l.push(t.x, t.y ?? 0, t.z, t.scale ?? 1, t.species ?? 0, t.yaw ?? NaN, t.sx ?? 1, t.sz ?? 1, t.tier ?? 0, t.height ?? 0, t.world ? 1 : 0);
+    l.push(t.x, t.y ?? 0, t.z, t.scale ?? 1, t.species ?? 0, t.yaw ?? NaN, t.sx ?? 1, t.sz ?? 1, t.tier ?? 0, t.height ?? 0,
+      t.world ? 1 : 0, t.spread ?? 0, later ? 0 : 1);
   }
   const chunks = new Map([...lists].map(([k, l]) => [k, Float32Array.from(l)]));
   const unpack = (a) => {
@@ -1486,6 +1547,8 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
       if (!Number.isNaN(a[o + 5])) t.yaw = a[o + 5];
       if (a[o + 9]) t.height = a[o + 9];
       if (a[o + 10]) t.world = true;
+      if (a[o + 11]) { t.spread = a[o + 11]; t.champion = true; }
+      if (a[o + 12]) t.cleared = true;
       out.push(t);
     }
     return out;
@@ -1497,42 +1560,88 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
   const planted = new Map();
   let onObstacles = null;
   const fieldObstacles = new Map();
-  function streamChunks(x, z, all = false) {
-    const added = [], removed = [];
+  // the squares within reach not planted yet, nearest first; the one being planted a slice a frame
+  let want = [];
+  let growing = null;
+  // Lets go of the squares out of reach (their trunks into `removed`) and lists the ones wanted
+  // (x2, z2: the second player's place in split screen, whose squares are kept and planted too)
+  const reach = (k, x, z, x2, z2) => Number.isFinite(x2) ? Math.min(chunkDistance(k, x, z), chunkDistance(k, x2, z2)) : chunkDistance(k, x, z);
+  function letGo(x, z, removed, x2 = NaN, z2 = NaN) {
     for (const [k, field] of planted) {
-      if (chunkDistance(k, x, z) < stream + 400) continue;
+      if (reach(k, x, z, x2, z2) < stream + 400) continue;
       field.dispose();
       planted.delete(k);
       for (const o of fieldObstacles.get(field)) removed.push(o);
       fieldObstacles.delete(field);
     }
-    // the nearest one not planted yet (all of them within reach as the city's built)
-    const want = [...chunks.keys()].filter((k) => !planted.has(k) && chunkDistance(k, x, z) < stream)
-      .sort((a, b) => chunkDistance(a, x, z) - chunkDistance(b, x, z));
-    for (const k of all ? want : want.slice(0, 1)) {
-      const field = plant(unpack(chunks.get(k)), true);
-      group.add(field.group);
-      planted.set(k, field);
-      const obs = obstaclesOf(field);
-      fieldObstacles.set(field, obs);
-      for (const o of obs) added.push(o);
-    }
-    if (added.length || removed.length) onObstacles?.(added, removed);
+    if (growing && reach(growing.k, x, z, x2, z2) >= stream + 400) { growing.steps.return(); growing = null; }
+    want = [...chunks.keys()].filter((k) => !planted.has(k) && k !== growing?.k && reach(k, x, z, x2, z2) < stream)
+      .sort((a, b) => reach(a, x, z, x2, z2) - reach(b, x, z, x2, z2));
   }
+  // A planted square into the scene, its trunks into `added`
+  function settle(k, field, added) {
+    group.add(field.group);
+    planted.set(k, field);
+    const obs = obstaclesOf(field);
+    fieldObstacles.set(field, obs);
+    for (const o of obs) added.push(o);
+  }
+  const finish = (steps) => { for (;;) { const r = steps.next(); if (r.done) return r.value; } };
   const start = at || { x: 0, z: 0 };
-  streamChunks(start.x, start.z, true);
+  {
+    // everything within reach as the city's built
+    const added = [];
+    letGo(start.x, start.z, []);
+    for (const k of want) settle(k, plant(unpack(chunks.get(k))), added);
+    want = [];
+  }
   for (const field of planted.values()) field.update(new V3(start.x, 10, start.z));
   group.userData.terrain = 'set';
   group.matrixAutoUpdate = false;
   group.matrixWorldAutoUpdate = false;
   let lastX = start.x, lastZ = start.z;
-  function update(position) {
-    if (Math.hypot(position.x - lastX, position.z - lastZ) > 60) {
-      lastX = position.x; lastZ = position.z;
-      streamChunks(lastX, lastZ);
+  // Planting a square takes tens of milliseconds on a Mac (more on the Xbox): a few milliseconds of it a frame
+  const BUDGET = TIER.spreadLoads ? 2 : 3;
+  // After a jump of the camera (a teleport, a tap on the map), the squares this near are planted at once, the rest of
+  // those in reach a slice a frame until all are: never just the one square under the camera
+  const AT_ONCE = 250;
+  // `position2`: the second player's view in split screen; the squares near either are planted, and each square's trees
+  // take their detail from the nearer of the two
+  let last2X = NaN, last2Z = NaN;
+  function update(position, position2 = null) {
+    const x = position.x, z = position.z;
+    const two = Number.isFinite(position2?.x) && Number.isFinite(position2?.z);
+    const x2 = two ? position2.x : NaN, z2 = two ? position2.z : NaN;
+    const moved = Math.hypot(x - lastX, z - lastZ);
+    // (the second view's leap, or its coming or going, counts as the first's would)
+    const moved2 = two ? (Number.isFinite(last2X) ? Math.hypot(x2 - last2X, z2 - last2Z) : Infinity) : Number.isFinite(last2X) ? 61 : 0;
+    const added = [], removed = [];
+    if (moved > 60 || moved2 > 60) {
+      lastX = x; lastZ = z; last2X = x2; last2Z = z2;
+      letGo(x, z, removed, x2, z2);
+      if (moved > 300 || (two && moved2 > 300)) {
+        if (growing && reach(growing.k, x, z, x2, z2) < AT_ONCE) { settle(growing.k, finish(growing.steps), added); growing = null; }
+        while (want.length && reach(want[0], x, z, x2, z2) < AT_ONCE) {
+          const k = want.shift();
+          settle(k, plant(unpack(chunks.get(k))), added);
+        }
+      }
     }
+    if (!growing && want.length) {
+      const k = want.shift();
+      growing = { k, steps: planting(unpack(chunks.get(k))) };
+    }
+    if (growing) {
+      const until = performance.now() + BUDGET;
+      let r;
+      do r = growing.steps.next(); while (!r.done && performance.now() < until);
+      if (r.done) { settle(growing.k, r.value, added); growing = null; }
+    }
+    if (added.length || removed.length) onObstacles?.(added, removed);
     let changed = false;
-    for (const field of planted.values()) if (field.update(position)) changed = true;
+    if (two) {
+      for (const [k, field] of planted) if (field.update(chunkDistance(k, x2, z2) < chunkDistance(k, x, z) ? position2 : position)) changed = true;
+    } else for (const field of planted.values()) if (field.update(position)) changed = true;
     return changed;
   }
   console.info(`[trees] ${stats.trees} trees in ${chunks.size} square kilometres, ${planted.size} planted near the start`);

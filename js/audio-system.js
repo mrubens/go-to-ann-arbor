@@ -10,6 +10,17 @@ const smooth = (param, value, now, time = 0.035, immediate = false) => {
   else param.setTargetAtTime(value, now, time);
 };
 
+// A motor's voice; an electric car's falls back to what it had before (the bicycle's quiet whir in traffic, the sedan for
+// the player's own) should the synthesizer in use not have one (audio-synthesis.js createMotorVoice)
+function motorVoice(context, resources, kind, output, player) {
+  try {
+    return createMotorVoice(context, resources, kind, output);
+  } catch (error) {
+    if (kind !== 'electric' || !(error instanceof RangeError)) throw error;
+    return createMotorVoice(context, resources, player ? 'sedan' : 'cyclist', output);
+  }
+}
+
 // [ref distance, range] (m) of each animal's call
 // the Cube's clang when a car hits it (the-cube.js), heard across Regents Plaza
 const STEEL_REACH = { clang: [5, 140] };
@@ -121,7 +132,11 @@ class CityAudioSystem {
       else if (this.enabled && this.context) this.unlock();
     };
     // Keep gesture handlers: iOS can interrupt a previously running context, and resuming may need another tap.
+    // (a touch grants the page sound as it ends, not as it begins: a stick held from the first touch would otherwise
+    // wait for another finger)
     document.addEventListener('pointerdown', this.onGesture, { passive: true });
+    document.addEventListener('pointerup', this.onGesture, { passive: true });
+    document.addEventListener('touchend', this.onGesture, { passive: true });
     document.addEventListener('keydown', this.onGesture);
     document.addEventListener('visibilitychange', this.onVisibility);
   }
@@ -129,8 +144,9 @@ class CityAudioSystem {
   unlock() {
     if (!this.supported || !this.enabled || this.disposed || document.hidden) return;
     // a browser lets sound start only after the player has clicked or pressed a key on the page: until then, wait,
-    // rather than make a context it refuses (and warns about in its console)
-    if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
+    // rather than make a context it refuses (and warns about in its console). The Mac app lets the page play sound
+    // unasked, so there it starts at once, for a player with only a controller too
+    if (!window.LampNative?.available && navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
     try {
       if (!this.context) this.initialize();
       if (this.context.state !== 'running') {
@@ -264,12 +280,18 @@ class CityAudioSystem {
     for (const source of candidates) {
       if (++count > limit) break;
       let slot = pool.get(source.id);
+      // the player got into another kind of car (the slot is the car, kept as they change it): a voice of its own
+      if (slot && slot.kind !== (siren ? 'siren' : source.kind)) {
+        slot.voice.dispose(); slot.emitter.dispose(); pool.delete(source.id);
+        slot = null;
+      }
       if (!slot) {
         // Retiring voices count against the budget, so rapid source changes cannot temporarily double the graph.
         if (pool.size >= limit) continue;
         const emitter = new SpatialEmitter(this.context, this.mix, this.reflections, this.acoustics,
           siren ? 9 : source.kind === 'helicopter' ? 12 : 4, siren ? 0.9 : 0, siren);
-        slot = { emitter, voice: createMotorVoice(this.context, this.resources, siren ? 'siren' : source.kind, emitter.input),
+        const kind = siren ? 'siren' : source.kind;
+        slot = { emitter, voice: motorVoice(this.context, this.resources, kind, emitter.input, source.player), kind,
           distance: 0, x: source.x, y: source.y, z: source.z, fresh: true };
         pool.set(source.id, slot);
       }
@@ -535,6 +557,12 @@ class CityAudioSystem {
   }
 
   update(dt, elapsed, camera, night = false) {
+    // not playing yet, or stopped by the system: asked again about once a second, since a controller's buttons reach
+    // the page as no event the gesture handlers hear (it's cheap while the browser still waits for a click or key)
+    if (this.ready && this.enabled && !document.hidden && this.context?.state !== 'running' && (this.unlockWait = (this.unlockWait ?? 0) - dt) <= 0) {
+      this.unlockWait = 1;
+      this.unlock();
+    }
     if (!this.ready || !this.enabled || this.context?.state !== 'running' || document.hidden) return;
     this.accumulator += dt;
     if (this.accumulator < 0.1) return;
@@ -657,6 +685,8 @@ class CityAudioSystem {
     this.disposed = true;
     for (const system of this.collisionSystems) system.setCollisionListener?.(null);
     document.removeEventListener('pointerdown', this.onGesture);
+    document.removeEventListener('pointerup', this.onGesture);
+    document.removeEventListener('touchend', this.onGesture);
     document.removeEventListener('keydown', this.onGesture);
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.reset();

@@ -77,9 +77,10 @@ function buildRiver(group, geos, waterMat) {
   // The banks: cut fine (3 m) where the ground slopes down to the bed, coarse (40 m) over the bed itself
   const bankPos = [], bankCol = [], bankWet = [];
   // the lawn's own green on the top, a deeper, shaggier green down the bank, a narrow strip of mud at the water
-  const lawn = new THREE.Color(0x4f8a2e).convertSRGBToLinear(), grass = new THREE.Color(0x3f6b27).convertSRGBToLinear();
-  const mud = new THREE.Color(0x5a4c35).convertSRGBToLinear();
-  const silt = new THREE.Color(0x3a2e20).convertSRGBToLinear(), c = new THREE.Color();
+  // (already linear: three converts a hex color as it's set)
+  const lawn = new THREE.Color(0x4f8a2e), grass = new THREE.Color(0x3f6b27);
+  const mud = new THREE.Color(0x5a4c35);
+  const silt = new THREE.Color(0x3a2e20), c = new THREE.Color();
   const sloped = (p) => { const d = riverDepth(p[0], p[2]); return d > 0.001 && d < 0.999; };
   // around the Argo Cascades (cascades.js), where the channel's levels step down beside land the map calls water
   const byCascades = (a, b, k) => Math.max(a[0], b[0], k[0]) > 140 && Math.min(a[0], b[0], k[0]) < 660
@@ -174,7 +175,60 @@ function buildRiver(group, geos, waterMat) {
 // Bridges
 // ---------------------------------------------------------------------------------------------------------------------
 
+// The piers and abutments standing in the water, as footprints a boat is kept out of (pierPush): boxes turned along
+// their bridge { x, z, ux, uz (along the bridge), across, along (half sizes) } and round columns { x, z, r }, in 32 m cells
+const PIER_CELL = 32;
+let piers = new Map();
+function addPier(f) {
+  const reach = f.r ?? Math.hypot(f.across, f.along);
+  for (let i = Math.floor((f.x - reach) / PIER_CELL); i <= Math.floor((f.x + reach) / PIER_CELL); i++) {
+    for (let j = Math.floor((f.z - reach) / PIER_CELL); j <= Math.floor((f.z + reach) / PIER_CELL); j++) {
+      const k = i * 100003 + j;
+      if (!piers.has(k)) piers.set(k, []);
+      piers.get(k).push(f);
+    }
+  }
+}
+
+// How far to move something round, `radius` across, at (x, z) on the water to be clear of every bridge's pier: into
+// `out` as { x, z }, answering whether it was in one
+function pierPush(x, z, radius, out) {
+  const list = piers.get(Math.floor(x / PIER_CELL) * 100003 + Math.floor(z / PIER_CELL));
+  if (!list) return false;
+  let hit = false;
+  out.x = 0; out.z = 0;
+  for (const f of list) {
+    const dx = x + out.x - f.x, dz = z + out.z - f.z;
+    if (f.r !== undefined) {
+      const d = Math.hypot(dx, dz), need = f.r + radius;
+      if (d >= need) continue;
+      const nx = d > 1e-6 ? dx / d : 1, nz = d > 1e-6 ? dz / d : 0;
+      out.x += nx * (need - d); out.z += nz * (need - d);
+      hit = true;
+      continue;
+    }
+    // in the box's own frame: s along the bridge, o across it
+    const s = dx * f.ux + dz * f.uz, o = dz * f.ux - dx * f.uz;
+    const cs = Math.max(-f.along, Math.min(f.along, s)), co = Math.max(-f.across, Math.min(f.across, o));
+    let ps = s - cs, po = o - co, d = Math.hypot(ps, po);
+    if (d >= radius) continue;
+    let push;
+    if (d > 1e-6) push = radius - d;
+    else {
+      // the middle inside the box: out by its thin side, along the bridge, into the gap beside the pier
+      ps = s >= 0 ? 1 : -1; po = 0; d = 1;
+      push = f.along - Math.abs(s) + radius;
+    }
+    ps /= d; po /= d;
+    out.x += (ps * f.ux - po * f.uz) * push;
+    out.z += (ps * f.uz + po * f.ux) * push;
+    hit = true;
+  }
+  return hit;
+}
+
 function buildBridges(group) {
+  piers = new Map();
   const decks = bridgeDecks();
   if (!decks.length) return;
   const concrete = [], steel = [], wood = [], rail = [];
@@ -241,14 +295,26 @@ function buildBridges(group) {
       while (i < last && P[i][2] < s) i++;
       const top = P[i][3] + under, bed = riverbedHeight(P[i][0], P[i][1]) - 0.4;
       if (top - bed > 1) {
-        if (d.kind === 2) footPier(fb, P[i], T[i], hw, bed, P[i][3] - 0.62);
-        else pier(concrete, i, hw * 2 - 1.2, 1.3, bed, top);
+        if (d.kind === 2) {
+          footPier(fb, P[i], T[i], hw, bed, P[i][3] - 0.62);
+          for (const s of [-1, 1]) addPier({ x: P[i][0] - T[i][1] * s * (hw - 0.4), z: P[i][1] + T[i][0] * s * (hw - 0.4), r: 0.26 });
+        } else {
+          pier(concrete, i, hw * 2 - 1.2, 1.3, bed, top);
+          addPier({ x: P[i][0], z: P[i][1], ux: T[i][0], uz: T[i][1], across: hw - 0.6, along: 0.65 });
+        }
       }
     }
     for (const i of [Math.max(0, first - 1), Math.min(P.length - 1, last + 1)]) {
       const top = P[i][3] + under, bed = riverbedHeight(P[i][0], P[i][1]) - 0.5;
-      if (d.kind === 2) { if (P[i][3] - 0.62 - bed > 0.3) footAbutment(fb, P[i], T[i], hw, bed, P[i][3] - 0.62); }
-      else if (top - bed > 0.3) pier(concrete, i, hw * 2 + 0.2, 1.6, bed, top + 0.05);
+      if (d.kind === 2) {
+        if (P[i][3] - 0.62 - bed > 0.3) {
+          footAbutment(fb, P[i], T[i], hw, bed, P[i][3] - 0.62);
+          addPier({ x: P[i][0], z: P[i][1], ux: T[i][0], uz: T[i][1], across: hw + 0.45, along: 0.45 });
+        }
+      } else if (top - bed > 0.3) {
+        pier(concrete, i, hw * 2 + 0.2, 1.6, bed, top + 0.05);
+        addPier({ x: P[i][0], z: P[i][1], ux: T[i][0], uz: T[i][1], across: hw + 0.1, along: 0.8 });
+      }
     }
   }
 
@@ -412,4 +478,4 @@ function footAbutment(out, p, t, hw, bed, top) {
   }
 }
 
-export { buildRiver };
+export { buildRiver, pierPush };

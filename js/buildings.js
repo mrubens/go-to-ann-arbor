@@ -360,14 +360,17 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
   }).filter(Boolean);
   // Keep the authored landmark models; the survey supplies the surrounding buildings.
   // (a landmark on the survey's own outline names the block it replaces, and its colliders keep off the rest)
-  const replaced = new Set(landmarkColliders.map((c) => c.replaces).filter(Boolean));
+  // (`replaces` is one block, or a list where one collider stands for several, as the stadium's wall)
+  const replaced = new Set(landmarkColliders.flatMap((c) => c.replaces ?? []));
   // (and one it runs into, as the parking structure down Graffiti Alley, gives the block cut back to its own face; a
   // block that's replaced is left out before it's reshaped)
   const reshaped = new Map(landmarkColliders.filter((c) => c.reshapes).map((c) => [c.reshapes.from, c.reshapes.to]));
+  // (only the few landmark colliders without keepsSurvey clear the blocks under them: tested alone, not all thousands)
+  const clearers = landmarkColliders.filter((c) => !c.keepsSurvey);
   const surveyedBuildings = REAL_BUILDINGS.filter((b) => !replaced.has(b)
     && !GRANDSTANDS.some(([x, z]) => b.polygons.some((p) => polygonContains({ outer: p.outer, holes: [] }, x, z)))).map((b) => reshaped.get(b) || b).filter((b) => !LANDMARK_RESERVE.some((h) =>
     b.polygons.some((p) => polygonContains({ outer: p.outer, holes: [] }, h.x, h.z)))
-    && !landmarkColliders.some((c) => !c.keepsSurvey && b.minX < c.maxX && b.maxX > c.minX && b.minZ < c.maxZ && b.maxZ > c.minZ
+    && !clearers.some((c) => b.minX < c.maxX && b.maxX > c.minX && b.minZ < c.maxZ && b.maxZ > c.minZ
       && b.polygons.some((p) => polygonBoxOverlaps(p, (c.minX + c.maxX) / 2, (c.minZ + c.maxZ) / 2,
         (c.maxX - c.minX) / 2, (c.maxZ - c.minZ) / 2))));
   const landmarkReserves = [...LANDMARK_RESERVE, ...landmarkColliders.map((c) =>
@@ -930,23 +933,34 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     attribute.needsUpdate = true;
   }
 
-  function update(focusX, focusZ, force = false) {
+  // (focus2X, focus2Z: the second player's, in split screen, whose half shows the details round them too)
+  let lastStream2X = NaN;
+  let lastStream2Z = NaN;
+  function update(focusX, focusZ, force = false, focus2X = NaN, focus2Z = NaN) {
+    const two = Number.isFinite(focus2X) && Number.isFinite(focus2Z);
     const dx = focusX - lastStreamX;
     const dz = focusZ - lastStreamZ;
-    if (!force && (dx * dx + dz * dz) < 324) {
+    const moved2 = two ? !((focus2X - lastStream2X) ** 2 + (focus2Z - lastStream2Z) ** 2 < 324) : Number.isFinite(lastStream2X);
+    if (!force && (dx * dx + dz * dz) < 324 && !moved2) {
       // Player moved less than 18m since last Quadtree stream update
       return;
     }
     lastStreamX = focusX;
     lastStreamZ = focusZ;
+    lastStream2X = two ? focus2X : NaN;
+    lastStream2Z = two ? focus2Z : NaN;
 
     const nearbyBlocks = quadtree.queryRange(focusX, focusZ, STREAM_RADIUS);
-    // Sort closest blocks first so if any pool hits capacity, closest blocks around the player always win
-    nearbyBlocks.sort((a, b) => {
-      const da = (a.cx - focusX) * (a.cx - focusX) + (a.cz - focusZ) * (a.cz - focusZ);
-      const db = (b.cx - focusX) * (b.cx - focusX) + (b.cz - focusZ) * (b.cz - focusZ);
-      return da - db;
-    });
+    if (two) {
+      const seen = new Set(nearbyBlocks);
+      for (const blk of quadtree.queryRange(focus2X, focus2Z, STREAM_RADIUS)) if (!seen.has(blk)) nearbyBlocks.push(blk);
+    }
+    // Sort closest blocks first so if any pool hits capacity, closest blocks around the player (either player) always win
+    const away = (blk) => {
+      const d = (blk.cx - focusX) * (blk.cx - focusX) + (blk.cz - focusZ) * (blk.cz - focusZ);
+      return two ? Math.min(d, (blk.cx - focus2X) * (blk.cx - focus2X) + (blk.cz - focus2Z) * (blk.cz - focus2Z)) : d;
+    };
+    nearbyBlocks.sort((a, b) => away(a) - away(b));
     activeAwnings.length = 0;
 
     let corniceCount = 0;

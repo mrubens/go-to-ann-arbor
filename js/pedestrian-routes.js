@@ -1,3 +1,5 @@
+import { CROSSWALK } from './road-network.js';
+
 // Lazily connected sidewalk tracks; junctions stay on the same curb island. Crosswalk tracks are separate,
 // and pedestrian-system.js checks traffic permissions before entering them.
 function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
@@ -46,22 +48,49 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
     return result;
   }
 
+  // Each crossing track runs along its road's lateral axis (clx, clz: the way traffic.js measures a lane's place on a
+  // crosswalk), from 2 m of curb on one side to 2 m on the other, and carries its road's right-of-way group (which
+  // WALK it waits for)
   function across(n) {
     if (crossings.has(n)) return crossings.get(n);
     const result = [];
     crossings.set(n, result);
     if (!n.signal) return result;
-    for (let side = 0; side < 4; side++) {
-      const road = n.road[side];
-      if (!road) continue;
-      const avenue = side >= 2, sign = side % 2 === 0 ? 1 : -1;
-      for (const line of avenue ? [sign * 0.75] : [-0.75, 0.75]) {
-        const a = { x: avenue ? road.x0 - road.half - 2 : n.x + sign * (n.hx + 1.25) + line,
-          z: avenue ? n.z + sign * (n.hz + 1.25) + line : road.z0 - road.half - 2 };
-        const len = road.half * 2 + 4;
-        const b = { x: a.x + (avenue ? len : 0), z: a.z + (avenue ? 0 : len) };
-        if (!onSidewalk(a.x, a.z) || !onSidewalk(b.x, b.z) || !clear(a, b)) continue;
-        result.push(segment(a, b, { node: n, side, line, from: n, to: n }));
+    if (!n.general) {
+      for (let side = 0; side < 4; side++) {
+        const road = n.road[side];
+        if (!road) continue;
+        const avenue = side >= 2, sign = side % 2 === 0 ? 1 : -1;
+        for (const line of avenue ? [sign * 0.75] : [-0.75, 0.75]) {
+          const a = { x: avenue ? road.x0 - road.half - 2 : n.x + sign * (n.hx + 1.25) + line,
+            z: avenue ? n.z + sign * (n.hz + 1.25) + line : road.z0 - road.half - 2 };
+          const len = road.half * 2 + 4;
+          const b = { x: a.x + (avenue ? len : 0), z: a.z + (avenue ? 0 : len) };
+          if (!onSidewalk(a.x, a.z) || !onSidewalk(b.x, b.z) || !clear(a, b)) continue;
+          result.push(segment(a, b, { node: n, side, line, from: n, to: n, clx: avenue ? 1 : 0, clz: avenue ? 0 : 1, group: avenue ? 0 : 1 }));
+        }
+      }
+    }
+    // Lamp: a centreline junction (all of Ann Arbor's) crosses each road's arm in the 2.5 m between its stop line and
+    // the junction, as its painted crosswalk is. An arm that merges or forks with another (within 20°) has no clean
+    // place to cross and is left out; so is any whose ends are not on a curb island or whose way over is blocked.
+    for (const arm of n.arms || []) {
+      if (arm.side < 4 || arm.lead !== arm || n.arms.some((b) => b !== arm && b.lead === arm)) continue;
+      const road = arm.in || arm.out;
+      if (!road || road.clx === undefined) continue;
+      // how far out along the arm its stop lines are: the crosswalk lies just inside the nearer
+      let back = Infinity;
+      if (arm.in) back = Math.hypot(arm.in.sx + arm.in.dx * arm.in.len - n.x, arm.in.sz + arm.in.dz * arm.in.len - n.z);
+      if (arm.out) back = Math.min(back, Math.hypot(arm.out.sx - n.x, arm.out.sz - n.z));
+      if (!(back > CROSSWALK + 1)) continue;
+      const half = arm.half + 2;
+      for (const line of [-0.6, 0.6]) {
+        const out = back - CROSSWALK * 0.5 + line;
+        const cx = n.x + arm.ux * out, cz = n.z + arm.uz * out;
+        const a = { x: cx - road.clx * half, z: cz - road.clz * half };
+        const b = { x: cx + road.clx * half, z: cz + road.clz * half };
+        if (!blockAt(a.x, a.z) || !blockAt(b.x, b.z) || blockAt(a.x, a.z) === blockAt(b.x, b.z) || !clear(a, b)) continue;
+        result.push(segment(a, b, { node: n, side: arm.side, line, from: n, to: n, clx: road.clx, clz: road.clz, group: arm.group }));
       }
     }
     return result;
@@ -207,10 +236,12 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
     return best;
   }
 
+  // Lamp: a step aside stays on the person's own curb island, within 4 m of its edge and clear of anything standing
+  // there (cornerClear); most of Ann Arbor's islands have no curb rectangle for onSidewalk to find, as along() allows
   function canDodge(p, offset) {
     const block = blockAt(p.x, p.z);
     const target = { x: p.ax + p.ux * p.t + p.uz * offset, z: p.az + p.uz * p.t - p.ux * offset };
-    return !!block && onSidewalk(target.x, target.z) && cornerClear(p, target, block);
+    return !!block && cornerClear(p, target, block);
   }
 
   return { along, across, next, canDodge };

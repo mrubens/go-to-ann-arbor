@@ -106,6 +106,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       resumeDir: 0,
       dodge: 0,
       dodgeTarget: 0,
+      returning: false, // back on their feet after a knock-down, stepping back to their line
       diveStart: -Infinity,
       ragdoll: false, // flung limp by the player's car or bike (PersonRig.startRagdoll), until they get up
       hitAt: -Infinity,
@@ -221,6 +222,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       p.avoidUntil = 0;
       p.resumeDir = 0;
       p.dodge = p.dodgeTarget = 0;
+      p.returning = false;
       p.diveStart = -Infinity;
       p.ragdoll = false;
       p.rig.ragdolling = false;
@@ -340,11 +342,15 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   function avoidPlayer(p) {
     // Commit to the landing and get-up; steering or walking during this pose would slide across the ground.
     if (clock - p.diveStart < PEDESTRIAN_DIVE_DURATION) return;
-    // Stay off the walking line until the approaching vehicle has passed; returning is swept too.
+    // Stay off the walking line until the approaching vehicle has passed; returning is swept too. Someone back on their
+    // feet after a knock-down walks back to their line whatever lies between (they may have been thrown into the road
+    // or across it, where no step aside would be allowed), once no car is coming at them.
     if (p.dodgeTarget && clock >= p.avoidUntil) {
-      if ((!p.dodge || dodgeClear(p, 0)) && (!pedRange || playerContactTime(p, 0, 0, true, 0) === Infinity)) p.dodgeTarget = 0;
+      const safe = !pedRange || playerContactTime(p, 0, 0, true, 0) === Infinity;
+      if ((p.returning || !p.dodge || dodgeClear(p, 0)) && safe) p.dodgeTarget = 0;
       else p.avoidUntil = clock + 0.6;
     }
+    if (p.returning && !p.dodgeTarget && Math.abs(p.dodge) < 0.01) p.returning = false;
     // A retreat is temporary: once clear, turn back toward the original destination instead of walking into
     // the people behind. Corner transitions below discard this old direction along with the escape boundary.
     if (p.resumeDir && (clock >= p.avoidUntil || !pedRange)) {
@@ -461,6 +467,34 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     }
   }
 
+  // Lamp: level crossings (railways.js, handed on by traffic.js). A sidewalk alongside a street over the tracks passes
+  // each crossing at `t` along it; while its lamps flash, walkers wait at its gate (c.D short of the tracks) and anyone
+  // already past the gate walks on over. Worked out once per track, the first time someone walks it.
+  let rails = [];
+  function railsOf(track) {
+    if (track.rails !== undefined) return track.rails;
+    let out = null;
+    for (const c of rails) {
+      const qx = c.x - track.ax, qz = c.z - track.az;
+      const t = qx * track.ux + qz * track.uz;
+      if (t < -c.D || t > track.len + c.D || Math.abs(qx * track.uz - qz * track.ux) > 13) continue;
+      if (Math.abs(track.ux * c.dx + track.uz * c.dz) < 0.7) continue; // (along the tracks, not over them)
+      (out || (out = [])).push({ c, t });
+    }
+    return (track.rails = out);
+  }
+  function railRoom(p) {
+    const list = p.route ? railsOf(p.route) : null;
+    if (!list) return Infinity;
+    let room = Infinity;
+    for (const r of list) {
+      if (!r.c.on) continue;
+      const d = (r.t - p.t) * p.dir - r.c.D; // to the gate, on this side of the tracks
+      if (d > -0.5) room = Math.min(room, Math.max(0, d));
+    }
+    return room;
+  }
+
   const walkedNodes = [];
   function walk(p, dt) {
     const avoiding = clock < p.avoidUntil;
@@ -533,7 +567,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       // room to walk before standing: up to the curb unless p may cross, and up to the back of whoever is ahead
       const s = curbProgress(p);
       if (s <= KERB + 1e-6) {
-        const walk = walkOn(p.side);
+        const walk = walkOn(p);
         if (!walk) p.walkAt = -1;
         else if (p.walkAt < 0) p.walkAt = clock + p.walkDelay;
         // React to WALK independently of the queue or vehicles still clearing the crossing.
@@ -546,6 +580,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
         if (gap > 0) room = Math.min(room, Math.max(0, gap - QUEUE_GAP));
       }
     }
+    if (!p.node && rails.length) room = Math.min(room, railRoom(p));
     if (avoiding) room = Math.min(room, Math.max(0, (p.avoidT - p.t) * p.dir));
     vMax = Math.min(vMax, Math.sqrt(2 * brake * room));
     p.v += clamp(vMax - p.v, -(avoiding ? brake : 2 * brake) * dt, (avoiding ? PED_ESCAPE_ACCEL : PED_ACCEL) * dt);
@@ -585,8 +620,8 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     p.dodge += clamp(p.dodgeTarget - p.dodge, -dodgeStep, dodgeStep);
     p.x = p.ax + p.ux * t + p.uz * p.dodge;
     p.z = p.az + p.uz * t - p.ux * p.dodge;
-    if (p.node && ((t > KERB && t < p.len - KERB) || (p.waiting && walkOn(p.side)))) {
-      p.coord = p.side >= 2 ? p.x : p.z;
+    if (p.node && ((t > KERB && t < p.len - KERB) || (p.waiting && walkOn(p)))) {
+      p.coord = p.x * p.clx + p.z * p.clz; // along the crossing, as traffic.js measures its lanes there
       if (!p.node.walkers.length) walkedNodes.push(p.node);
       p.node.walkers.push(p);
     }
@@ -732,7 +767,9 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   function renderRagdoll(p, dt) {
     const draw = !hasView || visible(p.x, p.z, 7);
     const rig = p.rig;
+    // (once at rest the body's own clock stops, so the time it has lain there is counted here)
     if (!rig.rag.done) rig.rag.done = rig.stepRagdoll(dt, ragGround, p, draw);
+    else rig.rag.time += dt;
     p.x = rig.x;
     p.z = rig.z;
     if (rig.rag.done) {
@@ -745,7 +782,9 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
         rig.ragdolling = false;
         rig.rag.done = false;
         p.t = Math.min(p.len, Math.max(0, t));
+        p.diveT = p.t; // the push-up is on the spot, not a glide to where an earlier dive was headed
         p.dodge = p.dodgeTarget = off;
+        p.returning = true;
         p.diveStart = clock - 1.15;
         p.diveHeading = rig.yaw = rig.ragdollHeading();
         p.v = 0;
@@ -868,7 +907,9 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   function setBusy(value) { busy = clamp(value, 0.05, 1); crowdCheck = -Infinity; }
   const stats = () => ({ out: placedCount, perf: +perf.toFixed(2), share: +crowdShare.toFixed(2), busy });
 
-  return { peds, meshes: pedCrowd.meshes, update, setBusy, stats, setHitListener(fn) { onHit = fn; }, knockBy, onRiderHit: (x, z, speed) => onHit?.(x, z, speed) };
+  function setRailCrossings(list) { rails = list || []; }
+
+  return { peds, meshes: pedCrowd.meshes, update, setBusy, stats, setRailCrossings, setHitListener(fn) { onHit = fn; }, knockBy, onRiderHit: (x, z, speed) => onHit?.(x, z, speed) };
 }
 
 export { createPedestrianSystem };

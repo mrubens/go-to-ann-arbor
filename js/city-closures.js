@@ -13,25 +13,31 @@ const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', '
 
 async function fetchLive() {
   const q = `${LAYER}?where=Type%3D%27Road%20Closure%27&outFields=OBJECTID,Street,ProjectName,DateRange,StartDate,EndDate,Map&outSR=4326&geometryPrecision=6&f=json`;
-  const res = await fetch(q, { signal: AbortSignal.timeout(8000) });
+  const res = await fetch(q, { signal: AbortSignal.timeout(3000) });
   if (!res.ok) throw new Error(res.status);
   const d = await res.json();
   if (!Array.isArray(d?.features)) throw new Error('no features');
   return d.features.filter((f) => f.geometry?.paths).map((f) => ({ a: f.attributes, p: f.geometry.paths }));
 }
 
+// Ann Arbor's date as YYYYMMDD (the player's own clock may be in another time zone, or past midnight UTC)
+const DETROIT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Detroit', year: 'numeric', month: '2-digit', day: '2-digit' });
+const detroitDate = (ms) => DETROIT.format(new Date(ms)).replace(/-/g, '');
+
 function onToday(a, now) {
   const day = 864e5;
   if (a.StartDate || a.EndDate) {
     return (!a.StartDate || a.StartDate <= now + day) && (!a.EndDate || now <= a.EndDate + day);
   }
-  const month = MONTHS[new Date(now).getMonth()];
+  const month = MONTHS[+detroitDate(now).slice(4, 6) - 1];
   return String(a.Map || a.DateRange || '').toLowerCase().split(/[^a-z]+/).some((w) => w.startsWith(month));
 }
 
 // Today's full closures, each { street, project, dates, lines: [[[x, z], ...], ...] } in the world's metres; null when
 // neither the city's map nor the copy could be read
 async function loadCityClosures() {
+  // the city's map and MDOT's list asked at once, MDOT's waited for no more than 3 s: neither holds the start up long
+  const stateAsked = Promise.race([nativeJSON(MIDRIVE).catch(() => null), new Promise((done) => setTimeout(() => done(null), 3000))]);
   let features = null, live = false;
   try {
     features = await fetchLive();
@@ -55,13 +61,13 @@ async function loadCityClosures() {
   }
   // Michigan DOT's MiDrive list (only through the app: its server doesn't let a page ask) adds the state's total
   // closures in Washtenaw County, each at the point it's mapped: the road there is shut if it's in the city's streets
-  const state = await nativeJSON(MIDRIVE);
+  const state = await stateAsked;
   let fromState = 0;
   for (const r of Array.isArray(state) ? state : []) {
     if (r.county !== 'Washtenaw' || !/total closure/i.test(r.description || '')) continue;
     const m = /lat=([\d.-]+)&lon=([\d.-]+)/.exec(r.description);
     const end = /hidden-date'>(\d{8})/.exec(r.endDate || '');
-    if (!m || (end && +end[1] < +new Date(now).toISOString().slice(0, 10).replace(/-/g, ''))) continue;
+    if (!m || (end && +end[1] < +detroitDate(now))) continue;
     const w = toWorld(+m[1], +m[2]);
     const street = String(r.route || '').replace(/^(NB|SB|EB|WB)\s+/, '');
     out.push({ street, project: 'MDOT', dates: '', point: [w.x, w.z], lines: [] });

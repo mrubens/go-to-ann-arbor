@@ -174,6 +174,22 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
     }
     return out;
   };
+  // Lamp: the paint's streets are a snapshot taken before the network's lights and signs were placed (road-network.js,
+  // its step 10), so what makes traffic stop is read from the finished network's junction at the same place: whether
+  // it's signalised, and which approaches to it have a stop sign
+  const placeKey = (x, z) => Math.round(x * 4) + ',' + Math.round(z * 4);
+  const liveNodes = new Map();
+  for (const n of network.nodes || []) liveNodes.set(placeKey(n.x, n.z), n);
+  const liveNode = (node) => liveNodes.get(placeKey(node.x, node.z)) || null;
+  const signalled = (node) => !!(node.signal || liveNode(node)?.signal);
+  // whether traffic coming along f stops at its end: a light there, or a stop sign on the approach from f's way
+  const stopsAt = (f) => {
+    const n = liveNode(f.to);
+    if (!n) return false;
+    if (n.signal) return true;
+    return (n.in || []).some((e) => e.control === 'stop' && e.dx * f.dx + e.dz * f.dz > 0.9);
+  };
+
   // A crosswalk at the end of e by node: where a painted crossing is mapped there, not where an unpainted one is,
   // and where nothing is said, only at traffic lights
   const paintedEnd = (e, s, node) => {
@@ -182,7 +198,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
     for (const c of near) c.used = true;
     if (near.some((c) => c.marked === 1)) return true;
     if (near.some((c) => c.marked === 0)) return false;
-    return !!node.signal;
+    return signalled(node);
   };
 
   // The one or two directed edges of each road between a pair of intersections
@@ -289,10 +305,11 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
       if (back && back.share && rightLane(back) != null) pictures(-Math.min(rightLane(back) + 0.3, back.half - pL - 1.2), -1, 50, SHARROW);
     }
 
-    // Stop bars across the lanes arriving at each stop line, from the centre line (or median) to the curb (none where a
-    // street merely bends: a shape node of the centreline streets)
+    // Stop bars across the lanes arriving at each stop line, from the centre line (or median) to the curb, only where
+    // traffic is made to stop: at a light or a stop sign (none at a through street's side streets, nor where a street
+    // merely bends: a shape node of the centreline streets)
     for (const f of back ? [e, back] : [e]) {
-      if (f.to.shape) continue;
+      if (f.to.shape || !stopsAt(f)) continue;
       const left = back ? Math.max(0, f.lanes[0] - 1.8) : -f.half;
       across(f, f.len - 0.35, left + 0.1, f.half - 0.1, 0.45, WHITE);
     }

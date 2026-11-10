@@ -52,14 +52,14 @@ function realClosures(edges, real) {
     }
     if (!best) continue;
     best.closed = true;
-    if (best.opposite) best.opposite.closed = true;
+    if (best.reverse) best.reverse.closed = true;
     best.closure = c;
     sites.push(best);
     streets.add(best.street);
   }
   for (const e of edges) {
     if (e.closed || e.sx === undefined || e.len < 34) continue;
-    if (e.opposite && (e.opposite.x0 < e.x0 || (e.opposite.x0 === e.x0 && e.opposite.z0 < e.z0))) continue;
+    if (e.reverse && (e.reverse.x0 < e.x0 || (e.reverse.x0 === e.x0 && e.reverse.z0 < e.z0))) continue;
     const reach = Math.max(9, (e.half || 5) + 4);
     let hits = 0, c = null;
     for (const f of [0.2, 0.5, 0.8]) {
@@ -68,7 +68,7 @@ function realClosures(edges, real) {
     }
     if (hits < 2) continue;
     e.closed = true;
-    if (e.opposite) e.opposite.closed = true;
+    if (e.reverse) e.reverse.closed = true;
     e.closure = c;
     sites.push(e);
     streets.add(e.street || c.street);
@@ -90,7 +90,7 @@ function planClosures(edges, real = null) {
     if (e.closed || e.sx === undefined || e.len < 48 || e.len > 240 || (e.cls ?? 4) < 3) continue;
     if (e.from.out.length < 3 || e.to.out.length < 3) continue;
     // one of the two ways stands for the block
-    if (e.opposite && (e.opposite.x0 < e.x0 || (e.opposite.x0 === e.x0 && e.opposite.z0 < e.z0))) continue;
+    if (e.reverse && (e.reverse.x0 < e.x0 || (e.reverse.x0 === e.x0 && e.reverse.z0 < e.z0))) continue;
     const cx = e.sx + e.dx * e.len / 2, cz = e.sz + e.dz * e.len / 2;
     cands.push({ e, cx, cz, score: hash(cx, cz, 7) * (1 + Math.hypot(cx - mx, cz - mz) / 1300) });
   }
@@ -100,7 +100,7 @@ function planClosures(edges, real = null) {
     if (sites.length >= MAX_CLOSURES) break;
     if (sites.some((s) => Math.hypot(s.cx - c.cx, s.cz - c.cz) < SPACING)) continue;
     c.e.closed = true;
-    if (c.e.opposite) c.e.opposite.closed = true;
+    if (c.e.reverse) c.e.reverse.closed = true;
     sites.push(c);
   }
   console.info(`[road work] ${sites.length} blocks closed: ${sites.slice(0, 6).map((s) => s.e.street || 'a side street').join(', ')}…`);
@@ -658,8 +658,10 @@ function buildRoadWork(group, closures) {
   mat.metalnessNode = mix(0.05, 0.85, shine).mul(float(1).sub(soil));
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), qa = new THREE.Quaternion(), qb = new THREE.Quaternion();
   const p3 = new THREE.Vector3(), s3 = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0), xAxis = new THREE.Vector3(1, 0, 0);
+  const drawnMeshes = [];
   const instanced = (geo, material, count, shadow = true) => {
     const m = new THREE.InstancedMesh(geo, material, Math.max(1, count));
+    drawnMeshes.push(m);
     m.count = count;
     m.castShadow = shadow;
     m.receiveShadow = true;
@@ -808,7 +810,27 @@ function buildRoadWork(group, closures) {
       if (k < 1) v.speed *= 0.5 + 0.5 * k;
     }
   }
-  function update(dt, ent, mode, cars, buses) {
+  // Lamp: the work zones' meshes span the town, so the frustum never leaves them out: with `views` (the points the
+  // players see from: main.js), they're hidden while no site, machine or thing knocked loose is within reach of any
+  let nearCheck = 0, shown = true;
+  const REACH = 450;
+  const siteCenters = closures.map((e) => [e.sx + e.dx * e.len / 2, e.sz + e.dz * e.len / 2]);
+  function cull(dt, views) {
+    if ((nearCheck -= dt) > 0) return;
+    nearCheck = 0.5;
+    let near = moving.size > 0;
+    for (const v of views) {
+      const p = v?.position || v;
+      if (!p || near) continue;
+      const close = (x, z) => Math.abs(x - p.x) < REACH && Math.abs(z - p.z) < REACH;
+      near = siteCenters.some(([x, z]) => close(x, z)) || machines.some((m) => close(m.x, m.z));
+    }
+    if (near === shown) return;
+    shown = near;
+    for (const m of drawnMeshes) m.visible = near;
+  }
+  function update(dt, ent, mode, cars, buses, views = null) {
+    if (views) cull(dt, views);
     const body = ent && bodyOf(ent, mode);
     if (body && Math.abs(ent.speed || 0) > 0.6) {
       ent.speed *= strike(ent.position.x, ent.position.y, ent.position.z, ent.heading, ent.speed, body[0], body[1], 'player');

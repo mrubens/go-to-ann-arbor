@@ -29,16 +29,29 @@ function bowlSurface(x, z) {
   return WALL_TOP + (SEAT_TOP - WALL_TOP) * (r - rIn - AISLE_IN) / (r1 - rIn - AISLE_IN);
 }
 
+// The outer wall's top along each ray (N + 1 values, the last the first again), relative to the ground around: raised
+// with the hill where the ground outside stands higher than WALL_Y. landmarks.js works it out from the terrain as it
+// builds the wall and hands it here, so what's walked and driven on is the stone that's drawn; WALL_Y until then.
+let wallTops = null;
+function setWallTops(tops) { wallTops = tops; }
+function wallTopAt(angle) {
+  if (!wallTops) return WALL_Y;
+  let f = (angle / (Math.PI * 2)) * N;
+  f = ((f % N) + N) % N;
+  const k = Math.floor(f), a = f - k;
+  return wallTops[k] * (1 - a) + wallTops[k + 1] * a;
+}
+
 // What a car drives on inside the outer wall (relative to the ground around), or null outside it: the field, its
 // padded wall, the stands as one slope down their rows, the top row easing up to the walkway, and the parapet
 function carSurface(x, z) {
   const dx = x - STADIUM.cx, dz = z - STADIUM.cz, r = Math.hypot(dx, dz);
-  const [rIn, rOut] = radiiAt(Math.atan2(dz, dx));
+  const angle = Math.atan2(dz, dx), [rIn, rOut] = radiiAt(angle);
   if (r >= rOut) return null;
-  if (r >= rOut - 0.6) return WALL_Y;
+  if (r >= rOut - 0.6) return wallTopAt(angle);
   const r1 = rOut - CONCOURSE;
   if (r >= r1 - 1 && r < r1) return SEAT_TOP + (RIM_Y - SEAT_TOP) * (r - r1 + 1);
   return bowlSurface(x, z);
 }
 
-export { STADIUM, N, radiiAt, bowlSurface, carSurface, FIELD_Y, WALL_TOP, SEAT_TOP, RIM_Y, WALL_Y, AISLE_IN, CONCOURSE };
+export { STADIUM, N, radiiAt, bowlSurface, carSurface, setWallTops, wallTopAt, FIELD_Y, WALL_TOP, SEAT_TOP, RIM_Y, WALL_Y, AISLE_IN, CONCOURSE };

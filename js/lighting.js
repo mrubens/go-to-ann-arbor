@@ -36,10 +36,13 @@ const systems = (live.data.systems ??= new Set());
 
 // Atmospheric sky, environment lighting, sunlight and time-of-day presets.
 
+// Directions in the city's frame: x east, z south. Over Ann Arbor the sun and moon cross the southern sky, so the fixed
+// looks are lit from there: midday nearly due south, golden hour and twilight low in the west-south-west, the night's
+// moonlight high in the south-west
 const TIME_PRESETS = {
   golden: {
     id: 'golden',
-    sunDir: new THREE.Vector3(-0.44, 0.58, -0.68).normalize(),
+    sunDir: new THREE.Vector3(-0.75, 0.58, 0.31).normalize(),
     sunColor: 0xffca92,
     sunIntensity: 5.8,
     hemiSky: 0x9abbe6,
@@ -64,7 +67,7 @@ const TIME_PRESETS = {
   },
   midday: {
     id: 'midday',
-    sunDir: new THREE.Vector3(-0.34, 0.82, -0.46).normalize(),
+    sunDir: new THREE.Vector3(-0.10, 0.82, 0.56).normalize(),
     sunColor: 0xfff5e8,
     sunIntensity: 6.0, // Lamp: softer than it was (midday read too bright)
     hemiSky: 0xaad2ff,
@@ -89,7 +92,7 @@ const TIME_PRESETS = {
   },
   twilight: {
     id: 'twilight',
-    sunDir: new THREE.Vector3(-0.52, 0.36, -0.77).normalize(),
+    sunDir: new THREE.Vector3(-0.87, 0.36, 0.32).normalize(),
     sunColor: 0xff9466,
     sunIntensity: 3.1,
     hemiSky: 0x4c6ca8,
@@ -114,7 +117,7 @@ const TIME_PRESETS = {
   },
   midnight: {
     id: 'midnight',
-    sunDir: new THREE.Vector3(0.42, 0.68, -0.60).normalize(),
+    sunDir: new THREE.Vector3(-0.42, 0.68, 0.60).normalize(), // moon.js DIR follows this
     sunColor: 0x8cb0e8,
     sunIntensity: 2.1, // Lamp: a brighter moon (night was too dark)
     hemiSky: 0x3a5486,
@@ -203,7 +206,27 @@ function presetForSun({ alt, az }) {
   return p;
 }
 
+// How far the baked sky `b` is from the sky preset `p` asks for: 1 is just enough to bake again
 const _sunDir = new THREE.Vector3();
+const STEP = Math.log(1.35);
+const ratio = (x, y) => Math.abs(Math.log(Math.max(x, 1e-3) / Math.max(y, 1e-3))) / STEP;
+function skyMoved(b, p) {
+  if (!b || b.id !== p.id) return Infinity;
+  const day = 1 - Math.max(b.nightFactor, p.nightFactor);
+  const turned = b.sunDir.angleTo(_sunDir.copy(p.sunDir).normalize()) / (5 * RAD);
+  return Math.max(
+    turned * day * day,
+    Math.abs(p.nightFactor - b.nightFactor) / 0.12,
+    Math.abs(p.cloudCoverage - b.cloudCoverage) / 0.1,
+    Math.abs(p.cloudDensity - b.cloudDensity) / 0.1,
+    ratio(p.skyExposure, b.skyExposure),
+    ratio(p.turbidity, b.turbidity),
+    ratio(p.rayleigh, b.rayleigh),
+    ratio(p.mieCoefficient, b.mieCoefficient),
+    ratio(p.mieDirectionalG, b.mieDirectionalG)
+  );
+}
+
 class LightingSystem {
   // Lamp: the kept part it belongs to was built again (main.js). While the part is kept, so is this.
   release() { systems.delete(this); }
@@ -334,7 +357,7 @@ class LightingSystem {
       renderTarget: this.envRenderTarget
     });
     this.scene.environment = this.envRenderTarget.texture;
-    this.sky.showSunDisc.value = 1;
+    this.sky.showSunDisc.value = this.sunDisc ?? 1;
     this.scene.add(this.sky);
   }
 
@@ -374,6 +397,10 @@ class LightingSystem {
     this.sky.sunPosition.value.copy(p.sunDir);
     this.uSkyExposure.value = p.skyExposure;
     this.uNightFactor.value = p.nightFactor;
+    // once night has come in, the sky's own sun disc would shine through the night color as a bright, always full
+    // moon where the moonlight comes from: the only moon then is moon.js's, in its real phase (none at new moon)
+    this.sunDisc = p.nightFactor > 0.3 ? 0 : 1;
+    this.sky.showSunDisc.value = this.sunDisc;
 
     cityUniforms.uSunColor.value.setHex(p.sunColor);
     cityUniforms.uSkyTopColor.value.setHex(p.skyTop);
@@ -385,14 +412,13 @@ class LightingSystem {
 
     this.scene.environmentIntensity = p.envIntensity;
     // Lamp: the sky's reflections are baked again only when the sky has changed enough to see: "Now" is put on again
-    // every minute, and each bake stalled the Xbox by 180-290 ms (the sun moves ~0.25 degrees a minute, so a bake
-    // every ~10 minutes there, or at once for another time, look or weather)
-    // ("Now" eases between the presets as the sun climbs or sets: its settings in steps big enough to see)
-    const q = (v, step) => Math.round((v || 0) / step);
-    const sky = `${p.id}|${this.lookId}|${q(p.cloudCoverage, 0.05)}|${q(p.cloudDensity, 0.05)}|${q(p.turbidity, 0.5)}|${q(p.rayleigh, 0.1)}|${q(p.skyExposure, 0.05)}|${q(p.nightFactor, 0.05)}`;
-    if (this.envRenderTarget === null || sky !== this.bakedSky || !this.bakedSun || this.bakedSun.dot(_sunDir.copy(p.sunDir).normalize()) < 0.9995) {
-      this.bakedSky = sky;
-      (this.bakedSun ||= new THREE.Vector3()).copy(p.sunDir).normalize();
+    // every minute, and a bake is a stall (on the Xbox, part of a 180-290 ms one). One measure of how far the sky has
+    // moved since the last bake, against a single tolerance, so the fields stepping at their own moments around sunset
+    // don't each set off a bake: the sun's bearing (5 degrees, about 20 minutes; it counts less as night takes over the
+    // sky, since the night color covers it), how far night has come in, and the relative change of the sky's
+    // brightness, clouds and air. About three bakes an hour by day and at most six in the hour of sunset
+    if (this.envRenderTarget === null || skyMoved(this.baked, p) >= 1) {
+      this.baked = { ...p, sunDir: p.sunDir.clone().normalize() };
       this.bakeEnvironmentMap();
     }
   }
@@ -413,7 +439,7 @@ class LightingSystem {
 // player is in; one to what the constructor built (the sun, the sky, the fog's shader) opens the page again.
 live.accept((next, { changed }) => {
   if (changed.some((name) => /\.(createAerialFogNode)$/.test(name))) return false;
-  for (const system of systems) { system.bakedSky = null; system.applyPreset(system.activePresetId, true); }
+  for (const system of systems) { system.baked = null; system.applyPreset(system.activePresetId, true); }
 });
 
 export { LightingSystem, sunPosition, sunTimes };

@@ -37,7 +37,7 @@ function parts() {
 
 // A box centred at (x, z), its length along (ux, uz), from y0 to y1
 function addBox(p, x, z, ux, uz, len, wid, y0, y1, hex) {
-  const c = new THREE.Color(hex).convertSRGBToLinear();
+  const c = new THREE.Color(hex); // already linear: three converts a hex color as it's set
   const vx = -uz, vz = ux, hl = len / 2, hw = wid / 2;
   const corner = (a, b) => [x + ux * a * hl + vx * b * hw, z + uz * a * hl + vz * b * hw];
   const q = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];

@@ -3,21 +3,46 @@
 // (`g`, from terrain.js: { x0, z0, step, cols, rows, heights, river }). Nothing here touches three.js or the page, so
 // terrain.js and the workers that cut the ground layers on other cores (drape-worker.js) run the very same code.
 
+// Beyond the heights' edge (a few kilometres past the town, where the helicopter still flies and the country is drawn)
+// the ground is held at its edge and eased over `FAR_EASE` metres to the edge's average height, the level of the
+// horizon's farmland, rather than dropping to 0 in a straight cliff.
+const FAR_EASE = 1500;
 export function baseHeight(g, x, z) {
-  const fx = (x - g.x0) / g.step, fz = (z - g.z0) / g.step;
-  if (!(fx >= 0 && fz >= 0 && fx < g.cols - 1 && fz < g.rows - 1)) return 0;
+  let fx = (x - g.x0) / g.step, fz = (z - g.z0) / g.step;
+  if (!(fx === fx && fz === fz)) return 0;
+  const mx = g.cols - 1.001, mz = g.rows - 1.001;
+  const out = Math.max(-fx, fx - mx, -fz, fz - mz, 0) * g.step;
+  if (out > 0) { fx = Math.min(Math.max(fx, 0), mx); fz = Math.min(Math.max(fz, 0), mz); }
   const c = Math.floor(fx), r = Math.floor(fz), ax = fx - c, az = fz - r;
   const h = g.heights, i = r * g.cols + c;
-  return (h[i] * (1 - ax) + h[i + 1] * ax) * (1 - az) + (h[i + g.cols] * (1 - ax) + h[i + g.cols + 1] * ax) * az;
+  const at = (h[i] * (1 - ax) + h[i + 1] * ax) * (1 - az) + (h[i + g.cols] * (1 - ax) + h[i + g.cols + 1] * ax) * az;
+  if (!(out > 0)) return at;
+  if (g.horizon === undefined) {
+    let sum = 0, n = 0;
+    for (let k = 0; k < g.cols; k++) { sum += h[k] + h[(g.rows - 1) * g.cols + k]; n += 2; }
+    for (let k = 1; k + 1 < g.rows; k++) { sum += h[k * g.cols] + h[k * g.cols + g.cols - 1]; n += 2; }
+    g.horizon = sum / n;
+  }
+  const t = Math.min(1, out / FAR_EASE), ease = t * t * (3 - 2 * t);
+  return at + (g.horizon - at) * ease;
 }
 
-// How far (0-1) the ground at (x, z) is dug down to the river's bed
+// How far (0-1) the ground at (x, z) is dug down to the river's bed. The river's cells are kept in blocks of 64 × 64
+// (`r.digBlocks`, `r.bcols` of them a row, null where a block has no water: terrain.js packDig), as the water covers a
+// few hundredths of the grid.
+export function digCell(r, c, w) {
+  // (before terrain.js packs it, while the cascades and footbridge channels are carved, it's still the dense grid)
+  if (!r.digBlocks) return r.dig[w * r.dcols + c] || 0;
+  const b = r.digBlocks[(w >> 6) * r.bcols + (c >> 6)];
+  return b ? b[((w & 63) << 6) | (c & 63)] : 0;
+}
 export function digAt(r, x, z) {
   const fx = (x - r.dx0) / r.dstep, fz = (z - r.dz0) / r.dstep;
   if (!(fx >= 0 && fz >= 0 && fx < r.dcols - 1 && fz < r.drows - 1)) return 0;
-  const c = Math.floor(fx), w = Math.floor(fz), ax = fx - c, az = fz - w, d = r.dig, i = w * r.dcols + c;
-  if (!(d[i] | d[i + 1] | d[i + r.dcols] | d[i + r.dcols + 1])) return 0;
-  return ((d[i] * (1 - ax) + d[i + 1] * ax) * (1 - az) + (d[i + r.dcols] * (1 - ax) + d[i + r.dcols + 1] * ax) * az) / 255;
+  const c = Math.floor(fx), w = Math.floor(fz), ax = fx - c, az = fz - w;
+  const d0 = digCell(r, c, w), d1 = digCell(r, c + 1, w), d2 = digCell(r, c, w + 1), d3 = digCell(r, c + 1, w + 1);
+  if (!(d0 | d1 | d2 | d3)) return 0;
+  return ((d0 * (1 - ax) + d1 * ax) * (1 - az) + (d2 * (1 - ax) + d3 * ax) * az) / 255;
 }
 
 export function levelAt(r, x, z) {
@@ -210,33 +235,72 @@ export const inCore = (c, x, z) => x >= c.x0 && z >= c.z0 && x <= c.x0 + (c.size
 // from the smallest triangles up, each as the most any triangle inside it strays. Answers the bits for each tolerance.
 // A triangle `smallest` samples or less across its short sides is cut only where it strays `small` times the tolerance:
 // a bank or a street's edge, not every hummock of a lawn.
+// Worked out level by level over the grid's points rather than triangle by triangle from the root (several times
+// faster, the same bits): for s = 1, 2, 4 ..., first the long edges 2s long, each with the two triangles either side of
+// it (their halves' long edges end at the four points s/2 away diagonally), then the squares 2s a side, cut along the
+// diagonal that runs through the middle of the square each is a quarter of (their halves' long edges are its sides).
 export function splitsOf(c, tolerances, smallest = 1, small = 1) {
-  const size = c.size, max = size - 1, errors = new Float32Array(size * size);
-  const numTriangles = max * max * 2 - 2, numParents = numTriangles - max * max;
-  for (let i = numTriangles - 1; i >= 0; i--) {
-    let id = i + 2, ax = 0, az = 0, bx = 0, bz = 0, cx = 0, cz = 0;
-    if (id & 1) { bx = bz = cx = max; } else { ax = az = cz = max; }
-    while ((id >>= 1) > 1) {
-      const mx = (ax + bx) >> 1, mz = (az + bz) >> 1;
-      if (id & 1) { bx = ax; bz = az; ax = cx; az = cz; } else { ax = bx; az = bz; bx = cx; bz = cz; }
-      cx = mx; cz = mz;
+  const size = c.size, max = size - 1, errors = new Float32Array(size * size), cm = c.cm;
+  for (let s = 1; s < max; s <<= 1) {
+    const eased = 2 * s <= smallest, h = s >> 1, row = s * size, nz = h * size;
+    // the edges: middles at multiples of s with x/s + z/s odd, along x where x/s is odd
+    for (let z = 0; z <= max; z += s) {
+      const up = z - h >= 0, down = z + h <= max;
+      for (let x = (z / s) & 1 ? 0 : s; x <= max; x += 2 * s) {
+        const m = z * size + x, along = (x / s) & 1 ? s : row;
+        let e = Math.abs((cm[m - along] + cm[m + along]) * 0.005 - cm[m] * 0.01);
+        if (eased) e /= small;
+        if (h) {
+          const left = x - h >= 0, right = x + h <= max;
+          if (up && left && errors[m - nz - h] > e) e = errors[m - nz - h];
+          if (up && right && errors[m - nz + h] > e) e = errors[m - nz + h];
+          if (down && left && errors[m + nz - h] > e) e = errors[m + nz - h];
+          if (down && right && errors[m + nz + h] > e) e = errors[m + nz + h];
+        }
+        errors[m] = e;
+      }
     }
-    const m = ((az + bz) >> 1) * size + ((ax + bx) >> 1);
-    let err = Math.abs((c.cm[az * size + ax] + c.cm[bz * size + bx]) * 0.005 - c.cm[m] * 0.01);
-    if (Math.abs(ax - cx) + Math.abs(az - cz) <= smallest) err /= small;
-    let e = errors[m] > err ? errors[m] : err;
-    if (i < numParents) {
-      const l = errors[((az + cz) >> 1) * size + ((ax + cx) >> 1)], r = errors[((bz + cz) >> 1) * size + ((bx + cx) >> 1)];
-      if (l > e) e = l;
-      if (r > e) e = r;
+    // the squares: middles where x/s and z/s are both odd
+    for (let z = s; z < max; z += 2 * s) {
+      const pz = ((z - s) / (2 * s)) & 1 ? -1 : 1;
+      for (let x = s; x < max; x += 2 * s) {
+        const m = z * size + x, px = ((x - s) / (2 * s)) & 1 ? -1 : 1;
+        const corner = px * pz > 0 ? row + s : row - s; // (x ± s, z ± s) together, or the other two corners
+        let e = Math.abs((cm[m - corner] + cm[m + corner]) * 0.005 - cm[m] * 0.01);
+        if (eased) e /= small;
+        if (errors[m - s] > e) e = errors[m - s];
+        if (errors[m + s] > e) e = errors[m + s];
+        if (errors[m - row] > e) e = errors[m - row];
+        if (errors[m + row] > e) e = errors[m + row];
+        errors[m] = e;
+      }
     }
-    errors[m] = e;
   }
   return tolerances.map((tolerance) => {
     const split = new Uint8Array((size * size + 7) >> 3);
     for (let i = 0; i < errors.length; i++) if (errors[i] > tolerance) split[i >> 3] |= 1 << (i & 7);
     return split;
   });
+}
+
+// How far the coarser cut (`under`, bits from splitsOf at a larger tolerance) rises over the city's mesh, by the corners
+// of its triangles: a Map of grid index to the most any triangle at that corner stands above the fine one, so the
+// coarse ground lowered that much more stays under it everywhere. The fine mesh is the coarse one cut further, so the
+// most it lies under the coarse is at its own vertices: those the coarse cut hasn't got.
+export function underDrops(c, under) {
+  const size = c.size, coarse = { size, cm: c.cm, split: under }, leaf = new Int32Array(6), drops = new Map();
+  for (let i = 0; i < size * size; i++) {
+    if (!((c.split[i >> 3] >> (i & 7)) & 1) || ((under[i >> 3] >> (i & 7)) & 1)) continue;
+    const x = i % size, z = (i - x) / size;
+    leafOf(coarse, x, z, leaf);
+    const above = onPlane(coarse, leaf, x, z) - coreHeightAt(c, i);
+    if (!(above > 0)) continue;
+    for (let k = 0; k < 6; k += 2) {
+      const j = leaf[k + 1] * size + leaf[k];
+      if (!(drops.get(j) >= above)) drops.set(j, above);
+    }
+  }
+  return drops;
 }
 
 // The mesh's uncut triangles by these bits (splitsOf), as ax, az, bx, bz, cx, cz in samples, one after another
@@ -408,6 +472,6 @@ export function drapeLayer(g, layer, tolerance) {
 }
 
 // What the cutting depends on, as text, so a change to any of it makes the saved ground layers again (terrain.js)
-export const CORE_SOURCE = [baseHeight, digAt, levelAt, onDeck, riverbedOf, groundOf, tessellateLayer, drapeLayer,
+export const CORE_SOURCE = [baseHeight, digCell, digAt, levelAt, onDeck, riverbedOf, groundOf, tessellateLayer, drapeLayer,
   leafOf, onPlane, coreHeight, cutToGround, deckLift, indexLayer]
   .map((f) => f.toString()).join('\n');

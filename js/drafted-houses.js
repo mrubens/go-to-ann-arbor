@@ -1,5 +1,6 @@
 import { asset, log } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
+import { TIER } from './device-tier.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
 import { renderSpec } from './drafted/spec-render.js';
@@ -99,6 +100,41 @@ function merger(group) {
   return { gather, finish };
 }
 
+// the foundation under a house on a slope: plain gray stone, as the city's own houses' (one shared material)
+const FOUNDATION = new THREE.MeshStandardNodeMaterial({ color: 0x8b867d, roughness: 0.92 });
+
+// A mass's roof in the shape houses.js gives its own (controllers.js roofHeightAt): `a` along the ridge, `b` across
+// it, the eaves at `top` and the ridge `rh` over them. (ux, uz) is the draft's x in the game's frame, its z (uz, -ux).
+function roofOf(m, y, toGame, ux, uz) {
+  const r = m.roof, H = m.wall_h;
+  if (!r) return null;
+  const X = [ux, uz], Z = [uz, -ux];
+  const make = (sx, sz, a, ha, hb, top, rh, type, high = 0) => {
+    const [cx, cz] = toGame(sx, sz), b = a === X ? Z : X;
+    return { cx, cz, ax: a[0], az: a[1], bx: b[0], bz: b[1], ha, hb, top: y + top, rh: Math.max(0, rh), type, high };
+  };
+  const ea = r.eave_a ?? H, eb = r.eave_b ?? H, eave = (ea + eb) / 2, apex = r.apex ?? 0.5;
+  if (r.type === 'gable' && r.ridge === 'z') {
+    return make(m.x + apex * m.w, m.z + m.d / 2, Z, m.d / 2, Math.max(apex, 1 - apex) * m.w, eave, r.ridge_h - eave, 'gable');
+  }
+  if (r.type === 'gable') {
+    return make(m.x + m.w / 2, m.z + apex * m.d, X, m.w / 2, Math.max(apex, 1 - apex) * m.d, eave, r.ridge_h - eave, 'gable');
+  }
+  const midX = m.x + m.w / 2, midZ = m.z + m.d / 2;
+  if (r.type === 'hip') {
+    return m.w >= m.d ? make(midX, midZ, X, m.w / 2, m.d / 2, H, r.ridge_h - H, 'hip') : make(midX, midZ, Z, m.d / 2, m.w / 2, H, r.ridge_h - H, 'hip');
+  }
+  if (r.type === 'shed') {
+    // `high` is +1 where the high side is toward +b: across the draft's z for a front or back low side, its x else
+    const acrossZ = r.low === 'front' || r.low === 'back';
+    const high = r.low === 'front' || r.low === 'left' ? 1 : -1;
+    return acrossZ ? make(midX, midZ, X, m.w / 2, m.d / 2, H, (r.high_h ?? H) - H, 'shed', high)
+      : make(midX, midZ, Z, m.d / 2, m.w / 2, H, (r.high_h ?? H) - H, 'shed', high);
+  }
+  if (r.type === 'flat') return make(midX, midZ, X, m.w / 2, m.d / 2, H, 0, 'flat');
+  return null;
+}
+
 export async function buildDraftedHouses(group) {
   const colliders = [], yard = [], bytes = await asset('data/drafted-houses.json');
   const data = bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
@@ -117,21 +153,45 @@ export async function buildDraftedHouses(group) {
     try { model = renderSpec(h.spec, { yard: false }); } catch (e) { log?.(`drafted house ${h.address || h.id} could not be drawn: ${e.message}`); continue; }
     // the yard is the game's to draw; a hedge takes its house's outline along, to be kept out of it (drafted-yards.js)
     for (const item of h.yard || []) yard.push({ ...item, house: h.id, ...(item.kind === 'hedge' && h.ring ? { ring: h.ring } : {}) });
-    // houses stand on the highest ground under them, as the game's own do
-    const y = Math.max(groundHeight(cx, cz), ...h.ring.map(([x, z]) => groundHeight(x, z)));
+    // houses stand on the highest ground under them, as the game's own do, on a foundation down to the lowest (below)
+    const grounds = [groundHeight(cx, cz), ...h.ring.map(([x, z]) => groundHeight(x, z))];
+    const y = Math.max(...grounds), minG = Math.min(...grounds);
     model.position.set(h.x, y, h.z); model.rotation.y = h.rot;
+    // on a sloping lot the walls would stand clear of the ground at the low side: a stone foundation under each
+    // ground-floor part, from just below the lowest ground up to the floor (in the renderer's frame: x - cx, cz - z)
+    if (y - minG > 0.05) {
+      const mid = model.userData.center;
+      for (const m of h.spec.masses) {
+        if (m.open || (m.base_h || 0) > 0.05 || !mid) continue;
+        const depth = y - minG + 0.3;
+        const f = new THREE.Mesh(new THREE.BoxGeometry(m.w, depth, m.d), FOUNDATION);
+        f.position.set(m.x + m.w / 2 - mid.x, -depth / 2, mid.z - (m.z + m.d / 2));
+        f.receiveShadow = true;
+        model.add(f);
+      }
+    }
     gather(model); drawn++;
-    // what the car runs into is what is drawn: a box around each of the house's solid parts, not the mapped outline
+    // what the car runs into is what is drawn: a turned box around each of the house's solid parts (not the mapped
+    // outline), down to the lowest ground, with the shape of its roof for the helicopter to set down on (controllers.js)
     const { toGame } = placing(h);
+    const ux = Math.cos(h.rot), uz = -Math.sin(h.rot); // the draft's x (along its front) in the game's frame; its z is (uz, -ux)
     h.spec.masses.filter((m) => !m.open).forEach((m, i) => {
       const corners = [[m.x, m.z], [m.x + m.w, m.z], [m.x + m.w, m.z + m.d], [m.x, m.z + m.d]].map(([sx, sz]) => toGame(sx, sz));
+      const [mx, mz] = toGame(m.x + m.w / 2, m.z + m.d / 2);
       const c = { minX: Math.min(...corners.map((p) => p[0])), maxX: Math.max(...corners.map((p) => p[0])), minZ: Math.min(...corners.map((p) => p[1])), maxZ: Math.max(...corners.map((p) => p[1])),
-        minY: y, maxY: y + Math.max(m.wall_h, m.roof.ridge_h || 0, m.roof.high_h || 0), keepsSurvey: true };
+        minY: (m.base_h || 0) > 0.05 ? y + m.base_h : minG, maxY: y + Math.max(m.wall_h, m.roof.ridge_h || 0, m.roof.high_h || 0), keepsSurvey: true,
+        obb: { cx: mx, cz: mz, hx: m.w / 2, hz: m.d / 2, cs: Math.cos(h.rot), sn: Math.sin(h.rot) } };
+      const roof = roofOf(m, y, toGame, ux, uz);
+      if (roof) c.roofs = [roof];
       if (i === 0) c.replaces = b;
       colliders.push(c);
     });
   }
   const draws = finish();
+  // hidden where the survey's houses around them are let go (buildings.js streams them within TIER.stream), so they
+  // never stand alone on the horizon: the scene's culling scales this by farCut, hence the division
+  const reach = (TIER.stream || 1500) * (TIER.farCut < 1 ? 0.8 : 1);
+  for (const o of group.children) if (o.name === 'DraftedHouses') o.userData.cullDistance = reach / (TIER.farCut || 1);
   await hedgeDriveways(yard);
   const yardMade = buildDraftedYard(group, yard);
   group.userData.terrain = 'set';

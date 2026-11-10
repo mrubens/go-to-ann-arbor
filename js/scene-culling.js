@@ -257,7 +257,8 @@ function setupSceneCulling(scene, roots, shadow = null) {
     // Lamp: on the Xbox, a chunk of small props (its 1200 m square) by the distance to the nearest of its copies' box,
     // since its sphere's radius (~850 m) would keep it on far beyond its props' own distance: each kind of sign, lens
     // or drum then draws in the square or two near the player, not the three or four within a kilometre
-    const spread = XBOX && mesh.userData.spread && cullDist < 600 ? mesh.userData.spread : null;
+    // (every chunk with its copies' box: one with a longer distance was kept on by its sphere in squares far past it)
+    const spread = XBOX && mesh.userData.spread ? mesh.userData.spread : null;
     culled.push({
       box: spread, near: spread ? (cullDist + 8) ** 2 : 0,
       mesh,
@@ -272,26 +273,34 @@ function setupSceneCulling(scene, roots, shadow = null) {
   for (const root of roots) {
     root.traverse((o) => {
       if (!isStaticMesh(o)) return;
+      // (ground and houses streamed near the player are shown and hidden by their own streaming: houses.js, terrain.js)
       if (!o.isInstancedMesh) {
-        if (o.userData.cullDistance > 0) {
+        if (o.userData.cullDistance > 0 && !o.userData.streamed) {
           if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
           const sphere = o.geometry.boundingSphere.clone().applyMatrix4(o.matrixWorld);
           pushCulled(o, sphere, o.userData.cullDistance * TIER.farCut);
         }
         return;
       }
-      if (o.count < 32 || o.count !== o.instanceMatrix.count) return;
-      if (!o.userData.cullDistance && o.count * triangleCount(o.geometry) < 40000) return;
+      if (o.count !== o.instanceMatrix.count) return;
       if (!o.boundingSphere) o.computeBoundingSphere();
-      if (o.boundingSphere.radius < 1200) return;
-      chunkable.push(o);
+      const chunked = o.count >= 32 && (o.userData.cullDistance || o.count * triangleCount(o.geometry) >= 40000) && o.boundingSphere.radius >= 1200;
+      if (chunked) { chunkable.push(o); return; }
+      // too few copies or too close together to cut up (a garage's ribs, the goalposts, a rare kind of sign): hidden
+      // whole beyond its own distance, as a plain mesh is
+      if (o.userData.cullDistance > 0 && !o.userData.streamed) {
+        pushCulled(o, o.boundingSphere.clone().applyMatrix4(o.matrixWorld), o.userData.cullDistance * TIER.farCut);
+      }
     });
   }
   for (const mesh of chunkable) {
     // unlit (glowing) props, like signal lenses & lamp bulbs, read from much further away at night; a mesh may also
     // set its own (userData.cullDistance)
     const glow = mesh.material.isMeshBasicNodeMaterial || mesh.material.type === 'MeshBasicNodeMaterial' ? 3 : 1;
-    const cullDist = (mesh.userData.cullDistance ?? 0) * TIER.farCut || Math.max(CULL_MIN, instanceSize(mesh) * CULL_PER_METRE * glow);
+    // (on the Xbox the distance a prop's size gives is cut as the far things are, as a distance of its own is: a lamp
+    // post's ~1 km kept it on in squares well past the 600 m the ground and houses reach there)
+    const bySize = instanceSize(mesh) * CULL_PER_METRE * glow * (XBOX ? TIER.farCut : 1);
+    const cullDist = (mesh.userData.cullDistance ?? 0) * TIER.farCut || Math.max(CULL_MIN, bySize);
     if (cullDist > CULL_MAX) {
       largeMeshes.push(mesh);
       continue;

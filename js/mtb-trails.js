@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { asset, log } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
+import { splitByCell } from './merge-static.js';
 
 // Lamp: what's on Ann Arbor's mountain bike trails (data/mtb-trails.json, Assets/Tools/build-mtb-trails.py), the dirt
 // singletrack itself being drawn already with the town's other trails (golf.js buildTrails). Along each: rocks off its
@@ -142,10 +143,13 @@ function createMtbTrails(group, data) {
     geo.setIndex(bidx);
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide }));
+    // cut into 300 m squares (merge-static.js splitByCell), each hidden beyond its distance on its own: the trails
+    // run all over town, and one mesh of them all was never far enough off to be hidden
+    const mesh = new THREE.Mesh(geo.toNonIndexed(), new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide }));
+    geo.dispose();
     mesh.receiveShadow = true;
-    mesh.userData.cullDistance = 260;
     group.add(mesh);
+    for (const piece of splitByCell(mesh, 300)) piece.userData.cullDistance = 260;
   }
 
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sc = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();

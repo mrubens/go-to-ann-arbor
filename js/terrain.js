@@ -124,6 +124,7 @@ async function readRiver(g, url) {
     const r = { dx0, dz0, dstep, dcols, drows, dig, lx0, lz0, lstep, lcols, lrows, level, bridges: [], buckets: new Map() };
     carveCascades(r); // the Argo Cascades' channel, unbroken (cascades.js)
     joinUnderFootbridges(r);
+    packDig(r);
     buildDecks(g, r);
     console.log(`[terrain] the river's bed ${dcols} × ${drows} at ${dstep} m, ${r.bridges.length} bridges`);
     return r;
@@ -193,6 +194,29 @@ function joinUnderFootbridges(r) {
   if (r.gaps.length) console.log(`[terrain] the channel dug through under ${r.gaps.length} footbridges`);
 }
 
+// The dug cells kept only in the 64 × 64 blocks that have water (digAt, ground-core.js): the river covers a few
+// hundredths of its grid, so this keeps a few megabytes rather than the whole file's tens, which are let go
+function packDig(r) {
+  const B = 64, bcols = Math.ceil(r.dcols / B), brows = Math.ceil(r.drows / B);
+  const blocks = new Array(bcols * brows).fill(null), present = new Uint8Array(bcols * brows);
+  for (let bw = 0; bw < brows; bw++) for (let bc = 0; bc < bcols; bc++) {
+    let block = null;
+    for (let w = bw * B; w < Math.min(r.drows, bw * B + B); w++) {
+      const row = w * r.dcols;
+      for (let c = bc * B; c < Math.min(r.dcols, bc * B + B); c++) {
+        const v = r.dig[row + c];
+        if (v) (block ??= new Uint8Array(B * B))[(w - bw * B) * B + c - bc * B] = v;
+      }
+    }
+    blocks[bw * bcols + bc] = block;
+    present[bw * bcols + bc] = block ? 1 : 0;
+  }
+  r.dig = null;
+  r.digBlocks = blocks;
+  r.digPresent = present;
+  r.bcols = bcols;
+}
+
 // The water's surface over the channels dug under footbridges, as outlines like the map's water's ({x, z} rings)
 function riverGaps() {
   return grid?.river?.gaps || [];
@@ -245,7 +269,10 @@ function buildDecks(g, r) {
     });
     let H = S.map(([x, z], i) => {
       const h = ha + (hb - ha) * (L[i] / s);
-      return wet[i] ? Math.max(h, levelAt(r, x, z) + clear) : h;
+      // a footbridge clears the water as drawn: over the Argo Cascades' channel that's the channel's own pool, well above
+      // the river's level there (the railway beside it already clears both, so its deck is left as it was)
+      const lv = b.kind === 2 ? cascadeLevel(x, z, levelAt(r, x, z)) : levelAt(r, x, z);
+      return wet[i] ? Math.max(h, lv + clear) : h;
     });
     // eased into a gentle arch, its ends kept on the ground
     for (let pass = 0; pass < 6; pass++) {
@@ -783,9 +810,21 @@ function geometryOfLayer(layer) {
 }
 function packedAttribute(a) {
   const { name, array, itemSize } = a;
+  // plain loops: TypedArray.from with a callback is many times slower, on the main thread for every tile
   if (array instanceof Float32Array && (name === 'normal' || name === 'color')) {
-    if (name === 'normal') return new THREE.BufferAttribute(Int8Array.from(array, (v) => Math.round(Math.max(-1, Math.min(1, v)) * 127)), itemSize, true);
-    if (array.every((v) => v >= 0 && v <= 1)) return new THREE.BufferAttribute(Uint8Array.from(array, (v) => Math.round(v * 255)), itemSize, true);
+    const n = array.length;
+    if (name === 'normal') {
+      const out = new Int8Array(n);
+      for (let i = 0; i < n; i++) { const v = array[i]; out[i] = Math.round((v < -1 ? -1 : v > 1 ? 1 : v) * 127); }
+      return new THREE.BufferAttribute(out, itemSize, true);
+    }
+    let unit = true;
+    for (let i = 0; i < n && unit; i++) { const v = array[i]; unit = v >= 0 && v <= 1; }
+    if (unit) {
+      const out = new Uint8Array(n);
+      for (let i = 0; i < n; i++) out[i] = Math.round(array[i] * 255);
+      return new THREE.BufferAttribute(out, itemSize, true);
+    }
   }
   return new THREE.BufferAttribute(array, itemSize, a.normalized);
 }
@@ -890,17 +929,20 @@ const textBytes = (text) => new TextEncoder().encode(text);
 // The heights' data a worker needs (ground-core.js) and its fingerprint, with the cutting's own code in it, so a change
 // to the ground or to how it's cut makes every saved layer again
 const groundData = new WeakMap();
+// (without the heights, the city stays flat: nothing is cut, and its tiles are kept under a key of their own)
+const FLAT_GROUND = { ground: null, key: 'flat' };
 function groundOfGrid(g) {
+  if (!g) return FLAT_GROUND;
   if (!groundData.has(g)) {
     const r = g.river;
     const c = g.core;
     // on the city's mesh a worker needs only it and the bridges' decks
     const ground = c ? { core: c, river: r && { buckets: r.buckets } } : { x0: g.x0, z0: g.z0, step: g.step, cols: g.cols, rows: g.rows, heights: g.heights, river: r && {
-      dx0: r.dx0, dz0: r.dz0, dstep: r.dstep, dcols: r.dcols, drows: r.drows, dig: r.dig.slice(),
+      dx0: r.dx0, dz0: r.dz0, dstep: r.dstep, dcols: r.dcols, drows: r.drows, digBlocks: r.digBlocks, bcols: r.bcols,
       lx0: r.lx0, lz0: r.lz0, lstep: r.lstep, lcols: r.lcols, lrows: r.lrows, level: r.level, buckets: r.buckets
     } };
     const decks = r ? JSON.stringify(r.bridges) : '';
-    const key = fingerprint([g.heights, ...(c ? [c.cm, c.split] : []), ...(r ? [r.dig, r.level] : []),
+    const key = fingerprint([g.heights, ...(c ? [c.cm, c.split] : []), ...(r ? [r.digPresent, ...r.digBlocks.filter(Boolean), r.level] : []),
       textBytes(`${g.x0} ${g.z0} ${g.step} ${g.cols} ${g.rows} ${r ? [r.dx0, r.dz0, r.dstep, r.dcols, r.lx0, r.lz0, r.lstep, r.lcols].join(' ') : ''}`),
       textBytes(decks), textBytes(CORE_SOURCE)]);
     groundData.set(g, { ground, key });
@@ -972,7 +1014,7 @@ async function cutOnCores(ground, jobs, most = 8) {
       sum += w[t];
       if (sum >= share || t === w.length - 1) {
         const a = from * 3, b = (t + 1) * 3;
-        pieces.push({ job: j, tolerance: job.tolerance, count: b - a,
+        pieces.push({ job: j, tolerance: job.tolerance, count: b - a, from: a,
           attrs: job.layer.attrs.map((x) => ({ ...x, array: x.array.slice(a * x.itemSize, b * x.itemSize) })) });
         from = t + 1; sum = 0;
       }
@@ -980,8 +1022,17 @@ async function cutOnCores(ground, jobs, most = 8) {
   });
   const batches = Array.from({ length: Math.min(cores, pieces.length) }, () => []);
   pieces.forEach((p, i) => batches[i % batches.length].push(p));
+  // A worker that fails (it couldn't start, or ran out of memory) has its share cut here instead, from fresh copies of
+  // the pieces (their own arrays went to the worker), so the start goes on rather than stopping or waiting for it
   const answers = await Promise.all(batches.map((batch) => work('js/drape-worker.js', { ground, pieces: batch },
-    batch.flatMap((p) => p.attrs.map((a) => a.array.buffer)))));
+    batch.flatMap((p) => p.attrs.map((a) => a.array.buffer))).catch((error) => {
+    log(`[drape] a worker failed, its share cut here: ${error?.message || error}`);
+    return { results: batch.map((p) => {
+      const layer = jobs[p.job].layer;
+      const piece = { count: p.count, attrs: layer.attrs.map((x) => ({ ...x, array: x.array.slice(p.from * x.itemSize, (p.from + p.count) * x.itemSize) })) };
+      return drapeLayer(ground, piece, p.tolerance);
+    }) };
+  })));
   // Each job's pieces, back in their order
   const parts = jobs.map(() => []);
   batches.forEach((batch, b) => batch.forEach((p, i) => parts[p.job].push([pieces.indexOf(p), answers[b].results[i]])));
@@ -1086,13 +1137,32 @@ async function readTiles(names) {
     return await Promise.all(names.map((k) => asked(store.get(k))));
   } catch { return names.map(() => undefined); }
 }
+// (answers whether they're safely in the database)
 async function writeTiles(made) {
+  const db = await tileDatabase();
+  if (!db) return false;
+  try {
+    const t = db.transaction('tiles', 'readwrite'), store = t.objectStore('tiles');
+    for (const [k, layer] of made) store.put(layer, k);
+    return await new Promise((done) => { t.oncomplete = () => done(true); t.onerror = t.onabort = () => done(false); });
+  } catch (error) { log(`[stream] not saved: ${error?.message || error}`); return false; }
+}
+
+// A whole layer's tile kept flat is let go once its cut is in the database (it's read back from there whenever it's
+// wanted again): about a hundred megabytes for the whole town. This marks it.
+const SAVED = 'saved';
+// The tiles of a layer an earlier play already cut and saved, let go of flat at once
+async function forgetSavedFlats(layer) {
   const db = await tileDatabase();
   if (!db) return;
   try {
-    const store = db.transaction('tiles', 'readwrite').objectStore('tiles');
-    for (const [k, layer] of made) store.put(layer, k);
-  } catch (error) { log(`[stream] not saved: ${error?.message || error}`); }
+    const store = db.transaction('tiles').objectStore('tiles');
+    const names = await asked(store.getAllKeys(IDBKeyRange.bound(`${layer.key}/`, `${layer.key}/\uffff`)));
+    for (const name of names || []) {
+      const k = Number(String(name).slice(layer.key.length + 1));
+      if (layer.flat.get(k)) layer.flat.set(k, SAVED);
+    }
+  } catch {}
 }
 
 // Takes a ground layer's job (setOnTerrain) to stream: a group in the mesh's place, filled with its tiles near (x, z)
@@ -1106,6 +1176,7 @@ function streamLayer(part, job, groundKey) {
     frustumCulled: job.instances ? true : obj.frustumCulled, mask: job.instances ? 1 : obj.layers.mask };
   const layer = { part, key, tolerance: job.tolerance, group, look, flat, built: new Map(), away: 0 };
   stream.layers.push(layer);
+  forgetSavedFlats(layer);
   return layer;
 }
 
@@ -1125,7 +1196,7 @@ function streamFromSquares(part, { name, key, squares, make, look, tolerance = 0
 // Draws a part's streamed layers near the player now, before the part is shown
 function streamNear(layers) {
   if (layers.length) forgetOldTiles(layers[0].part, layers.map((layer) => layer.key));
-  return buildTiles(wantedTiles(stream.x, stream.z, layers));
+  return buildTiles(wantedTiles(stream.x, stream.z, layers), true);
 }
 
 // The tiles wanted near (x, z) and not drawn, nearest first, as [layer, tile key]
@@ -1141,33 +1212,54 @@ function wantedTiles(x, z, layers = stream.layers) {
   return want.sort((a, b) => a[0] - b[0]).map(([, layer, k]) => [layer, k]);
 }
 
-// Draws these tiles: read back or cut on several cores, then saved
-async function buildTiles(list) {
+// Draws these tiles: read back or cut on several cores, then saved. At the start (`now`) they go straight in, so the
+// ground near the player is in the scene, uploaded and compiled behind the loading screen; while playing on a device
+// that spreads its loads they're put in one a frame (putStreamedGround).
+async function buildTiles(list, now = false) {
   const { ground } = groundOfGrid(grid);
   const names = list.map(([layer, k]) => `${layer.key}/${k}`);
   const saved = await readTiles(names);
   let missing = list.map((item, i) => [item, i]).filter(([, i]) => !saved[i]);
   // a layer made square by square makes its tile now: flat, in its tiles as a whole layer's are, this one kept
-  // (a tile with nothing of it is saved empty, so it isn't made again)
+  // (a tile with nothing of it is saved empty, so it isn't made again; one whose file couldn't be read is left out,
+  // neither saved nor drawn, and asked for again a little later: updateGroundStreaming)
+  const FAILED = 0;
   const flats = await Promise.all(missing.map(async ([[layer, k]]) => {
-    if (!layer.make) return layer.flat.get(k);
-    const geo = await layer.make(k);
-    if (!geo?.attributes.position?.count) return null;
-    return tilesOfLayer(splitLong(layerOfGeometry(geo)), STREAM_TILE, true).get(k) || null;
+    if (!layer.make) {
+      const flat = layer.flat.get(k);
+      if (flat !== SAVED) return flat;
+      // let go as saved, but not found there now: asked again a little later
+      log(`[stream] ${layer.group.name} ${k}: its saved tile is missing`);
+      stream.retryAt = performance.now() + 4000;
+      return FAILED;
+    }
+    try {
+      const geo = await layer.make(k);
+      if (!geo?.attributes.position?.count) return null;
+      return tilesOfLayer(splitLong(layerOfGeometry(geo)), STREAM_TILE, true).get(k) || null;
+    } catch (error) {
+      log(`[stream] ${layer.group.name} ${k}: ${error?.message || error}`);
+      stream.retryAt = performance.now() + 4000;
+      return FAILED;
+    }
   }));
-  missing.forEach(([, i], n) => { if (!flats[n]) saved[i] = { count: 0, attrs: [] }; });
-  const empty = missing.filter((_, n) => !flats[n]);
+  missing.forEach(([, i], n) => { if (flats[n] === null || flats[n] === undefined) saved[i] = { count: 0, attrs: [] }; });
+  const empty = missing.filter((_, n) => flats[n] === null || flats[n] === undefined);
   if (empty.length) writeTiles(empty.map(([, i]) => [names[i], saved[i]]));
   const toCut = flats.filter(Boolean);
   missing = missing.filter((_, n) => flats[n]);
   if (missing.length) {
-    const cut = await cutOnCores(ground, toCut.map((flat, n) => ({ layer: flat, tolerance: missing[n][0][0].tolerance })), 3);
+    // (flat, without the heights: drawn as made)
+    const cut = ground ? await cutOnCores(ground, toCut.map((flat, n) => ({ layer: flat, tolerance: missing[n][0][0].tolerance })), 3) : toCut;
     missing.forEach(([, i], n) => { saved[i] = cut[n]; });
-    writeTiles(missing.map(([, i]) => [names[i], saved[i]]));
+    const kept = missing.map(([[layer, k]]) => [layer, k]);
+    writeTiles(missing.map(([, i]) => [names[i], saved[i]])).then((done) => {
+      if (done) for (const [layer, k] of kept) if (!layer.make && layer.flat.get(k)) layer.flat.set(k, SAVED);
+    });
     stream.cut += missing.length;
   }
   list.forEach(([layer, k], i) => {
-    if (layer.built.has(k)) return;
+    if (layer.built.has(k) || !saved[i]) return;
     if (!saved[i].count) { layer.built.set(k, null); return; }
     const { look } = layer;
     const mesh = new THREE.Mesh(geometryOfLayer(saved[i]), look.material);
@@ -1185,10 +1277,18 @@ async function buildTiles(list) {
       layer.group.add(mesh);
       mesh.updateMatrixWorld(true);
     };
-    // Lamp: on the Xbox one a frame (updateGroundStreaming), so a batch's uploads don't all land on one frame
-    if (TIER.spreadLoads) (stream.pending ||= []).push(put); else put();
+    // Lamp: on the Xbox one a frame (putStreamedGround), so a batch's uploads don't all land on one frame
+    if (TIER.spreadLoads && !now) (stream.pending ||= []).push(put); else put();
   });
   return missing.length;
+}
+
+// Puts the next streamed tile waiting into the scene: called every frame, apart from the scan for what to build
+// (updateGroundStreaming), which a device short of processor runs less often. Answers whether one went in.
+function putStreamedGround() {
+  if (!stream.pending?.length) return false;
+  stream.pending.shift()();
+  return true;
 }
 
 // Every frame: the tiles the player has come near are drawn (a few at a time, one batch in hand), and those left more
@@ -1217,14 +1317,18 @@ function updateGroundStreaming(x, z, x2 = NaN, z2 = NaN) {
   const before = stream.layers.length;
   stream.layers = stream.layers.filter((layer) => layer.away < 600);
   if (stream.layers.length < before) log(`[stream] let go of ${before - stream.layers.length} layers no longer drawn`);
-  if (stream.pending?.length) { stream.pending.shift()(); changed = true; }
-  if (!stream.busy && !(stream.pending?.length > BATCH)) {
+  if (putStreamedGround()) changed = true;
+  // (after a tile that couldn't be made or cut, a few seconds' wait before asking again, not a try every frame)
+  if (!stream.busy && !(stream.pending?.length > BATCH) && !(performance.now() < (stream.retryAt || 0))) {
     const layers = stream.layers.filter((layer) => !layer.away);
     let want = wantedTiles(x, z, layers).slice(0, BATCH);
     if (two && want.length < BATCH) want = want.concat(wantedTiles(x2, z2, layers).filter(([l, k]) => !want.some(([l2, k2]) => l2 === l && k2 === k)).slice(0, BATCH - want.length));
     if (want.length) {
       stream.busy = true;
-      buildTiles(want).catch((error) => log(`[stream] ${error?.message || error}`)).finally(() => { stream.busy = false; });
+      buildTiles(want).catch((error) => {
+        log(`[stream] ${error?.message || error}`);
+        stream.retryAt = performance.now() + 4000;
+      }).finally(() => { stream.busy = false; });
     }
   }
   return changed;
@@ -1236,9 +1340,10 @@ function groundStreamBytes(byLayer = null) {
   for (const layer of stream.layers) {
     if (layer.away) continue;
     let b = 0;
-    for (const t of layer.flat.values()) if (t) for (const a of t.attrs) b += a.array.byteLength;
+    let names = '';
+    for (const t of layer.flat.values()) if (t?.attrs) { for (const a of t.attrs) b += a.array.byteLength; names ||= t.attrs.map((a) => a.name).join('/'); }
     bytes += b;
-    if (byLayer && b) byLayer.push([`${layer.group.name}(${layer.flat.values().next().value?.attrs.map((a) => a.name).join('/')})`, b]);
+    if (byLayer && b) byLayer.push([`${layer.group.name}(${names})`, b]);
   }
   return bytes;
 }
@@ -1354,7 +1459,7 @@ function setOnTerrain(root, tolerance = 0.16) {
     jobs.length = 0;
     jobs.push(...rest);
     const near = wantedTiles(stream.x, stream.z, layers);
-    return Promise.all([rest.length ? drapeLayers(root.name, rest) : 0, buildTiles(near)]).then(([cut, cutTiles]) => {
+    return Promise.all([rest.length ? drapeLayers(root.name, rest) : 0, buildTiles(near, true)]).then(([cut, cutTiles]) => {
       finish();
       log(`[drape] ${root.name}: ${rest.length} layers (${cut} cut), ${layers.length} streamed: ${near.length} tiles within ${stream.radius} m (${cutTiles} cut), in ${Math.round(performance.now() - began)} ms`);
     });
@@ -1383,5 +1488,5 @@ export {
   drawOver, cityGround,
   loadTerrain, setPools, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
   tessellate, drapeGeometry, liftGeometry, liftInstances, setOnTerrain,
-  streamGround, updateGroundStreaming, groundStreamStats, groundStreamCenter, groundStreamBytes, streamFromSquares, streamNear
+  streamGround, updateGroundStreaming, putStreamedGround, groundStreamStats, groundStreamCenter, groundStreamBytes, streamFromSquares, streamNear
 };

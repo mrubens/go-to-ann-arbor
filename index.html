@@ -66,6 +66,23 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
   <link rel="modulepreload" href="./js/audio-acoustics.js" />
   <link rel="modulepreload" href="./js/audio-system.js" />
   <link rel="modulepreload" href="./js/main.js" />
+  <script>
+    // A script or the city's data that didn't come, or a browser too old for them, stops the game before its code
+    // runs (main.js says it has): the loading screen says so rather than sweeping on
+    (() => {
+      const failed = (e) => {
+        if (window.cityCodeLoaded) return;
+        if (e.type === 'error' && e.target && e.target !== window && e.target.tagName !== 'SCRIPT') return;
+        console.error(e.error || e.reason || e.message || e);
+        const status = document.getElementById('loading-status');
+        if (status) status.textContent = 'The city couldn\'t load. Close Go To Ann Arbor and open it again.';
+        const track = document.querySelector('#loading-overlay .loader-track');
+        if (track) track.style.visibility = 'hidden';
+      };
+      addEventListener('error', failed, true);
+      addEventListener('unhandledrejection', failed);
+    })();
+  </script>
   <script type="module" src="./js/main.js"></script>
   <link rel="stylesheet" href="./css/style.css?v=20261031-titlebar" />
 </head>
@@ -440,7 +457,7 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of Go To Ann Arbor with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"337e35cd2e4808db26b904ddc0090db4767469c2","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"9727c6ae3dd9d39efb512d10e6808717f74db125","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');

@@ -67,17 +67,28 @@ const obbOf = (ax, az, bx, bz, t, inset, minY, maxY) => {
   return { minX: cx - ex, maxX: cx + ex, minZ: cz - ez, maxZ: cz + ez, minY, maxY, obb: { cx, cz, hx, hz, cs, sn }, thin: true, keepsSurvey: true };
 };
 
+// a wall's box solid to everything, as a building's is: not `thin` as a post or a deck's railing is
+const solid = (c) => { delete c.thin; return c; };
+
 // the survey's buildings this structure stands in: each whose middle is inside its outline
 function surveyed(poly, minX, maxX, minZ, maxZ) {
+  // by the area they share, on a 1.5 m grid: a block the structure stands in is one more than half inside its outline,
+  // or one that covers more than half the outline (a block drawn bigger than the structure). Not by the block's
+  // middle, which misses one cut across by the outline and keeps one that pokes in a long way.
+  const STEP = 1.5;
+  let outline = 0;
+  for (let x = minX + STEP / 2; x < maxX; x += STEP) for (let z = minZ + STEP / 2; z < maxZ; z += STEP) if (polygonContains(poly, x, z)) outline++;
   const out = [];
   for (const b of REAL_BUILDINGS) {
     if (b.maxX < minX || b.minX > maxX || b.maxZ < minZ || b.minZ > maxZ) continue;
-    const ring = b.polygons[0]?.outer;
-    if (!ring?.length) continue;
-    let x = 0, z = 0;
-    for (const p of ring) { x += p.x; z += p.z; }
-    x /= ring.length; z /= ring.length;
-    if (polygonContains(poly, x, z)) out.push(b);
+    if (!b.polygons[0]?.outer?.length) continue;
+    let area = 0, shared = 0;
+    for (let x = b.minX + STEP / 2; x < b.maxX; x += STEP) for (let z = b.minZ + STEP / 2; z < b.maxZ; z += STEP) {
+      if (!b.polygons.some((p) => polygonContains(p, x, z))) continue;
+      area++;
+      if (polygonContains(poly, x, z)) shared++;
+    }
+    if (shared && (shared > area * 0.5 || shared > outline * 0.5)) out.push(b);
   }
   return out;
 }
@@ -190,7 +201,8 @@ function createParkingStructures(group, data) {
       body.push(painted(slabBox(uA, uB, gLow - 0.3, wallTop, v - 0.12, v + 0.12), PAINT.wall));
       body.push(painted(slabBox(uA - 0.05, uB + 0.05, wallTop, wallTop + 0.07, v - 0.18, v + 0.18), PAINT.cap));
       const [ax, az] = W(uA, v), [bx, bz] = W(uB, v);
-      colliders.push(obbOf(ax, az, bx, bz, 0.3, 0, gLow - 1, wallTop));
+      // (solid, not thin: the helicopter, the camera and a car rolling on its own don't go through a wall floors high)
+      colliders.push(solid(obbOf(ax, az, bx, bz, 0.3, 0, gLow - 1, wallTop)));
       // light poles along the walls' tops over the roof, a head leaning out each side
       for (let u = uA + 4; u < uB - 2; u += 12) {
         body.push(painted(slabBox(u - 0.24, u + 0.24, wallTop + 0.07, wallTop + 0.6, v - 0.24, v + 0.24), PAINT.cap));
@@ -206,7 +218,7 @@ function createParkingStructures(group, data) {
     body.push(painted(slabBox(uA - 0.12, uA + 0.12, roofY - SLAB, wallTop, v0, v1), PAINT.wall));
     for (const [u, y0, y1] of [[uB, gLow - 1, deckY(1) - 0.3], [uA, roofY - SLAB, wallTop]]) {
       const [ax, az] = W(u, v0), [bx, bz] = W(u, v1);
-      colliders.push(obbOf(ax, az, bx, bz, 0.3, 0, y0, y1));
+      colliders.push(solid(obbOf(ax, az, bx, bz, 0.3, 0, y0, y1)));
     }
     for (const p of body) parts.push(p.applyMatrix4(frame));
     // round the outline: columns from the ground to the roof's spandrel, the spandrels and their caps on every deck
@@ -282,7 +294,7 @@ function createParkingStructures(group, data) {
       const xs = corners.map((p) => p[0]), zs = corners.map((p) => p[1]);
       const [tx, tz] = W(u, v);
       colliders.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs), minY: g, maxY: top + 0.25,
-        obb: { cx: tx, cz: tz, hx: h, hz: h, cs: ux, sn: -uz }, thin: true, keepsSurvey: true });
+        obb: { cx: tx, cz: tz, hx: h, hz: h, cs: ux, sn: -uz }, keepsSurvey: true }); // (solid: a tower, roofed)
     }
     // one corner of the roof rises gently over the railing: the open corner (clear of the bay and the tower) with the
     // longest walls, the deck swelling across it from flat BANK.reach in to over the cap, so a car run into it rides up and off
@@ -362,7 +374,7 @@ function createParkingStructures(group, data) {
     mesh.castShadow = mesh.receiveShadow = true;
     built.push(mesh);
     // the survey's blocks it stands in are left out (buildings.js), each named by one of its colliders
-    blocks.forEach((b, i) => { if (colliders[first + i]) colliders[first + i].replaces = b; });
+    if (colliders[first] && blocks.length) colliders[first].replaces = blocks;
     footprints.push({ minX, maxX, minZ, maxZ });
 
     // the stalls on every floor: lines between them, wheel stops at their noses, and about three in ten taken
