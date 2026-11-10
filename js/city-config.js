@@ -381,7 +381,7 @@ function getLocationLabel(x, z, prefer = null) {
   for (const l of LANDMARKS) {
     if (l.art) continue;
     const d = Math.hypot(x - l.x, z - l.z);
-    if (d < markD) { mark = l; markD = d; }
+    if (d < markD && d < (l.reach || 90)) { mark = l; markD = d; }
   }
   if (mark) {
     const near = nearestRoads(x, z, 120);

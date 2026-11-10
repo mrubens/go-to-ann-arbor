@@ -24,6 +24,8 @@ class TouchControls {
     this.onAvailabilityChange = null;
     this.onGetInOut = null; // (main.js) the tap button: get in or out
     this.getInOut = this.root?.querySelector('[data-touch-tap="getinout"]') ?? null;
+    this.onHorn = null; // (main.js) the horn, one honk a tap, shown only while driving a car
+    this.horn = this.root?.querySelector('[data-touch-tap="horn"]') ?? null;
 
     if (!this.root || !this.stick || !this.knob) return;
 
@@ -70,6 +72,19 @@ class TouchControls {
       event.stopPropagation();
       this.onGetInOut?.();
     });
+
+    if (this.horn) {
+      this.horn.addEventListener('pointerdown', (event) => {
+        if (!this.canInteract() || this.horn.hidden || event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.horn.classList.add('is-pressed');
+        this.onHorn?.();
+      });
+      for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+        this.horn.addEventListener(type, () => this.horn.classList.remove('is-pressed'));
+      }
+    }
 
     window.addEventListener('blur', () => this.reset());
     window.addEventListener('resize', () => this.reset());
@@ -123,6 +138,7 @@ class TouchControls {
       this.getInOut.hidden = false;
       this.setGetOutWords(mode === 'person' ? 'Get in' : 'Get out');
     }
+    if (this.horn) this.horn.hidden = mode !== 'car';
     const labels = { up: mode === 'helicopter' ? 'Ascend' : mode === 'car' ? 'Handbrake' : 'Jump', down: 'Descend' };
     for (const button of this.buttons) {
       const action = button.getAttribute('data-touch-action');
@@ -181,6 +197,7 @@ class TouchControls {
   reset() {
     this.releaseStick(this.stickPointer);
     for (const pointerId of this.buttonPointers.keys()) this.releaseButton(pointerId);
+    this.horn?.classList.remove('is-pressed');
     for (const button of this.buttons) {
       button.classList.remove('is-pressed');
       button.setAttribute('aria-pressed', 'false');

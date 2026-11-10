@@ -298,6 +298,21 @@ function buildAnimals(group) {
         threats.push({ x: c.x, y: c.y ?? groundHeight(c.x, c.z), z: c.z, vx: (c.tx || 0) * sp + (c.vx || 0), vz: (c.tz || 0) * sp + (c.vz || 0), speed: sp, r: c.bus ? 6.5 : 2.5, loud: sp > 2, air: false });
       }
     }
+    // the trains on the tracks: each car of one moving near the camera, as big as the car is long (one standing at
+    // the platform or the end of the line is no more a threat than a parked car)
+    for (const t of ctx.trains || []) {
+      const sp = Math.abs(t.v || 0);
+      if (sp < 0.3 || t.waiting > 0) continue;
+      for (const car of t.cars) {
+        const m = car.mesh;
+        if (!m.visible) continue;
+        const p = m.position;
+        if ((p.x - cx) ** 2 + (p.z - cz) ** 2 > 260 * 260) continue;
+        // the car faces the way the line runs (s increasing); the train goes along it by its dir
+        const h = m.rotation.y, k = (t.dir || 1) * sp;
+        threats.push({ x: p.x, y: p.y, z: p.z, vx: Math.sin(h) * k, vz: Math.cos(h) * k, speed: sp, r: car.L * 0.45, loud: sp > 1, air: false });
+      }
+    }
     // the kayaks and tubes on the river
     for (const q of ctx.paddlers || []) {
       if ((q.x - cx) ** 2 + (q.z - cz) ** 2 > 200 * 200 || q.heading == null) continue;

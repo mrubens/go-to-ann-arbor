@@ -123,6 +123,8 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
       <symbol id="i-locate" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.4"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><path d="M12 2.5v3.1M12 18.4v3.1M2.5 12h3.1M18.4 12h3.1"/></symbol>
       <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m20 20-4.6-4.6"/></symbol>
+      <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M3.5 16.5a8.5 8.5 0 1 1 17 0"/><path d="M12 16.5l4.2-5.2"/><circle cx="12" cy="16.5" r="1.4"/><path d="M6.4 11.2l1 .8M12 7.5v1.3M17.6 11.2l-1 .8"/></symbol>
+      <symbol id="i-horn" viewBox="0 0 24 24"><circle cx="9.5" cy="12" r="6.5"/><circle cx="9.5" cy="12" r="1.8"/><path d="M3 12h4.7M11.3 12H16M9.5 13.8v4.7"/><path d="M18.6 8.6a5 5 0 0 1 0 6.8M21 6.4a8.2 8.2 0 0 1 0 11.2"/></symbol>
       <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9"/><path d="M4.5 4.5V9H9"/></symbol>
       <symbol id="i-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="4.4" fill="currentColor" stroke="none"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="m6.5 6.5 11 11M17.5 6.5l-11 11"/></symbol>
@@ -190,6 +192,9 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
       <button id="btn-sound" class="tool-btn icon-only" type="button" title="Mute sound [N]" aria-label="Mute sound" aria-pressed="true">
         <svg class="icon" aria-hidden="true"><use href="#i-sound"/></svg>
       </button>
+      <button id="btn-quality" class="tool-btn icon-only" type="button" popovertarget="quality-popover" title="Quality" aria-label="Quality" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-gauge"/></svg>
+      </button>
       <button id="btn-reset" class="tool-btn icon-only" type="button" popovertarget="reset-popover" title="Reset game" aria-label="Reset game">
         <svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg>
       </button>
@@ -203,6 +208,14 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
   <div id="reset-popover" class="popover" popover data-side="below" data-anchor="hud-toolbar" aria-label="Reset game">
     <div class="pop-title">Start over?</div>
     <button id="reset-confirm" class="pop-item" type="button"><span class="pop-name">Reset game</span><span class="pop-sub">Your car, bike, kayak and helicopter go back to the start</span></button>
+  </div>
+
+  <!-- Quality: the city this computer is given (device-tier.js), chosen here over the automatic choice; on a reload -->
+  <div id="quality-popover" class="popover" popover data-side="below" data-anchor="hud-toolbar" aria-label="Quality">
+    <div class="pop-title">Quality</div>
+    <button class="pop-item tp-btn" data-quality="auto" type="button" aria-pressed="false"><span class="pop-name">Automatic</span><span class="pop-sub">Chosen for this computer</span></button>
+    <button class="pop-item tp-btn" data-quality="full" type="button" aria-pressed="false"><span class="pop-name">Full</span><span class="pop-sub">The whole look, the city built farthest out</span></button>
+    <button class="pop-item tp-btn" data-quality="lighter" type="button" aria-pressed="false"><span class="pop-name">Lighter</span><span class="pop-sub">No sun shadows or glow, fewer cars, a nearer city</span></button>
   </div>
 
   <!-- Teleport Destinations (native popover: light-dismiss & Esc) -->
@@ -352,6 +365,9 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
       <button class="touch-action" data-touch-action="down" type="button" aria-label="Descend" aria-pressed="false" hidden>
         <svg class="icon" data-touch-icon="down" aria-hidden="true"><use href="#i-descend"/></svg>
       </button>
+      <button class="touch-action" data-touch-tap="horn" type="button" aria-label="Horn" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-horn"/></svg>
+      </button>
       <button class="touch-action" data-touch-tap="getinout" type="button" aria-label="Get in" hidden>
         <svg class="icon" data-touch-icon="getinout" aria-hidden="true"><use href="#i-get-in"/></svg>
       </button>
@@ -457,7 +473,7 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of Go To Ann Arbor with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"f493fd32755447d835c96758c80e4b2f1538ac30","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"09c39235dc77a6ca14dd6bed170015d141b539a7","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');

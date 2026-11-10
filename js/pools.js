@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { positionWorld, attribute, mx_noise_float, smoothstep, mix, float, vec3, abs, fract, max, min, time } from 'three/tsl';
+import { positionWorld, attribute, mx_noise_float, smoothstep, mix, float, vec3, abs, fract, max, min, time, exp, uniform } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { asset, log } from '../lamp-game.js';
 import { groundHeight, GROUND_ORDER } from './terrain.js';
@@ -18,6 +18,22 @@ import { splitByCell } from './merge-static.js';
 // and a swimmer climbs out the same way.
 
 const BUCKET = 32;
+
+// Outdoor pools are filled for the summer only: from the Saturday of Memorial Day weekend through Labor Day (the city's
+// pools' season; the backyard ones go with it). Out of season they stand drained: no water to swim in or splash into,
+// the dry basin with no caustics or blue of depth, the lane ropes taken in. Judged by Ann Arbor's date
+// (`setSeason`, at start and again by main.js when the date changes).
+const filled = uniform(1);
+function inSeason(ymd) {
+  const [y, mo, d] = ymd.split('-').map(Number);
+  const day = Date.UTC(y, mo - 1, d);
+  const may31 = new Date(Date.UTC(y, 4, 31));
+  const memorial = Date.UTC(y, 4, 31 - ((may31.getUTCDay() + 6) % 7)); // the last Monday in May
+  const sep1 = new Date(Date.UTC(y, 8, 1));
+  const labor = Date.UTC(y, 8, 1 + ((8 - sep1.getUTCDay()) % 7)); // the first Monday in September
+  return day >= memorial - 2 * 86400e3 && day <= labor;
+}
+const annArborDay = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Detroit' });
 const COPING = 0.38; // the coping's width round the water
 const LIP = 0.07; // its top over the water
 const DECK = 2.6; // a big pool's concrete deck beyond the coping
@@ -67,7 +83,9 @@ function waterMaterial() {
   const deep = attribute('deep', 'float'); // 0 at the shallow end, 1 at the deep end
   const c1 = mx_noise_float(vec3(p.x.mul(1.3), p.y.mul(1.3), time.mul(0.45)));
   // clear water over the tiled basin: pale at the shallow end, a deeper blue and less see-through where it's deep
-  m.colorNode = mix(vec3(0.3, 0.78, 0.86), vec3(0.04, 0.38, 0.6), deep);
+  // (its own colour, lit, is a thin veil: kept dim, so in sunlight the water isn't a white sheet; the basin's tint is
+  // the light the water took out on the way down, absorbed())
+  m.colorNode = mix(vec3(0.12, 0.45, 0.52), vec3(0.02, 0.2, 0.36), deep);
   m.opacityNode = mix(float(0.34), float(0.62), deep);
   m.roughnessNode = float(0.03);
   m.metalnessNode = float(0.0);
@@ -92,6 +110,12 @@ const grout = (a, b, size) => max(
   smoothstep(0.42, 0.47, abs(fract(a.div(size)).sub(0.5))),
   smoothstep(0.42, 0.47, abs(fract(b.div(size)).sub(0.5))));
 
+// What the water takes out of the light on its way down to a tile `depth` metres under the surface and back up: the
+// reds first, so the basin reads a deeper turquoise the further down (at least what half a metre takes, so the floor's
+// rise to the waterline at the walls doesn't glare). With the basin's pale aqua rather than white, a pool no longer
+// reads as a sheet of milk in daylight.
+const absorbed = (depth) => mix(vec3(1, 1, 1), exp(vec3(0.5, 0.13, 0.08).mul(max(depth, 0.5)).negate()), filled);
+
 function floorMaterial() {
   const m = new THREE.MeshStandardNodeMaterial();
   // across the pool from its side wall, along it, and the span along its lane that has a line (0, 0 for none)
@@ -103,8 +127,9 @@ function floorMaterial() {
   const tee = float(1).sub(smoothstep(0.48, 0.52, across)).mul(max(
     float(1).sub(smoothstep(0.11, 0.135, abs(lane.y.sub(a)))), float(1).sub(smoothstep(0.11, 0.135, abs(lane.y.sub(b))))));
   const line = max(stem, tee).mul(has);
-  const tile = mix(vec3(0.78, 0.93, 0.96), vec3(0.6, 0.8, 0.86), grout(lane.x, lane.y, 0.3).mul(0.55));
-  m.colorNode = mix(tile, vec3(0.05, 0.14, 0.36), line).add(caustics().mul(0.35));
+  // (linear colours: a pale aqua plaster, not white, or the sunlit floor glares white through the water at midday)
+  const tile = mix(vec3(0.17, 0.34, 0.39), vec3(0.12, 0.26, 0.31), grout(lane.x, lane.y, 0.3).mul(0.55));
+  m.colorNode = mix(tile, vec3(0.05, 0.14, 0.36), line).add(caustics().mul(filled.mul(0.22))).mul(absorbed(attribute('depth', 'float')));
   m.roughnessNode = float(0.5);
   m.metalnessNode = float(0.0);
   m.side = THREE.DoubleSide;
@@ -114,10 +139,10 @@ function floorMaterial() {
 function wallMaterial() {
   const m = new THREE.MeshStandardNodeMaterial();
   const tile = attribute('tile', 'vec2'); // along the wall and down from the water's surface, in metres
-  // white tile with a band of dark blue at the waterline, as a pool's walls have
+  // pale tile with a band of dark blue at the waterline, as a pool's walls have
   const band = float(1).sub(smoothstep(0.15, 0.17, tile.y));
-  const base = mix(vec3(0.84, 0.94, 0.96), vec3(0.66, 0.82, 0.88), grout(tile.x, tile.y, 0.15).mul(0.6));
-  m.colorNode = mix(base, vec3(0.06, 0.2, 0.45), band).add(caustics().mul(float(0.25).mul(float(1).sub(band))));
+  const base = mix(vec3(0.19, 0.37, 0.41), vec3(0.14, 0.3, 0.35), grout(tile.x, tile.y, 0.15).mul(0.6));
+  m.colorNode = mix(base, vec3(0.06, 0.2, 0.45), band).add(caustics().mul(float(0.25).mul(float(1).sub(band)).mul(filled))).mul(absorbed(tile.y));
   m.roughnessNode = float(0.35);
   m.metalnessNode = float(0.0);
   m.side = THREE.DoubleSide;
@@ -128,7 +153,8 @@ function copingMaterial() {
   const m = new THREE.MeshStandardNodeMaterial();
   const n = mx_noise_float(positionWorld.mul(3.1)).mul(0.5).add(0.5);
   const joints = smoothstep(0.47, 0.49, abs(fract(positionWorld.x.add(positionWorld.z).mul(1 / 0.6)).sub(0.5)));
-  m.colorNode = vec3(0.8, 0.78, 0.73).mul(n.mul(0.14).add(0.86)).mul(float(1).sub(joints.mul(0.25)));
+  // (linear colours: a light concrete a little brighter than the sidewalks', not the near-white that glared at midday)
+  m.colorNode = vec3(0.5, 0.48, 0.44).mul(n.mul(0.14).add(0.86)).mul(float(1).sub(joints.mul(0.25)));
   m.roughnessNode = float(0.85);
   m.side = THREE.DoubleSide;
   return m;
@@ -139,7 +165,7 @@ function deckMaterial() {
   const tw = attribute('tw', 'vec2'); // the pool's own frame, so the joints run square to its walls
   const n = mx_noise_float(positionWorld.mul(4.3)).mul(0.5).add(0.5);
   const joints = max(smoothstep(0.485, 0.495, abs(fract(tw.x.div(3)).sub(0.5))), smoothstep(0.485, 0.495, abs(fract(tw.y.div(3)).sub(0.5))));
-  m.colorNode = vec3(0.86, 0.83, 0.77).mul(n.mul(0.1).add(0.9)).mul(float(1).sub(joints.mul(0.3)));
+  m.colorNode = vec3(0.47, 0.45, 0.41).mul(n.mul(0.1).add(0.9)).mul(float(1).sub(joints.mul(0.3)));
   m.roughnessNode = float(0.92);
   m.side = THREE.DoubleSide;
   return m;
@@ -233,7 +259,7 @@ function createPools(group, data) {
   const buckets = new Map();
   const key = (bx, bz) => bx * 100003 + bz;
   const water = { pos: [], deep: [], idx: [] };
-  const floor = { pos: [], lane: [], idx: [] };
+  const floor = { pos: [], lane: [], depth: [], idx: [] };
   const wall = { pos: [], tile: [], idx: [] };
   const rim = { pos: [], idx: [] };
   const deck = { pos: [], tw: [], idx: [] };
@@ -289,8 +315,10 @@ function createPools(group, data) {
           const t = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez || 1)));
           d = Math.min(d, Math.hypot(x - ax - ex * t, z - az - ez * t));
         }
-        // (outside the outline, the grid's margin past the walls, it's kept under the lawn and the coping)
-        if (!insidePoly(pts, x, z)) return Math.min(level - 0.03, groundHeight(x, z) - 0.1);
+        // (outside the outline, the grid's margin past the walls, it's kept under the lawn and the coping: at the rim's
+        // height as far as the coping reaches, so the floor's cells across the wall don't dip and leave notches along
+        // the waterline, and down under the lawn only past it, where the coping's skirt hides the slope)
+        if (!insidePoly(pts, x, z)) return d <= COPING ? level - 0.03 : Math.min(level - 0.03, groundHeight(x, z) - 0.1);
         if (d >= bowl) return base;
         const u = 1 - d / bowl;
         return base + (level - 0.03 - base) * u ** 1.6;
@@ -353,7 +381,9 @@ function createPools(group, data) {
         const t = t0 - 1 + i * FS, w = w0 - 1 + j * FS, [x, z] = at2(t, w);
         const L = lanes[Math.max(0, Math.min(lanes.length - 1, Math.floor((w - w0) / 2.5)))];
         id = fb + fid.size; fid.set(k, id);
-        floor.pos.push(x, pool.floor(x, z), z);
+        const fy = pool.floor(x, z);
+        floor.pos.push(x, fy, z);
+        floor.depth.push(Math.max(0, level - fy));
         floor.lane.push(w - w0, t, L ? L[0] : 0, L ? L[1] : 0);
       }
       return id;
@@ -461,6 +491,7 @@ function createPools(group, data) {
   }
 
   let waterMesh = null;
+  const wetMaterials = []; // the water and the lane ropes, put away out of season
   if (pools.length) {
     const mesh = (attrs, idx, material, name, flatShaded = false) => {
       let g = new THREE.BufferGeometry();
@@ -478,10 +509,11 @@ function createPools(group, data) {
     // colour, so the lawn the ground draws over the pool afterwards is hidden and the basin shows through the water.
     // The opening draws after everything else opaque but before the ground (terrain.js GROUND_ORDER): a swimmer, a car
     // sunk to the floor or a ladder's rungs under the water drew already, so it only hides the ground
-    const basin = mesh({ position: [floor.pos, 3], lane: [floor.lane, 4] }, floor.idx, floorMaterial(), 'Pool floor');
+    const basin = mesh({ position: [floor.pos, 3], lane: [floor.lane, 4], depth: [floor.depth, 1] }, floor.idx, floorMaterial(), 'Pool floor');
     const walls = mesh({ position: [wall.pos, 3], tile: [wall.tile, 2] }, wall.idx, wallMaterial(), 'Pool walls');
     basin.renderOrder = walls.renderOrder = -2;
     waterMesh = mesh({ position: [water.pos, 3], deep: [water.deep, 1] }, water.idx, waterMaterial(), 'Pool water');
+    wetMaterials.push(waterMesh.material);
     const cutMat = new THREE.MeshBasicNodeMaterial();
     cutMat.colorWrite = false;
     const cut = new THREE.Mesh(waterMesh.geometry, cutMat);
@@ -495,6 +527,7 @@ function createPools(group, data) {
     if (deck.idx.length) mesh({ position: [deck.pos, 3], tw: [deck.tw, 2] }, deck.idx, deckMaterial(), 'Pool deck');
     if (ropes.length) {
       const r = new THREE.Mesh(mergeGeometries(ropes), ropeMaterial());
+      wetMaterials.push(r.material);
       r.name = 'Lane ropes';
       group.add(r);
     }
@@ -543,10 +576,25 @@ function createPools(group, data) {
     return null;
   }
 
+  // the season: filled or drained, by Ann Arbor's date ('YYYY-MM-DD', today's when not given)
+  let open = true;
+  function setSeason(ymd = annArborDay()) {
+    const now = inSeason(ymd);
+    if (now === open && filled.value === (open ? 1 : 0)) return open;
+    open = now;
+    filled.value = open ? 1 : 0;
+    for (const m of wetMaterials) m.visible = open;
+    log(`[pools] ${open ? 'filled for the summer' : 'drained for the off-season'} (${ymd})`);
+    return open;
+  }
+  setSeason();
+  // the pool whose water is at (x, z): none while they're drained (its floor, `at`, is still there to walk in)
+  const wet = (x, z) => (open ? at(x, z) : null);
+
   // a car or a bike sunk in a pool (where it was last frame, (px, py, pz), under its water): the water holds it back,
   // and it drives out up the curved floor by a wall. Returns whether it's in one.
   function trap(ent, px, py, pz, dt) {
-    const was = at(px, pz);
+    const was = wet(px, pz);
     if (!was || py > was.level - 0.5) {
       if (!was) ent._inPool = false;
       return false;
@@ -559,7 +607,7 @@ function createPools(group, data) {
   }
 
   log(`[pools] ${pools.length} pools (${pools.filter((p) => p.kind === 1).length} big ones with lanes), ${(water.pos.length + floor.pos.length + wall.pos.length + rim.pos.length + deck.pos.length) / 3} vertices, ${ropes.length} lane ropes, ${ladders.length} ladders, ${chairs.length} lifeguard chairs`);
-  return { at, trap, count: pools.length };
+  return { at, wet, trap, setSeason, get open() { return open; }, count: pools.length };
 }
 
 function smooth01(t) {

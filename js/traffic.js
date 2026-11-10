@@ -454,12 +454,16 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // 3. PEDESTRIAN SYSTEM
   // =========================================================================
   const player = { active: false, entity: null, x: 0, z: 0, vx: 0, vz: 0, fx: 0, fz: 1,
-    halfW: 0.86, halfL: 2.18 };
+    halfW: 0.86, halfL: 2.18, who: 0 };
+  // Lamp: in split screen, player 2 (split-screen.js) the same way: run into by traffic and knocking people down. Drivers
+  // brake for them as for a still body (gatherStill); only player 1 is dodged (react)
+  const player2 = { active: false, entity: null, x: 0, z: 0, vx: 0, vz: 0, fx: 0, fz: 1,
+    halfW: 0.86, halfL: 2.18, who: 1 };
   const nearEdges = [];
   const nearFreeways = []; // Lamp: the freeway's links among them, where new cars go more often (see spawnVehicle)
   const nearSignals = [];
   const pedestrianSystem = createPedestrianSystem(network, {
-    player, nearEdges, nearSignals, mayCross, walkOn, visible, nearView
+    player, player2, nearEdges, nearSignals, mayCross, walkOn, visible, nearView
   });
   group.add(...pedestrianSystem.meshes);
 
@@ -717,10 +721,15 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     still.length = 0;
     for (const b of stillSource) {
       const pos = b?.position;
-      if (!pos || b === playerEntity || Math.abs(pos.y - groundHeight(pos.x, pos.z)) > 2.6) continue;
+      if (!pos || b === playerEntity || b === player2.entity || Math.abs(pos.y - groundHeight(pos.x, pos.z)) > 2.6) continue;
       if (Math.abs(pos.x - focusX) > VEHICLE_RADIUS || Math.abs(pos.z - focusZ) > VEHICLE_RADIUS) continue;
       const h = b.heading || 0;
       still.push({ x: pos.x, z: pos.z, fx: Math.sin(h), fz: Math.cos(h), halfW: b.boxW ?? 0.86, halfL: b.boxL ?? 2.18 });
+    }
+    // player 2, on foot, on the bike or in their car: braked for, and nobody is brought in on top of them
+    const p = player2;
+    if (p.active && Math.abs(p.x - focusX) <= VEHICLE_RADIUS && Math.abs(p.z - focusZ) <= VEHICLE_RADIUS) {
+      still.push({ x: p.x, z: p.z, fx: p.fx, fz: p.fz, halfW: p.halfW, halfL: p.halfL });
     }
   }
   const nearStill = (x, z, r) => still.some((b) => Math.hypot(b.x - x, b.z - z) < r + b.halfL);
@@ -1603,7 +1612,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     v.impactTime = Math.max(v.impactTime, 0.8);
   }
 
-  function collideWithPlayer(v) {
+  function collideWithPlayer(v, player) {
     const pe = player.entity;
     const reach = v.half + player.halfL + player.halfW;
     const prevX = pe.prevX ?? pe.position.x, prevZ = pe.prevZ ?? pe.position.z;
@@ -1651,9 +1660,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     impactSuspension(v, -hit.nx, -hit.nz, hit.impulse / b.mass);
     if (pe.type !== 'person') reportCollision(pe, v, hit.x, 0.58, hit.z, hit.nx, hit.nz, speed);
     // the player on foot or on the bike, hit hard enough to go down: flung the way the car pushed them
-    if ((pe.type === 'person' || pe.type === 'cyclist') && speed > 3.5 && carComing > 3) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, pe.type);
+    if ((pe.type === 'person' || pe.type === 'cyclist') && speed > 3.5 && carComing > 3) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, pe.type, player.who);
     // a motorbike into a car (or a car into it) hard: its rider goes flying
-    else if (pe.bike && speed > 7) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, 'motorbike');
+    else if (pe.bike && speed > 7) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, 'motorbike', player.who);
     if (speed > 2.2) spawnCollisionSparks(hit.x, 0.58, hit.z, hit.nx, hit.nz, speed);
     // a bike, scooter or board hit hard by the player's car or motorbike: its rider goes flying
     if (v.riderRig && !v.riderOff && pe.type === 'car' && speed > 4.5) throwRider(v, a.vx, a.vz, hit, speed);
@@ -2379,7 +2388,29 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       v.callUntil = clock + 60 + Math.random() * 90;
     }
   }
-  function update(dt, elapsed, focusPos = null, playerEntity = null, activeMode = 'car', camera = null, camera2 = null) {
+  // where a player is, how fast it goes and how big it is (on foot, the bike, a car); `active` while on the road surface
+  // (not flying over it, nor under a bridge deck in a kayak or swimming)
+  function sensePlayer(rec, entity, mode, aboard) {
+    rec.mode = mode;
+    rec.active = Boolean(entity && mode !== 'helicopter' && !aboard
+      && Math.abs(entity.position.y - groundHeight(entity.position.x, entity.position.z)) < 2.6);
+    rec.entity = entity;
+    if (entity) {
+      const heading = entity.heading || 0;
+      const speed = entity.speed || 0;
+      rec.x = entity.position.x;
+      rec.z = entity.position.z;
+      rec.fx = Math.sin(heading);
+      rec.fz = Math.cos(heading);
+      rec.vx = rec.fx * speed + (entity.vx || 0);
+      rec.vz = rec.fz * speed + (entity.vz || 0);
+    }
+    rec.halfW = mode === 'cyclist' ? 0.35 : mode === 'person' ? 0.32 : entity?.boxW ?? 0.86;
+    rec.halfL = mode === 'cyclist' ? 0.85 : mode === 'person' ? 0.32 : entity?.boxL ?? 2.18;
+  }
+
+  function update(dt, elapsed, focusPos = null, playerEntity = null, activeMode = 'car', camera = null, camera2 = null,
+    playerEntity2 = null, activeMode2 = null) {
     clock = elapsed;
     avePhase = signalPhase(elapsed, true);
     stPhase = signalPhase(elapsed, false);
@@ -2417,24 +2448,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     refreshNear();
     updateView(camera, camera2);
 
+    sensePlayer(player, playerEntity, activeMode, ridden);
+    sensePlayer(player2, playerEntity2, activeMode2, false);
     gatherStill(playerEntity);
-    player.mode = activeMode;
-    // (on the road surface: not flying over it, nor under a bridge deck in a kayak or swimming)
-    player.active = Boolean(playerEntity && activeMode !== 'helicopter' && !ridden
-      && Math.abs(playerEntity.position.y - groundHeight(playerEntity.position.x, playerEntity.position.z)) < 2.6);
-    if (playerEntity) {
-      const heading = playerEntity.heading || 0;
-      const speed = playerEntity.speed || 0;
-      player.entity = playerEntity;
-      player.x = playerEntity.position.x;
-      player.z = playerEntity.position.z;
-      player.fx = Math.sin(heading);
-      player.fz = Math.cos(heading);
-      player.vx = player.fx * speed + (playerEntity.vx || 0);
-      player.vz = player.fz * speed + (playerEntity.vz || 0);
-    }
-    player.halfW = activeMode === 'cyclist' ? 0.35 : activeMode === 'person' ? 0.32 : playerEntity?.boxW ?? 0.86;
-    player.halfL = activeMode === 'cyclist' ? 0.85 : activeMode === 'person' ? 0.32 : playerEntity?.boxL ?? 2.18;
+    releaseTaken();
 
     // 1. Cars & buses
     // Limit attempted placements, not just successes, and rotate through the pool so an awkward location
@@ -2445,7 +2462,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     for (let scanned = 0; scanned < vehicles.length && budget > 0; scanned++) {
       const v = vehicles[vehicleCursor];
       vehicleCursor = (vehicleCursor + 1) % vehicles.length;
-      if (v.bus) continue; // (TheRide's buses come by the timetable: scheduleBuses)
+      if (v.bus || v.held) continue; // (TheRide's buses come by the timetable: scheduleBuses; a taken car: takeCar)
       const d = v.edge ? Math.hypot(v.x - focusX, v.z - focusZ) : Infinity;
       // (a car that somehow found its way into a closed block leaves it as soon as nobody's looking)
       if (d <= (jump ? NEAR_RADIUS : VEHICLE_RADIUS) && !(v.edge?.closed && !visible(v.x, v.z, 22))) continue;
@@ -2480,7 +2497,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       if (v.riderOff) lieDown(v, dt);
     }
     if (player.active) {
-      for (const v of vehicles) if (v.edge) collideWithPlayer(v);
+      for (const v of vehicles) if (v.edge) collideWithPlayer(v, player);
+    }
+    if (player2.active) {
+      for (const v of vehicles) if (v.edge) collideWithPlayer(v, player2);
     }
     collideTraffic();
     riderCrowd.begin();
@@ -2593,9 +2613,20 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   }
 
   // Lamp: the player taking a car out of traffic (F, main.js): the nearest car within `reach` of (x, z), as it is
-  // (its look, where it is, its heading and speed), taken off the road (it comes back elsewhere, as a far car does)
+  // (its look, where it is, its heading and speed), taken off the road. It stays out of traffic while the player's car
+  // still wears its look (`wears`, the player's car look now), so no twin of it drives by; then it comes back elsewhere,
+  // as a far car does
   const takeColor = new THREE.Color();
-  function takeCar(x, z, reach) {
+  const held = [];
+  function releaseTaken() {
+    for (let i = held.length - 1; i >= 0; i--) {
+      const h = held[i], now = h.wears?.();
+      if (now && now.kind === h.kind && now.hex === h.hex && (now.style ?? 0) === (h.style ?? 0)) continue;
+      h.v.held = false;
+      held.splice(i, 1);
+    }
+  }
+  function takeCar(x, z, reach, wears = null) {
     let best = null, bestD = reach;
     for (const v of cars) {
       if (!v.edge) continue;
@@ -2613,6 +2644,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     v.trail = null;
     v.commit = null;
     v.speed = 0;
+    if (wears) { v.held = true; held.push({ v, wears, kind: taken.kind, hex: taken.hex, style: taken.style }); }
     return taken;
   }
   // The nearest traffic car's distance, to choose between it and what else is near

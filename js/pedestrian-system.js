@@ -42,11 +42,12 @@ function edgeCrowd(e) {
   return (e.crowd = w);
 }
 
-function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCross, walkOn, visible, nearView }) {
+function createPedestrianSystem(network, { player, player2 = null, nearEdges, nearSignals, mayCross, walkOn, visible, nearView }) {
   let clock = 0;
   let focusX = 0, focusZ = 140;
   let hasView = false;
   let pedRange = 0;
+  let strikes2 = false; // player 2 (split screen) in their car or on the bike, on the ground: knocks people down too
   let pedCursor = 0;
   // How many are out: the share of busy sidewalks around (crowdShare), the hour and weather (busy, from the sky
   // the player picked) and what the frame rate allows (perf), checked every couple of seconds
@@ -712,11 +713,12 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   }
 
   // Struck by the player: anyone inside the car's or bike's outline while it moves faster than a walk goes limp,
-  // flung along with it, up and a little aside, spinning; a body already down is knocked on again
+  // flung along with it, up and a little aside, spinning; a body already down is knocked on again. Player 2's car or
+  // bike in split screen too (`player` is then player2)
   const HIT_SPEED = 2.5;
   let onHit = null;
-  function strike(p) {
-    if (!pedRange || clock - p.hitAt < 0.35) return;
+  function strike(p, player) {
+    if (clock - p.hitAt < 0.35) return;
     const speed2 = player.vx * player.vx + player.vz * player.vz;
     if (speed2 < HIT_SPEED * HIT_SPEED) return;
     const dx = p.x - player.x, dz = p.z - player.z;
@@ -734,7 +736,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       p.ragdoll = true;
       p.shout = -1;
     }
-    onHit?.(p.x, p.z, speed);
+    onHit?.(p.x, p.z, speed, player.who || 0);
   }
 
   // Hit by something the player's car sent flying (a curb cart, a trash can...: knockdowns.js) at (x, y, z) going
@@ -855,6 +857,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     hasView = view;
     pedRange = player.active && (activeMode === 'car' || activeMode === 'cyclist') && player.entity.position.y > -1
       ? Math.sqrt(player.vx * player.vx + player.vz * player.vz) * PED_LOOKAHEAD + player.halfL + 6 : 0;
+    strikes2 = Boolean(player2?.active && (player2.mode === 'car' || player2.mode === 'cyclist') && player2.entity.position.y > -1);
 
     for (const n of walkedNodes) n.walkers.length = 0;
     walkedNodes.length = 0;
@@ -898,7 +901,8 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     for (let i = 0; i < NUM_PEDS; i++) {
       const p = peds[i];
       if (!p.placed) continue;
-      strike(p);
+      if (pedRange) strike(p, player);
+      if (strikes2) strike(p, player2);
       if (!p.ragdoll) { react(p); avoidPlayer(p); }
     }
     meet(dt);

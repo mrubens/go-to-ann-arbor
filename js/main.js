@@ -29,7 +29,7 @@ import { TouchControls } from './touch-controls.js';
 import { reportTriangles, showTriangles } from './triangle-report.js';
 import { reportMemory, memoryCheckpoint, MEASURE_MEMORY } from './memory-report.js';
 import { gpuOnly, releaseUploaded, useRenderer } from './gpu-only.js';
-import { TIER, XBOX } from './device-tier.js';
+import { TIER, XBOX, QUALITY_CHOOSABLE, qualityChoice, setQualityChoice } from './device-tier.js';
 import { FILLS, fillWindow, stageSize } from './stage.js';
 import { GolfPlay } from './golf-play.js';
 import { GamepadControls } from './gamepad-controls.js';
@@ -78,7 +78,7 @@ import { waterDisturb } from './tsl-materials.js';
 import { buildRoadWork } from './road-work.js';
 import { buildPotholes } from './potholes.js';
 import { buildSpeedHumps } from './speed-humps.js';
-import { buildCurbCarts } from './curb-carts.js';
+import { buildCurbCarts, cartDay } from './curb-carts.js';
 import { CHAMPION_TREES } from './champion-trees.js';
 import { VideoRecorder } from './recorder.js';
 import { createGroundShade } from './ground-shade.js';
@@ -614,11 +614,43 @@ async function initApp() {
   // (only once there is snow: on a bare day the materials keep their shaders as they are)
   // (a pool's coping, deck and chairs too, but not what's under its water or floats on it: the water's left open, as
   // nothing says which pools are covered)
-  loadSnowCover().then((cover) => {
+  // (asked again when Ann Arbor's date turns over while it's played: watchDate below; a material's dressed once)
+  const coverWithSnow = () => loadSnowCover().then((cover) => {
     if (cover <= 0) return;
     poolsPart.group.traverse((o) => { if (o.isMesh && /^(Pool floor|Pool walls|Lane ropes)/.test(o.name)) for (const m of [o.material].flat()) m.userData.snow = 0; });
     for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, poolsPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
   });
+  coverWithSnow();
+  // Ann Arbor's date, checked about once a minute by the clock and as the page is shown again (a session left running
+  // past midnight, or a Mac woken the next day): when it turns over, the moon takes tonight's phase and the snow
+  // today's depth in place. The day's curb carts and road closures are built into the city (its traffic routes round
+  // the closures), so when they'd be different now a notice says a reload brings today's.
+  const annArborDate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Detroit' });
+  const dateWatch = { day: annArborDate(), checkedAt: performance.now(), toldStale: false };
+  const closureKey = (list) => (list || []).map((c) => `${c.street}|${c.project}|${c.dates}|${c.point || ''}`).sort().join(';');
+  const builtClosures = closuresReady.then(closureKey);
+  function watchDate(force = false) {
+    const now = performance.now();
+    if (!force && now - dateWatch.checkedAt < 60e3) return;
+    dateWatch.checkedAt = now;
+    const day = annArborDate();
+    if (day === dateWatch.day) return;
+    log(`[date] ${dateWatch.day} → ${day} in Ann Arbor: the moon, the snow and the day's carts and closures looked at again`);
+    dateWatch.day = day;
+    moonPart.made.setPhase?.();
+    poolsPart.made.setSeason?.(day);
+    coverWithSnow().catch(() => {});
+    const cartsStale = (cartsPart.made.day || null) !== cartDay(cartData);
+    Promise.all([builtClosures, loadCityClosures().catch(() => null)]).then(([was, list]) => {
+      const closuresStale = list != null && closureKey(list) !== was;
+      if (!(cartsStale || closuresStale) || dateWatch.toldStale) return;
+      dateWatch.toldStale = true;
+      const what = cartsStale && closuresStale ? 'carts and road closures' : cartsStale ? 'curb carts' : 'road closures';
+      log(`[date] today's ${what} differ from the ones built: a reload brings them`);
+      showNotice(`It's a new day in Ann Arbor: reload for today's ${what}`, 6);
+    });
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) watchDate(true); });
   const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
   scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
   markInit('ground');
@@ -860,21 +892,23 @@ async function initApp() {
   };
   // someone knocked down by the player's car or bike: a thump there and a jolt in the hands
   const _thudAt = { x: 0, y: 0, z: 0 };
-  trafficSystem.setPedestrianHitListener?.((x, z, speed) => {
+  // (who: 0 the first player, 1 the second in split screen)
+  trafficSystem.setPedestrianHitListener?.((x, z, speed, who = 0) => {
     _thudAt.x = x; _thudAt.z = z; _thudAt.y = groundHeight(x, z) + 0.6;
     audioSystem.cue('thud', _thudAt, Math.min(1, 0.4 + speed / 20));
-    rumble(0, Math.min(1, 0.3 + speed / 25), Math.min(1, 0.2 + speed / 30), 0.25);
+    rumble(who, Math.min(1, 0.3 + speed / 25), Math.min(1, 0.2 + speed / 30), 0.25);
     log(`Knocked someone down at ${speed.toFixed(1)} m/s`);
   });
   // the player hit by a car, on foot or on the bike
-  trafficSystem.setPlayerStruckListener?.((vx, vz, speed, type) => {
-    const at = controllerManager.getActiveEntity().position;
+  trafficSystem.setPlayerStruckListener?.((vx, vz, speed, type, who = 0) => {
+    const cm = who && split.second ? split.second.cm : controllerManager;
+    const at = cm.getActiveEntity().position;
     audioSystem.cue('thud', at, Math.min(1, 0.5 + speed / 20));
-    rumble(0, Math.min(1, 0.5 + speed / 20), Math.min(1, 0.4 + speed / 25), 0.35);
-    if (type === 'cyclist') controllerManager.throwRider(speed, vx, vz);
-    else if (type === 'motorbike') controllerManager.throwMotoRider(speed, vx * 0.6, vz * 0.6);
-    else controllerManager.knockDown(vx * 1.1, 1.5 + speed * 0.2, vz * 1.1, 0, 0.6);
-    log(`Hit by a car at ${speed.toFixed(1)} m/s`);
+    rumble(who, Math.min(1, 0.5 + speed / 20), Math.min(1, 0.4 + speed / 25), 0.35);
+    if (type === 'cyclist') cm.throwRider(speed, vx, vz);
+    else if (type === 'motorbike') cm.throwMotoRider(speed, vx * 0.6, vz * 0.6);
+    else cm.knockDown(vx * 1.1, 1.5 + speed * 0.2, vz * 1.1, 0, 0.6);
+    log(`${who ? 'Player 2 hit' : 'Hit'} by a car at ${speed.toFixed(1)} m/s`);
   });
   // pagehide also covers navigation away on mobile; preserve the context across back-forward cache restores.
   window.addEventListener('pagehide', (event) => {
@@ -1000,6 +1034,8 @@ async function initApp() {
     cleanViewOnTouch();
   };
   touchControls.onGetInOut = () => getInOrOut();
+  // the touch horn (shown while driving a car), as B on the keyboard
+  touchControls.onHorn = () => { if (!mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity()); };
 
   // the frame rate, between the name and the GitHub link (made here too, for a page opened before it was in index.html)
   if (!document.getElementById('hud-fps')) {
@@ -1295,6 +1331,33 @@ async function initApp() {
     resetGame();
   });
 
+  // Quality (the toolbar's gauge): Automatic (device-tier.js's own choice, by this computer and how its frames ran),
+  // Full or Lighter, kept in this browser and read as the city's built, so a change reloads the page. Not on a phone
+  // or the Xbox, whose city is what they can hold.
+  const qualityBtn = document.getElementById('btn-quality');
+  const QUALITY_WORDS = { auto: 'Automatic', full: 'Full', lighter: 'Lighter' };
+  if (qualityBtn && QUALITY_CHOOSABLE) {
+    qualityBtn.hidden = false;
+    const chosen = qualityChoice();
+    qualityBtn.title = `Quality: ${QUALITY_WORDS[chosen]}`;
+    const auto = document.querySelector('#quality-popover [data-quality="auto"] .pop-sub');
+    if (auto && chosen === 'auto') auto.textContent = `Chosen for this computer: ${{ full: 'the full city', light: 'the full look, a nearer city', slow: 'the lighter city' }[TIER.name] || TIER.name} now`;
+    document.querySelectorAll('#quality-popover [data-quality]').forEach((btn) => {
+      const v = btn.dataset.quality;
+      btn.classList.toggle('active', v === chosen);
+      btn.setAttribute('aria-pressed', String(v === chosen));
+      btn.addEventListener('click', () => {
+        closePopovers();
+        if (v === qualityChoice()) return;
+        if (!setQualityChoice(v)) { showNotice('The quality could not be saved in this browser', 3); return; }
+        log(`[tier] quality set to ${v}: reloading`);
+        showNotice(`Quality: ${QUALITY_WORDS[v]}. Reloading to apply it…`, 3);
+        savePlayerState();
+        setTimeout(() => location.reload(), 1200);
+      });
+    });
+  }
+
   function goToStart(mode) {
     const s = SCENIC_STARTS[mode];
     if (!s) return;
@@ -1443,7 +1506,7 @@ async function initApp() {
       log(`[bike racks] borrowed a ${look.kind}`);
     }
     if (choice.parked || choice.moving) {
-      const taken = choice.moving ? trafficSystem.takeCar(cm.entities.person.position.x, cm.entities.person.position.z, 5) : null;
+      const taken = choice.moving ? trafficSystem.takeCar(cm.entities.person.position.x, cm.entities.person.position.z, 5, () => cm.carLook) : null;
       if (choice.moving && !taken) { cm.entities.person.riding = null; return; }
       const done = parkedCars.take(choice.parked || null, drop);
       if (done?.collider) addColliders([done.collider]);
@@ -1568,11 +1631,8 @@ async function initApp() {
     };
     add(controllerManager, bicycleBody, heliBody);
     if (split.drawn) {
-      const cm2 = split.second.cm, e2 = cm2.getActiveEntity();
-      add(cm2, bicycle2, heli2);
-      // (the second player's own: a moving thing traffic doesn't otherwise see)
-      if (cm2.activeMode === 'car') stillList.push(e2);
-      else if (cm2.activeMode === 'cyclist') stillList.push(bodyOf(e2, { ...bicycleBody }));
+      // (what the second player is in or on now traffic sees as it does the first player: trafficSystem.update)
+      add(split.second.cm, bicycle2, heli2);
     }
     for (const c of parkedCars.loose?.(looseList) || []) {
       const o = c.collider.obb;
@@ -2306,7 +2366,7 @@ async function initApp() {
   let fpsTimer = 0;
   let nextPlayerSave = 0;
   let heardStrokes = 0;
-  const animalCtx = { camera: cameraSystem.camera, player: null, mode: 'car', look: 'midday', cars: trafficSystem.cars, buses: trafficSystem.buses, paddlers: riverPeoplePart.made.people || [], colliders: allColliders, cue: (k, at, i) => audioSystem?.cue(k, at, i) };
+  const animalCtx = { camera: cameraSystem.camera, player: null, mode: 'car', look: 'midday', cars: trafficSystem.cars, buses: trafficSystem.buses, paddlers: riverPeoplePart.made.people || [], trains: railways.trains, colliders: allColliders, cue: (k, at, i) => audioSystem?.cue(k, at, i) };
   let warmedUp = false; // see the first frame below
 
   if (elFps) elFps.textContent = '60';
@@ -2337,7 +2397,7 @@ async function initApp() {
   const SLOW_WORK_MS = 50, EASY_WORK_MS = 10;
   const slowWatch = { t: 0, n: 0, over: 0, easy: 0, work: 0, windows: 0, easyWindows: 0, told: false, marked: !!load('slowWork') };
   function watchWork(ms, rawDt) {
-    if (slowWatch.told || (TIER.name !== 'full' && TIER.name !== 'light' && !(TIER.name === 'slow' && slowWatch.marked))) return;
+    if (slowWatch.told || qualityChoice() !== 'auto' || (TIER.name !== 'full' && TIER.name !== 'light' && !(TIER.name === 'slow' && slowWatch.marked))) return;
     if (liveRuns.n > 1 || elapsed < 45 || rawDt > 0.5 || document.hidden || split.drawn || mapSystem.isFullMapOpen || videoRecorder.recording) return;
     slowWatch.t += rawDt; slowWatch.n++; slowWatch.work += ms;
     if (ms > SLOW_WORK_MS) slowWatch.over++;
@@ -2419,6 +2479,7 @@ async function initApp() {
     const dt = Math.min(Math.max(f.dt, 0.001), 0.05);
     elapsed += dt;
     tickNotice(dt);
+    watchDate();
     knockdowns.update(dt);
     // a cart, can or bench sent flying knocks down whoever it reaches: a walker goes limp, a rider comes off
     for (const it of knockdowns.flying) {
@@ -2507,7 +2568,9 @@ async function initApp() {
       controllerManager.getActiveEntity(),
       controllerManager.activeMode,
       cameraSystem.camera,
-      split.drawn ? split.second.camera : null
+      split.drawn ? split.second.camera : null,
+      split.drawn ? split.second.cm.getActiveEntity() : null,
+      split.drawn ? split.second.cm.activeMode : null
     );
     mark('player & traffic');
     highwayTraffic.update(dt, cameraSystem.camera, controllerManager.getActiveEntity(), controllerManager.activeMode);

@@ -39,11 +39,9 @@ class CarRadio {
     this.audio = null;
     this.retry = 0;
     this.lost = false;
-    // hidden or minimized, the frame stops, and with it the check below that turns the station off: it's stopped here
-    // (the next frame shown starts it again). The listener left by the code before this one goes first
-    if (window.__radioHidden) document.removeEventListener('visibilitychange', window.__radioHidden);
-    window.__radioHidden = () => { if (document.hidden) this.stop(); };
-    document.addEventListener('visibilitychange', window.__radioHidden);
+    // the station plays on in a hidden tab or a minimized window, as a radio left on in the background does (people
+    // keep the page open just to listen). An old listener that stopped it there is taken away
+    if (window.__radioHidden) { document.removeEventListener('visibilitychange', window.__radioHidden); window.__radioHidden = null; }
     document.getElementById('radio-prev')?.addEventListener('click', () => this.tune(-1));
     document.getElementById('radio-next')?.addEventListener('click', () => this.tune(1));
     document.getElementById('radio-current')?.addEventListener('click', () => this.tune(1));
@@ -104,7 +102,7 @@ class CarRadio {
       if (key) this.station = this.stationFor(key, own);
       this.draw();
     }
-    const want = key && soundOn && !document.hidden ? this.station : OFF;
+    const want = key && soundOn ? this.station : OFF;
     if (want !== this.playing) {
       this.playing = want;
       this.title = '';
