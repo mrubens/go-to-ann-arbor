@@ -189,4 +189,11 @@ function buildCurbCarts(group, data, addresses) {
   return { count: carts.length, day: rings.length ? name : null, obstacles };
 }
 
-export { buildCurbCarts };
+// The weekday name whose carts would be out now (as buildCurbCarts's `day`), or null when no zone's are: main.js
+// compares it with the carts built, when Ann Arbor's date turns over while it's played
+function cartDay(data) {
+  const { day, name } = today();
+  return (data?.zones?.[day] || []).length ? name : null;
+}
+
+export { buildCurbCarts, cartDay };

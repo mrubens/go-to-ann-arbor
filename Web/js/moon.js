@@ -24,10 +24,19 @@ const PHASES = ['new moon', 'waxing crescent', 'first quarter', 'waxing gibbous'
 
 function createMoon(group) {
   group.name = 'Moon';
-  const age = moonAge();
-  const angle = age * Math.PI * 2;
-  const uSun = uniform(new THREE.Vector3(Math.sin(angle), 0, -Math.cos(angle)));
-  const lit = (1 - Math.cos(angle)) / 2;
+  const uSun = uniform(new THREE.Vector3());
+  let lit = 0, phased = false, mesh = null;
+  // the phase by the clock now: set as it's made, and again when Ann Arbor's date turns over while it's played (main.js)
+  function setPhase() {
+    const age = moonAge();
+    const angle = age * Math.PI * 2;
+    uSun.value.set(Math.sin(angle), 0, -Math.cos(angle));
+    lit = (1 - Math.cos(angle)) / 2;
+    phased = lit > 0.015;
+    if (mesh) mesh.visible = phased && mesh.visible;
+    log(`[moon] ${PHASES[Math.round(age * 8) % 8]}, ${Math.round(lit * 100)}% lit`);
+  }
+  setPhase();
 
   const mat = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, fog: false });
   const hash = (p) => fract(sin(dot(p, vec2(12.9898, 78.233))).mul(43758.5453));
@@ -47,14 +56,12 @@ function createMoon(group) {
     mat.opacityNode = disc.mul(night);
   }
 
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(RADIUS * 2, RADIUS * 2), mat);
+  mesh = new THREE.Mesh(new THREE.PlaneGeometry(RADIUS * 2, RADIUS * 2), mat);
   mesh.name = 'Moon';
   mesh.frustumCulled = false;
   mesh.renderOrder = -1;
-  const phased = lit > 0.015;
   mesh.visible = phased;
   group.add(mesh);
-  log(`[moon] ${PHASES[Math.round(age * 8) % 8]}, ${Math.round(lit * 100)}% lit`);
 
   function update(camera) {
     // not drawn by day, when its opacity (`night` above) is nothing anyway
@@ -65,7 +72,7 @@ function createMoon(group) {
     mesh.position.copy(camera.position).addScaledVector(DIR, distance);
     mesh.lookAt(camera.position);
   }
-  return { update, lit };
+  return { update, setPhase, get lit() { return lit; } };
 }
 
 export { createMoon, moonAge };

@@ -204,12 +204,10 @@ function presetForSun({ alt, az }) {
   const sun = new THREE.Vector3(Math.sin(bearing) * Math.cos(lit), Math.sin(lit), -Math.cos(bearing) * Math.cos(lit));
   const night = Math.min(1, Math.max(0, (-alt - 2) / 8));
   p.sunDir = sun.lerp(TIME_PRESETS.midnight.sunDir, night).normalize();
-  // the sky's own sun (its disc and the glow round it) where the sun really is, so it sets where and when it does;
-  // its disc is gone once the sun is down (applyPreset); after dusk its glow turns with the light into the night
-  // preset's, so the night sky is as it was
-  const real = Math.max(alt, -4) * RAD;
-  p.skySunDir = new THREE.Vector3(Math.sin(bearing) * Math.cos(real), Math.sin(real), -Math.cos(bearing) * Math.cos(real))
-    .lerp(TIME_PRESETS.midnight.sunDir, night).normalize();
+  // the sky is lit from the same raised sun as the streets: the sky model with its sun at the true height, a degree or
+  // two up before sunset, went nearly black overhead and darkened the whole city through its reflections. Its disc
+  // is gone once the real sun is down (applyPreset), so it doesn't hang in the sky after sunset
+  p.skySunDir = p.sunDir.clone();
   p.sunDown = alt < -1;
   return p;
 }

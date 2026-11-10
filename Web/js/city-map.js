@@ -11,8 +11,10 @@ import {
   TOWN_EDGE,
   getLocationLabel,
   isTypingInField,
-  WATER_POLYGONS
+  WATER_POLYGONS,
+  TELEPORT_LOCATIONS
 } from './city-config.js';
+import { rankSearch, bestRoad, searchPlaces } from './map-search.js';
 import { groundHeight } from './terrain.js';
 import { layOutHoles } from './golf.js';
 import { AIRPORT } from './airport-data.js';
@@ -763,8 +765,14 @@ class CityMapSystem {
       this.elSearchInput.addEventListener('input', () => this.search(this.elSearchInput.value));
       // the game's keyboard stops Space and the arrows from doing anything on the page; keep them in the field, so
       // "main st" types its space and the arrows move the caret instead of the player
+      // Enter goes to the best match (never to the game, whose keyboard pad would take it for A: teleport to the cursor)
       this.elSearchInput.addEventListener('keydown', (e) => {
         if (e.code === 'Space' || e.code.startsWith('Arrow')) e.stopPropagation();
+        if (e.key === 'Enter') {
+          e.stopPropagation();
+          e.preventDefault();
+          if (!e.repeat) this.goToSearch();
+        }
       });
     }
 
@@ -893,6 +901,7 @@ class CityMapSystem {
     const q = String(text || '').trim().toLowerCase();
     this.searchHighlight = q;
     this.searchPath = null;
+    this.searchBest = null;
     // a house number and a street: fly to that house and route there, once the addresses are in
     if (/^\d+\s+\S/.test(q)) {
       loadAddressBook().then((book) => {
@@ -900,6 +909,12 @@ class CityMapSystem {
         const hit = findAddress(book, q);
         if (!hit) {
           this.search(q.replace(/^\d+\s+/, '')); // no such house: show the street
+          if (this.goOnFind === q) this.goTo(this.searchBest);
+          return;
+        }
+        this.searchBest = { x: hit.x, z: hit.z };
+        if (this.goOnFind === q) {
+          this.goTo(this.searchBest);
           return;
         }
         this.searchHighlight = q.replace(/^\d+\s+/, '');
@@ -913,20 +928,14 @@ class CityMapSystem {
       return;
     }
     if (q.length > 0) {
-      // the best landmark: named exactly (its short name without 'the' too), then a word of its short name or its name
-      // starting so, then the text anywhere in it (a champion tree after any other at the same rank). Streets with a
-      // word starting so win over all but an exact name: 'maple' is Maple Rd, 'huron' Huron St, 'arb' still the Arb
-      const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const wordStart = new RegExp(`(^|[^a-z0-9])${esc}`);
-      let lmMatch = null, lmRank = Infinity;
-      for (const l of LANDMARKS) {
-        const name = l.name.toLowerCase(), short = l.short.toLowerCase();
-        const rank = (name === q || short === q || short.replace(/^the /, '') === q ? 0 : wordStart.test(short) ? 1 : wordStart.test(name) ? 2
-          : name.includes(q) || short.includes(q) ? 3 : Infinity) + (l.art === 'tree' ? 0.5 : 0);
-        if (rank < lmRank) { lmRank = rank; lmMatch = l; }
+      // the best place (a landmark or the Teleport menu's) or the streets, by map-search.js: all the words in turn,
+      // the last a word's start; streets win over all but an exact name when one matches as well
+      const { q: query, place: lmMatch, roads } = rankSearch(q, this.searchPlaceList(), ROAD_LABELS);
+      if (lmMatch) this.searchBest = { x: lmMatch.x, z: lmMatch.z, key: lmMatch.key };
+      else if (roads.length) {
+        const r = bestRoad(query, roads), a = r.anchors[Math.floor(r.anchors.length / 2)];
+        this.searchBest = { x: a.x, z: a.z };
       }
-      const roads = ROAD_LABELS.filter((l) => l.lower.includes(q) || l.raw.includes(q));
-      if (lmMatch && lmRank > 0 && roads.some((l) => wordStart.test(l.lower))) lmMatch = null;
       if (roads.length) {
         this.searchPath = new Path2D();
         const b = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
@@ -953,6 +962,35 @@ class CityMapSystem {
       }
     }
     this.renderFullMap();
+  }
+
+  // The places the search knows: the landmarks and the Teleport menu's places (its buttons' names), made once
+  searchPlaceList() {
+    if (!this.placeList) {
+      const menu = [...document.querySelectorAll('[data-teleport]')].map((b) => ({ key: b.getAttribute('data-teleport'), name: b.querySelector('.pop-name')?.textContent?.trim() }));
+      this.placeList = searchPlaces(LANDMARKS, menu, TELEPORT_LOCATIONS);
+    }
+    return this.placeList;
+  }
+
+  // Enter in the search field: the map closes and the player goes to the best match (a house once the addresses are in)
+  goToSearch() {
+    const q = String(this.elSearchInput?.value || '').trim().toLowerCase();
+    if (!q) return;
+    this.goOnFind = q;
+    this.search(q);
+    if (!/^\d+\s+\S/.test(q)) this.goTo(this.searchBest);
+  }
+
+  // Goes to a search's match: a Teleport menu place as its button does (its viewpoint, on foot where it says),
+  // anywhere else straight there
+  goTo(best) {
+    this.goOnFind = null;
+    if (!best) return;
+    const btn = best.key && document.querySelector(`[data-teleport="${best.key}"]`);
+    this.toggleFullMap(false);
+    if (btn) btn.click();
+    else if (this.onTeleport) this.onTeleport(best.x, best.z);
   }
 
   // Teleports to a point on the full map, clearing any GPS route (you're there)
@@ -1091,6 +1129,8 @@ class CityMapSystem {
       this.cancelPan();
       // the search field gives the keys and the controller back to the game (an engine may keep a hidden field focused)
       this.elSearchInput?.blur();
+      // and starts empty next time, so a new search isn't typed onto the last one
+      if (this.elSearchInput?.value) { this.elSearchInput.value = ''; this.search(''); }
       // and its two full-screen canvases give their memory back (made again on opening)
       for (const c of [this.fullCanvas, this.fullStatic]) if (c) { c.width = 0; c.height = 0; }
       this.fullStaticKey = '';

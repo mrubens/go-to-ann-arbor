@@ -67,6 +67,7 @@ const FOREARM = 0.255;
 const ARM_BIND_ABDUCTION = 0.14;
 const PELVIS_Y = 0.96;
 const HIP_Y = ANKLE_H + SHIN + THIGH;
+const ANKLE_REACH_UP = 0.3; // the highest a walking foot comes under its hip joint: a high step, the thigh near level
 const SIDES = [1, -1]; // left (+X), right (-X)
 const LIMB = {
   upperArm: [BONE.UPPER_ARM_L, BONE.UPPER_ARM_R],
@@ -2395,7 +2396,11 @@ class PersonRig {
       const foot = this.feet[i];
       const footYaw = foot.swing ? foot.swingYaw : foot.yaw;
       this.jointFrom(BONE.PELVIS, LIMB.thigh[i], _qPelvis, _pelvis, _hip);
-      const ankle = this.solveLeg(i, _hip, _target.set(foot.ax, foot.ay, foot.az), footYaw);
+      // a foot set down on (or swung up over) something far higher than the hips, as when wading out of the river onto
+      // a bank or bulkhead a metre up, is held at a high step under them until the body has climbed up after it,
+      // rather than folding the leg up past the face
+      const ankleCap = _hip.y - ANKLE_REACH_UP * s * (1 - run); // (a sprinter's heel folds up behind to the hips)
+      const ankle = this.solveLeg(i, _hip, _target.set(foot.ax, Math.min(foot.ay, ankleCap), foot.az), footYaw);
       const sign = i === 0 ? 1 : -1;
       kneeSplit += sign * ((_knee.x - this.x) * sinY + (_knee.z - this.z) * cosY);
       ankleSplit += sign * ((ankle.x - this.x) * sinY + (ankle.z - this.z) * cosY);

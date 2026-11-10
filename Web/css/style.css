@@ -630,6 +630,8 @@ body.hud-minimized .icon-show {
   color: #121314;
 }
 
+.pop-item.active .pop-sub { color: rgba(18, 19, 20, 0.62); }
+
 .pop-item.active kbd {
   color: rgba(0, 0, 0, 0.55);
   background: rgba(0, 0, 0, 0.08);

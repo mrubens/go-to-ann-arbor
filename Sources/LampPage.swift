@@ -798,13 +798,17 @@ enum LampPageGuard {
         UserDefaults.standard.set(true, forKey: done)
     }
 
+    /// The pages held to a policy, which open again when its rules change (`retirePages`).
     private static let watchers = NSMapTable<WKWebView, LampPageWatcher>.weakToStrongObjects()
+    /// Every page's watcher, kept as long as its page.
+    private static let kept = NSMapTable<WKWebView, LampPageWatcher>.weakToStrongObjects()
 
-    /// Where the page may go, decided for every navigation of its window and frames.
+    /// Where the page may go, decided for every navigation of its window and frames, and the files it opens and saves:
+    /// every page has this, since a page with no policy still picks files and saves them (`LampPageWatcher`).
     @MainActor static func watch(_ view: WKWebView, scheme: String) {
-        guard policy != nil else { return }
         let watcher = LampPageWatcher(scheme: scheme)
-        watchers.setObject(watcher, forKey: view)
+        kept.setObject(watcher, forKey: view)
+        if policy != nil { watchers.setObject(watcher, forKey: view) }
         view.navigationDelegate = watcher
         view.uiDelegate = watcher
     }
@@ -850,33 +854,98 @@ enum LampPageGuard {
     }
 }
 
-/// The page's window and frames: only the page's own address, and a link the person clicks opened in the browser once
-/// they've seen where it goes.
+/// The page's window and frames: a shared page goes only to its own address, and a link the person clicks opens in the
+/// browser once they've seen where it goes. Any page opens the person's files with a file field and saves what it
+/// downloads (a link with `download`, a Blob it made, a file the web view can't show) where the person says, as a
+/// browser does, so a plain site needs no Swift for either. A download is a request, held to what the page may fetch,
+/// never a navigation: it doesn't take a shared page anywhere.
 @MainActor final class LampPageWatcher: NSObject, WKNavigationDelegate, WKUIDelegate {
     private let scheme: String
     private var asking = false
+    /// A shared page's request to one of its sites, let go to see whether it answers with a file, and whether the person
+    /// clicked it in the page's window, so a page that comes back instead is offered to the browser as before.
+    private var trying: (url: URL, clicked: Bool)?
     init(scheme: String) { self.scheme = scheme }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
-        guard let url = action.request.url, let policy = LampPageGuard.current,
-              !policy.allowsFrame(url, own: LampPageGuard.own(scheme)) else { return decisionHandler(.allow) }
+        guard let url = action.request.url else { return decisionHandler(.allow) }
+        let policy = LampPageGuard.current, own = LampPageGuard.own(scheme)
+        #if os(macOS)
+        if action.shouldPerformDownload, policy?.allows(url, own: own) ?? true { return decisionHandler(.download) }
+        #endif
+        guard let policy, !policy.allowsFrame(url, own: own) else { return decisionHandler(.allow) }
+        let clicked = action.targetFrame?.isMainFrame != false && Self.clicked(action)
+        #if os(macOS)
+        // A link to a file on one of the page's sites (`download` is ignored across origins): the request is one the page
+        // may make anyway, and its answer decides, saved if it's a file, never shown (`decidePolicyFor response`). A
+        // redirect elsewhere comes back here and is refused.
+        if ["http", "https"].contains(url.scheme?.lowercased() ?? ""), policy.allows(url, own: own) {
+            trying = (url, clicked)
+            return decisionHandler(.allow)
+        }
+        #endif
         decisionHandler(.cancel)
-        FileHandle.standardError.write(Data("Lamp kept this shared app from opening \(url.absoluteString.prefix(300))\n".utf8))
-        if action.targetFrame?.isMainFrame != false { offer(url, for: action, over: webView) }
+        refused(url, clicked: clicked, over: webView)
     }
 
-    /// A link that opens a window of its own (target="_blank"): never a window here.
+    private func refused(_ url: URL, clicked: Bool, over view: WKWebView) {
+        FileHandle.standardError.write(Data("Lamp kept this shared app from opening \(url.absoluteString.prefix(300))\n".utf8))
+        if clicked { offer(url, over: view) }
+    }
+
+    #if os(macOS)
+    /// What the web view can't show (a zip, a file sent as an attachment) is saved rather than shown as nothing. A shared
+    /// page's site answering with a page is never shown: that's refused as it would have been before the request.
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                 decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
+        let attachment = ((response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? "")
+            .lowercased().hasPrefix("attachment")
+        let file = attachment || !response.canShowMIMEType
+        if let url = response.response.url, let policy = LampPageGuard.current,
+           !policy.allowsFrame(url, own: LampPageGuard.own(scheme)) {
+            let clicked = trying?.url == url && trying?.clicked == true
+            trying = nil
+            if file { return decisionHandler(.download) }
+            decisionHandler(.cancel)
+            return refused(url, clicked: clicked, over: webView)
+        }
+        decisionHandler(file ? .download : .allow)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = LampPageDownloads.shared
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = LampPageDownloads.shared
+    }
+
+    /// A file field: the person's choice of files, or folders where the field takes one, as a browser offers them.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.resolvesAliases = true
+        let chosen: (NSApplication.ModalResponse) -> Void = { answer in completionHandler(answer == .OK ? panel.urls : nil) }
+        if let window = webView.window { panel.beginSheetModal(for: window, completionHandler: chosen) } else { chosen(panel.runModal()) }
+    }
+    #endif
+
+    /// A link that opens a window of its own (target="_blank"): never a window here. Only a shared page offers it to the
+    /// browser; the person's own page does with it what it always has, nothing.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = action.request.url { offer(url, for: action, over: webView) }
+        if LampPageGuard.policy != nil, let url = action.request.url, Self.clicked(action) { offer(url, over: webView) }
         return nil
     }
 
     /// A website the person clicked a link to, opened in the browser once they've said yes to where it goes. Anything
     /// the page does by itself (setting its address, opening a window, a redirect) goes nowhere.
-    private func offer(_ url: URL, for action: WKNavigationAction, over view: WKWebView) {
-        guard action.navigationType == .linkActivated, Self.byPerson(action), !asking,
+    private func offer(_ url: URL, over view: WKWebView) {
+        guard !asking,
               let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) else { return }
         asking = true
         LampPageGuard.ask("Open \(url.host ?? "this website")?", url.absoluteString, button: "Open", over: view) { [weak self] open in
@@ -890,6 +959,9 @@ enum LampPageGuard {
         }
     }
 
+    /// A link the person clicked.
+    private static func clicked(_ action: WKNavigationAction) -> Bool { action.navigationType == .linkActivated && byPerson(action) }
+
     /// Whether the person's own click or tap started it. WebKit says so only by a name it doesn't publish: where it isn't
     /// there, a link's being clicked is all there is to go on.
     private static func byPerson(_ action: WKNavigationAction) -> Bool {
@@ -897,6 +969,50 @@ enum LampPageGuard {
         return (action.value(forKey: "_isUserInitiated") as? Bool) ?? false
     }
 }
+
+#if os(macOS)
+/// Where a page's download goes: where the person says, in the window it came from, starting in Downloads with the name
+/// the page gave it. Nothing is saved unless they say where.
+@MainActor final class LampPageDownloads: NSObject, WKDownloadDelegate {
+    static let shared = LampPageDownloads()
+    /// Each download is written beside where it goes, under a hidden name, and takes that place only once it's whole: a
+    /// file it replaces is kept if it fails.
+    private var places: [ObjectIdentifier: (writing: URL, final: URL)] = [:]
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
+                  completionHandler: @escaping @MainActor @Sendable (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedFilename
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.canCreateDirectories = true
+        let chosen: (NSApplication.ModalResponse) -> Void = { answer in
+            guard answer == .OK, let url = panel.url else { return completionHandler(nil) }
+            let writing = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).download")
+            self.places[ObjectIdentifier(download)] = (writing, url)
+            completionHandler(writing)
+        }
+        if let window = download.webView?.window { panel.beginSheetModal(for: window, completionHandler: chosen) } else { chosen(panel.runModal()) }
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        guard let place = places.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        let files = FileManager.default
+        do {
+            // The save panel asked before replacing a file of that name.
+            if files.fileExists(atPath: place.final.path) { _ = try files.replaceItemAt(place.final, withItemAt: place.writing) }
+            else { try files.moveItem(at: place.writing, to: place.final) }
+        } catch {
+            try? files.removeItem(at: place.writing)
+            FileHandle.standardError.write(Data("A download couldn't be saved: \(error.localizedDescription)\n".utf8))
+        }
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        if let place = places.removeValue(forKey: ObjectIdentifier(download)) { try? FileManager.default.removeItem(at: place.writing) }
+        FileHandle.standardError.write(Data("A download failed: \(error.localizedDescription)\n".utf8))
+    }
+}
+#endif
 
 /// What the page was refused, from Lamp's own world in it: into the app's log, and, for a page whose review said it may
 /// connect elsewhere, shown above it with a way to allow the site.

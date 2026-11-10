@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { positionWorld, normalWorld, cameraPosition, vertexColor, mx_noise_float, smoothstep, step, mix, max, abs, floor, fract, float, vec3 } from 'three/tsl';
 import { builder, groundOf, strips, landmarkGlass } from './campus-landmarks.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
@@ -23,6 +24,7 @@ import { groundHeight } from './terrain.js';
 // - Huron High School (1969, Lane, Riebe, Weiland): three storeys of brown brick under a concrete fascia, its round
 //   classroom pods joined by a long diagonal spine, curved wings around them, the gym block to the north, glass dome
 //   skylights over the pods and ribbon windows wrapping every curve.
+// - Atomic Object (123 N Ashley, 1926): cream brick with a shaped parapet, tall glass bays and punched windows.
 // Colliders follow each outline in strips, so the neighbours stay; the survey's block is dropped by `replaces`.
 
 const LIME = [0.84, 0.8, 0.72];
@@ -636,6 +638,201 @@ function huronHigh(B, T) {
   return { s, maxY: gTop };
 }
 
+// Atomic Object's Ann Arbor office: 123 N Ashley St, the Ashley Square building (1926, offices since; Duo Security's
+// headquarters from 2014, Atomic Object's since 2025), on the south-west corner of Ashley and Ann, Ashley Terrace's
+// ten storeys hard against its south wall. Modelled from the building's photo on atomicobject.com: cream brick to a
+// flat roof about 12 m up, the parapet shaped over the south end (a low shoulder, a raking rise to a peak, a step and a
+// raised flat block) with a corbelled dentil course under the coping; on Ashley three tall two-storey glass bays in
+// black frames between broad brick piers (the middle one the recessed entrance, the north one the cafe's wide front),
+// then two storeys of punched windows: wide four-light windows on the ground floor, squarer ones above. No sign on the
+// front (the photo shows none). The Ann St and back walls carry on the same windows, as no photo shows them.
+const AO_BRICK = [0.7, 0.66, 0.57];
+const AO_PIER = [0.68, 0.64, 0.55];
+const AO_TRIM = [0.75, 0.72, 0.64];
+const AO_BASE = [0.46, 0.45, 0.42];
+const AO_FRAME = [0.11, 0.1, 0.09];
+const AO_ROOF = [0.32, 0.32, 0.33];
+// a wall from a to b, its normal turned toward (ox, oz)
+function wallFrame(ax, az, bx, bz, ox, oz) {
+  const L = Math.hypot(bx - ax, bz - az), tx = (bx - ax) / L, tz = (bz - az) / L;
+  let nx = -tz, nz = tx;
+  if (nx * ox + nz * oz < 0) { nx = -nx; nz = -nz; }
+  return { ax, az, L, tx, tz, nx, nz };
+}
+function atomicObject(B, T) {
+  const s = surveyAt(-134, -280);
+  if (!s) return null;
+  const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
+  const H = 9.6; // the wings' parapet; the centre's gable rises 2.3 m over it
+  const R = H - 0.9; // the roof, behind the parapet
+  // the brick (its courses and joints drawn by brickMaterial) is its own mesh: a skin over the walls, and the piers,
+  // parapets and gable face made of it
+  const brickOf = (col) => (col === AO_BRICK || col === AO_PIER ? B.brick : B.stone);
+  B.prism(r, g - 2, Y(0.45), AO_BASE);
+  T.walls(r, Y(0.45), Y(R), AO_BRICK, AO_ROOF);
+  for (const e of edgesOf(r)) T.ebox(e, 0, e.L, Y(0.45), Y(R), 0, 0.012, AO_BRICK, B.brick);
+  // the parapet and its coping round the roof (Ashley's shaped front has its own), and rooftop units back from the street
+  for (const e of edgesOf(r)) {
+    T.ebox(e, 0, e.L, Y(R), Y(H), -0.3, 0.012, AO_BRICK, B.brick);
+    if (e.nx < 0.9) T.ebox(e, -0.06, e.L + 0.06, Y(H), Y(H + 0.16), -0.36, 0.08, AO_TRIM);
+  }
+  B.box(-142, -138, Y(R), Y(R + 1.8), -282, -278.5, [0.62, 0.63, 0.63]);
+  B.box(-136, -133, Y(R), Y(R + 1.5), -266, -263.5, [0.62, 0.63, 0.63]);
+  B.box(-152, -149.5, Y(R), Y(R + 1.1), -263, -260, [0.55, 0.56, 0.56]);
+
+  // a flat shape on a wall: points [u, y] over the ground, between d0 and d1 out from it
+  const slab = (e, pts, d0, d1, col, m = brickOf(col)) => {
+    const P = (u, y, d) => [e.ax + e.tx * u + e.nx * d, g + y, e.az + e.tz * u + e.nz * d];
+    const v = pts.map(([u, y]) => new THREE.Vector2(u, y));
+    for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(v, [])) {
+      B.tri(m, P(v[i].x, v[i].y, d1), P(v[j].x, v[j].y, d1), P(v[k].x, v[k].y, d1), col);
+      B.tri(m, P(v[k].x, v[k].y, d0), P(v[j].x, v[j].y, d0), P(v[i].x, v[i].y, d0), col);
+    }
+    for (let i = 0; i < v.length; i++) {
+      const a = v[i], b = v[(i + 1) % v.length];
+      B.quad(m, P(a.x, a.y, d0), P(b.x, b.y, d0), P(b.x, b.y, d1), P(a.x, a.y, d1), col);
+    }
+  };
+  const box = (e, u0, u1, y0, y1, d0, d1, col, m = brickOf(col)) => T.ebox(e, u0, u1, Y(y0), Y(y1), d0, d1, col, m);
+  // a window in black frames: glass set in by `inset`, `cols` lights across and transoms at `bars` (heights over y0)
+  // Set back in the brick: a brick reveal round it standing 0.2 m proud of the wall (the wall can't be cut, so the
+  // window's depth is made by the reveal), the reflective glass at the back, slim dark frames and bars over it, and
+  // `blinds` (the share of its height from the top) drawn just behind the glass as pale blinds half let down
+  const win = (e, u0, u1, y0, y1, { cols = 1, bars = [], d = 0, inset = 0.2, f = 0.06, blinds = 0, reveal = true } = {}) => {
+    if (reveal) {
+      const r = 0.14;
+      box(e, u0 - f - r, u1 + f + r, y1 + f, y1 + f + r, d, d + inset, AO_BRICK);
+      box(e, u0 - f - r, u0 - f, y0 - f, y1 + f, d, d + inset, AO_BRICK);
+      box(e, u1 + f, u1 + f + r, y0 - f, y1 + f, d, d + inset, AO_BRICK);
+    }
+    box(e, u0, u1, y0, y1, d + 0.01, d + 0.03, [0.42, 0.47, 0.52], B.aoGlass);
+    if (blinds > 0) box(e, u0, u1, y1 - (y1 - y0) * blinds, y1, d + 0.03, d + 0.035, [0.82, 0.82, 0.8]);
+    const fd = d + 0.03, fo = d + 0.075;
+    box(e, u0 - f, u1 + f, y0 - f, y0, fd, fo, AO_FRAME);
+    box(e, u0 - f, u1 + f, y1, y1 + f, fd, fo, AO_FRAME);
+    box(e, u0 - f, u0, y0, y1, fd, fo, AO_FRAME);
+    box(e, u1, u1 + f, y0, y1, fd, fo, AO_FRAME);
+    for (let k = 1; k < cols; k++) { const u = u0 + ((u1 - u0) * k) / cols; box(e, u - 0.03, u + 0.03, y0, y1, fd, fo, AO_FRAME); }
+    for (const b of bars) box(e, u0, u1, y0 + b - 0.03, y0 + b + 0.03, fd, fo, AO_FRAME);
+  };
+  // the corbelled dentils under a coping, from (u0, y0) to (u1, y1)
+  const dentils = (e, u0, y0, u1, y1, d = 0) => {
+    const n = Math.max(1, Math.round(Math.hypot(u1 - u0, y1 - y0) / 0.42));
+    for (let k = 0; k < n; k++) {
+      const t = (k + 0.5) / n, u = u0 + (u1 - u0) * t, y = y0 + (y1 - y0) * t;
+      box(e, u - 0.1, u + 0.1, y - 0.42, y - 0.24, d, d + 0.1, AO_TRIM);
+    }
+    // a plain course over them
+    slab(e, [[u0, y0 - 0.24], [u1, y1 - 0.24], [u1, y1 - 0.12], [u0, y0 - 0.12]], d, d + 0.06, AO_PIER);
+  };
+
+  // bays of a wide four-light window below and a squarer one above, brick pilasters between (the Ann St side)
+  const bays = (e, from, to, every) => {
+    const n = Math.max(1, Math.floor((to - from) / every)), w = (to - from) / n;
+    for (let k = 0; k < n; k++) {
+      const u0 = from + k * w, u1 = u0 + w;
+      if (k > 0) box(e, u0 - 0.3, u0 + 0.3, 0.45, H - 0.6, 0, 0.12, AO_PIER);
+      win(e, u0 + 0.5, u1 - 0.5, 0.75, 3.55, { cols: 4 });
+      box(e, u0 + 0.35, u1 - 0.35, 0.55, 0.75, 0, 0.16, AO_TRIM);
+      const c = (u0 + u1) / 2;
+      win(e, c - 0.85, c + 0.85, 5.3, 7.4, { bars: [1.45] });
+      box(e, c - 1, c + 1, 5.12, 5.3, 0, 0.14, AO_TRIM);
+      // a soldier course over each upper window
+      box(e, c - 1.05, c + 1.05, 7.5, 7.75, 0, 0.06, AO_PIER);
+    }
+    // the floor line between the storeys
+    box(e, from, to, 4.3, 4.5, 0, 0.08, AO_PIER);
+  };
+  // Ashley St (east), south to north: u 0 at the corner by Ashley Terrace. As the street view shows it: a plain wing of
+  // two bays by the tower; the raised centre (a glass bay, the recessed entrance and a glass bay between broad brick
+  // piers under a stone band, the parapet stepping up into a low gable with dentils and stone accents); and the long,
+  // lower north wing of wide ground-floor windows with small ones above
+  const E = wallFrame(-121, -254, -119.5, -294.5, 1, 0), LE = E.L;
+  box(E, 0, LE, 0, 0.45, 0, 0.08, AO_BASE);
+  const P0 = 7.6, P1 = 22.9, PC = (P0 + P1) / 2, G0 = PC - 5.9, G1 = PC + 5.9;
+  // the raised gable over the centre: a step at each end, a shoulder, a step, and the rake up to the middle
+  const gable = [[G0, H], [G0, H + 0.6], [G0 + 1.3, H + 0.6], [G0 + 1.3, H + 0.85], [PC, H + 2.3], [G1 - 1.3, H + 0.85], [G1 - 1.3, H + 0.6], [G1, H + 0.6], [G1, H]];
+  slab(E, gable, -0.35, 0.05, AO_BRICK);
+  const cope = (u0, y0, u1, y1) => {
+    const a = Math.atan2(y1 - y0, u1 - u0), oy = 0.16 / Math.cos(a);
+    slab(E, [[u0 - 0.06, y0], [u1 + 0.06, y1], [u1 + 0.06, y1 + oy], [u0 - 0.06, y0 + oy]], -0.42, 0.1, AO_TRIM);
+  };
+  cope(0, H, G0, H); cope(G0, H + 0.6, G0 + 1.3, H + 0.6); cope(G0 + 1.3, H + 0.85, PC, H + 2.3);
+  cope(PC, H + 2.3, G1 - 1.3, H + 0.85); cope(G1 - 1.3, H + 0.6, G1, H + 0.6); cope(G1, H, LE, H);
+  for (const [u, y0, y1] of [[G0, H, H + 0.76], [G0 + 1.3, H + 0.6, H + 1.01], [G1 - 1.3, H + 0.6, H + 1.01], [G1, H, H + 0.76]]) box(E, u - 0.1, u + 0.1, y0, y1, -0.42, 0.1, AO_TRIM);
+  dentils(E, 0.2, H, G0 - 0.15, H, 0.02);
+  dentils(E, G0 + 0.1, H + 0.6, G0 + 1.2, H + 0.6, 0.02);
+  dentils(E, G0 + 1.4, H + 0.87, PC - 0.05, H + 2.26, 0.02);
+  dentils(E, PC + 0.05, H + 2.26, G1 - 1.4, H + 0.87, 0.02);
+  dentils(E, G1 - 1.2, H + 0.6, G1 - 0.1, H + 0.6, 0.02);
+  dentils(E, G1 + 0.15, H, LE - 0.2, H, 0.02);
+
+  // the centre: broad brick piers, the two glass bays set in between them and the entrance set further back
+  const PIER = 0.55, TOP = 7.2;
+  for (const [u0, u1] of [[P0, 9.3], [12.7, 13.9], [17.3, 18.5], [21.9, P1]]) {
+    box(E, u0, u1, 0, TOP, 0, PIER, AO_PIER);
+    box(E, u0 - 0.05, u1 + 0.05, 0, 0.45, 0, PIER + 0.05, AO_BASE);
+  }
+  // the stone band over them, and the brick of the gable's face above it with a thin stone line and stone squares
+  box(E, P0, P1, TOP, TOP + 0.35, 0, PIER + 0.08, AO_TRIM);
+  box(E, P0, P1, TOP + 0.35, H, 0, 0.3, AO_BRICK);
+  box(E, G0 + 0.6, G1 - 0.6, H - 0.75, H - 0.65, 0.3, 0.36, AO_TRIM);
+  for (const u of [P0 + 1.5, P0 + 3.4, P1 - 3.4, P1 - 1.5]) box(E, u - 0.16, u + 0.16, TOP + 1.0, TOP + 1.32, 0.3, 0.37, AO_TRIM);
+  win(E, 9.3, 12.7, 0.15, TOP, { cols: 3, bars: [2.4, 4.75], d: 0.32, reveal: false });
+  win(E, 18.5, 21.9, 0.15, TOP, { cols: 3, bars: [2.4, 4.75], d: 0.32, reveal: false });
+  win(E, 14.0, 17.2, 0.05, TOP - 0.25, { cols: 3, bars: [2.6, 4.9], d: 0.05, reveal: false });
+  // the entrance's deep reveal: its soffit and the door in the middle light
+  box(E, 13.9, 17.3, TOP - 0.25, TOP, 0, PIER, AO_PIER);
+  box(E, PC - 0.55, PC - 0.47, 0.05, 2.6, 0.03, 0.16, AO_FRAME);
+  box(E, PC + 0.47, PC + 0.55, 0.05, 2.6, 0.03, 0.16, AO_FRAME);
+  box(E, PC - 0.55, PC + 0.55, 2.52, 2.6, 0.03, 0.16, AO_FRAME);
+  // lamps on the piers either side of the entrance
+  for (const u of [13.3, 17.9]) box(E, u - 0.08, u + 0.08, 2.6, 3.1, PIER, PIER + 0.14, [0.62, 0.63, 0.64]);
+
+  // how far the sidewalk in front of u stands over the building's base (Ashley climbs to the north), so the ground-floor
+  // windows sit their height over it rather than sunk in it
+  const lift = (u) => Math.max(0, groundHeight(E.ax + E.tx * u + E.nx * 1.5, E.az + E.tz * u + E.nz * 1.5) + 0.15 - g);
+  // the south wing by the tower: two bays, a wide four-light window on each floor, stone squares between them
+  box(E, 0, 0.6, 0.45, H, 0, 0.14, AO_PIER);
+  for (let k = 0; k < 2; k++) {
+    const u0 = 0.6 + k * 3.5, u1 = u0 + 3.5, c = (u0 + u1) / 2;
+    const l = lift(c);
+    win(E, u0 + 0.3, u1 - 0.3, l + 0.6, l + 2.6, { cols: 4, blinds: 0.35 });
+    box(E, u0 + 0.2, u1 - 0.2, l + 0.42, l + 0.6, 0, 0.16, AO_TRIM);
+    win(E, u0 + 0.3, u1 - 0.3, 4.4, 6.9, { cols: 4, bars: [0.6] });
+    box(E, u0 + 0.2, u1 - 0.2, 4.22, 4.4, 0, 0.16, AO_TRIM);
+    box(E, c - 0.25, c + 0.25, 3.35, 3.75, 0, 0.06, AO_TRIM);
+  }
+  // the north wing: bays of a wide ground-floor window and two small windows above, stone squares under the parapet
+  const nb = Math.max(1, Math.floor((LE - 0.7 - P1) / 4.4)), nw = (LE - 0.7 - P1) / nb;
+  for (let k = 0; k < nb; k++) {
+    const u0 = P1 + k * nw, u1 = u0 + nw, c = (u0 + u1) / 2;
+    const l = lift(c);
+    win(E, u0 + 0.35, u1 - 0.35, l + 0.4, l + 2.7, { cols: 4, blinds: 0.55 });
+    box(E, u0 + 0.25, u1 - 0.25, l + 0.26, l + 0.4, 0, 0.16, AO_TRIM);
+    for (const du of [-1, 1]) {
+      win(E, c + du - 0.55, c + du + 0.55, l + 3.6, l + 5.3, { bars: [0.85] });
+      box(E, c + du - 0.68, c + du + 0.68, l + 3.44, l + 3.6, 0, 0.14, AO_TRIM);
+    }
+    box(E, c - 0.14, c + 0.14, 7.2, 7.48, 0, 0.06, AO_TRIM);
+  }
+  box(E, LE - 0.7, LE, 0.45, H, 0, 0.14, AO_PIER);
+
+  // Ann St (north), west to east, its corner pier meeting Ashley's
+  const N = wallFrame(-148.5, -295.5, -119.5, -294.5, 0, -1);
+  box(N, 0, N.L, 0, 0.45, 0, 0.08, AO_BASE);
+  bays(N, 0.8, N.L - 0.8, 4.4);
+  box(N, 0, 0.6, 0.45, H, 0, 0.14, AO_PIER);
+  box(N, N.L - 0.6, N.L, 0.45, H, 0, 0.14, AO_PIER);
+  dentils(N, 0.2, H, N.L - 0.2, H, 0.02);
+  // the back walls: plain brick with the upper windows only
+  for (const [ax, az, bx, bz, ox, oz] of [[-145, -267, -144, -285, -1, 0], [-161.5, -255.5, -161, -268, -1, 0], [-161, -268, -145, -267, 0, -1], [-149, -285, -148.5, -295.5, -1, 0]]) {
+    const e = wallFrame(ax, az, bx, bz, ox, oz);
+    for (let u = 2.2; u < e.L - 2; u += 4.4) win(e, u - 0.85, u + 0.85, 5.3, 7.4, { bars: [1.45] });
+  }
+  return { s, maxY: Y(H + 2.4) };
+}
+
 const MODELS = [
   ['Michigan League', michiganLeague],
   ['Rackham Building', rackham],
@@ -649,11 +846,40 @@ const MODELS = [
   ['Tower Plaza', towerPlaza],
   ['Gandy Dancer', gandyDancer],
   ['Amtrak Station', amtrakStation],
-  ['Huron High School', huronHigh]
+  ['Huron High School', huronHigh],
+  ['Atomic Object', atomicObject]
 ];
+
+// Face brick in running bond (modular courses 68 mm, bricks 203 mm), joints a little darker and each brick a shade off
+// its neighbours; past 9-24 m it settles to the plain colour so it doesn't shimmer. The courses run along whichever of
+// x and z the wall faces across; a top face is left plain.
+function brickMaterial() {
+  // (the colour attribute read in colorNode only: with vertexColors on as well it would be multiplied in twice)
+  const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, side: THREE.DoubleSide });
+  const n = normalWorld;
+  const along = mix(positionWorld.x, positionWorld.z, step(abs(n.z), abs(n.x)));
+  const y = positionWorld.y.div(0.0677), row = floor(y);
+  const u = along.div(0.203).add(row.mul(0.5));
+  const near = float(1).sub(smoothstep(9, 24, positionWorld.distance(cameraPosition))).mul(step(abs(n.y), 0.5));
+  const joint = max(step(fract(y), 0.15), step(fract(u), 0.045)).mul(near);
+  const tone = mx_noise_float(vec3(floor(u), row, 0.5)).mul(0.08).mul(near).add(1);
+  m.colorNode = vertexColor().mul(tone).mul(float(1).sub(joint.mul(0.28)));
+  return m;
+}
+
+// Plate glass that gives back the sky and the street (the landmarks' glass, nearly a mirror), still lit from inside at
+// dusk and night as theirs is
+function clearGlass() {
+  const m = landmarkGlass();
+  m.roughness = 0.04;
+  m.metalness = 0.92;
+  return m;
+}
 
 function buildMoreLandmarks(group, colliders) {
   const B = builder(), T = tools(B), built = [];
+  B.brick = { pos: [], col: [] };
+  B.aoGlass = { pos: [], col: [] };
   for (const [name, make] of MODELS) {
     const made = make(B, T);
     if (!made) continue;
@@ -680,7 +906,9 @@ function buildMoreLandmarks(group, colliders) {
   };
   group.add(
     mesh(B.stone, new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide, flatShading: true }), 'MoreLandmarksMasonry'),
-    mesh(B.glass, landmarkGlass(), 'MoreLandmarksGlass'));
+    mesh(B.glass, landmarkGlass(), 'MoreLandmarksGlass'),
+    mesh(B.brick, brickMaterial(), 'MoreLandmarksBrick'),
+    mesh(B.aoGlass, clearGlass(), 'MoreLandmarksClearGlass'));
   return built;
 }
 

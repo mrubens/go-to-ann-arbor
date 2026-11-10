@@ -303,7 +303,7 @@ function setPools(p) { pools = p; }
 
 // The river's water level at (x, z) (or a pool's), or null where there's no river
 function waterLevel(x, z) {
-  const pool = pools?.at(x, z);
+  const pool = pools?.wet ? pools.wet(x, z) : pools?.at(x, z);
   if (pool) return pool.level;
   const r = grid?.river;
   return r ? cascadeLevel(x, z, levelAt(r, x, z)) : null; // stepping down the Argo Cascades (cascades.js)
@@ -398,7 +398,7 @@ function riverbedHeight(x, z) {
 
 // How far (0-1) (x, z) is out in the river from its shore: 0 on land, 1 in open water
 function riverDepth(x, z) {
-  if (pools?.at(x, z)) return 1;
+  if (pools?.wet ? pools.wet(x, z) : pools?.at(x, z)) return 1;
   const r = grid?.river;
   return r ? digAt(r, x, z) : 0;
 }

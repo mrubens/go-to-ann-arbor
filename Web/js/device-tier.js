@@ -41,6 +41,26 @@ export const TOUCH_DEVICE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent
 export const XBOX = /Xbox/i.test(navigator.userAgent) || device?.layout === 'xbox' || device?.controller === 'xbox';
 export const FIREFOX = /Firefox\//i.test(navigator.userAgent);
 
+// The player's own choice of quality (the toolbar's Quality list, main.js), kept in this browser: 'auto' (chosen here
+// below, as it always was), 'full' (the full city) or 'lighter' (the slow tier's). Not offered, nor read, on a phone or
+// the Xbox, whose tiers are what they can hold.
+export const QUALITY_KEY = 'annArborQuality';
+export const QUALITY_CHOOSABLE = !TOUCH_DEVICE && !XBOX;
+export function qualityChoice() {
+  if (!QUALITY_CHOOSABLE) return 'auto';
+  try {
+    const v = localStorage.getItem(QUALITY_KEY);
+    return v === 'full' || v === 'lighter' ? v : 'auto';
+  } catch { return 'auto'; }
+}
+export function setQualityChoice(v) {
+  try {
+    if (v === 'full' || v === 'lighter') localStorage.setItem(QUALITY_KEY, v);
+    else localStorage.removeItem(QUALITY_KEY);
+    return true;
+  } catch { return false; }
+}
+
 // The tier in use, chosen as this module loads (before anything that imports it builds the city): read by everything
 // that builds it, at the top of its module too
 export const TIER = { ...TIERS.full };
@@ -57,7 +77,12 @@ async function chooseTier() {
   // work that took too long last time: main.js saves `slowWork`). The mark saved before as `slowDevice` judged by
   // frames a second, which a 30 Hz screen holds down on any Mac, so it's no longer read.
   let why = null;
-  if (!TOUCH_DEVICE && !XBOX) {
+  const chosen = qualityChoice();
+  if (chosen !== 'auto') {
+    // the player's own choice, over everything worked out below (but a `?tier=` in the address still wins)
+    name = chosen === 'full' ? 'full' : 'slow';
+    why = `chosen: ${chosen}`;
+  } else if (!TOUCH_DEVICE && !XBOX) {
     // (the mark lapses after a week, and main.js clears it when the lighter city runs with plenty to spare; one saved
     // on 'full' steps down to 'light' first, one saved on 'light' to 'slow')
     const slowWork = load('slowWork');

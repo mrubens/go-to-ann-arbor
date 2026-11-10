@@ -1476,9 +1476,17 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
   })();
 
   // Coverage: leaf cards from the atlas; bark is opaque from outside (its back faces are dropped)
-  const alpha = mix(float(frontFacing), leaf.a, isLeaf);
+  // Leaves right at the view thin away to nothing (1.4 to 3.2 m off), and the crown's shell cards (the atlas's far
+  // tile, metres across, made to be seen from outside the crown) go when the view is inside the shell and near them:
+  // so a crown the camera is in or brushes past (a tree knocked over across the street, a low bough over the chase
+  // view) isn't a wall of huge flat brown cards. The shadows keep every leaf.
+  const dist = length(positionView);
+  const shell = step(0.5, uv().x).mul(step(0.5, uv().y));
+  const inside = step(0.0, dot(normalViewGeometry, positionView)); // seen from the crown's side of the card
+  const nearFade = smoothstep(1.4, 3.2, dist).mul(float(1.0).sub(shell.mul(inside).mul(smoothstep(9.0, 6.0, dist))));
+  const alpha = mix(float(frontFacing), leaf.a.mul(nearFade), isLeaf);
   mat.alphaTestNode = float(0.5);
-  mat.maskShadowNode = alpha.greaterThan(0.5);
+  mat.maskShadowNode = mix(float(frontFacing), leaf.a, isLeaf).greaterThan(0.5);
 
   mat.colorNode = Fn(() => {
     // Leaves: per-tree tint x atlas brightness, a share of sun-yellowed and of cooler leaves, brown twigs & stalks,
