@@ -131,7 +131,7 @@ function createBikeRacks(group, data) {
     const g = buildMotoGeometry(MOTO_SPECS[kind], detail);
     g.setAttribute('paintColor', new THREE.InstancedBufferAttribute(new Float32Array(SHOWN * 3), 3));
     g.setAttribute('carState', new THREE.InstancedBufferAttribute(new Float32Array(SHOWN * 4), 4));
-    const m = new THREE.InstancedMesh(g, createMotoMaterial(), SHOWN);
+    const m = new THREE.InstancedMesh(g, createMotoMaterial(null, { parked: true }), SHOWN);
     m.count = 0;
     m.visible = false;
     m.frustumCulled = false;

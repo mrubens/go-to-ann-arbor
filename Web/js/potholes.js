@@ -89,9 +89,14 @@ function buildPotholes(group, data) {
   group.add(mesh);
 
   const cells = new Map();
+  // each hole filed in every cell its edge reaches, so a wheel just across a cell line still finds it
   for (const h of holes) {
-    const k = Math.floor(h.x / CELL) * 100000 + Math.floor(h.z / CELL);
-    (cells.get(k) || cells.set(k, []).get(k)).push(h);
+    for (let cx = Math.floor((h.x - h.r) / CELL); cx <= Math.floor((h.x + h.r) / CELL); cx++) {
+      for (let cz = Math.floor((h.z - h.r) / CELL); cz <= Math.floor((h.z + h.r) / CELL); cz++) {
+        const k = cx * 100000 + cz;
+        (cells.get(k) || cells.set(k, []).get(k)).push(h);
+      }
+    }
   }
   const at = (x, z, now) => {
     const list = cells.get(Math.floor(x / CELL) * 100000 + Math.floor(z / CELL));

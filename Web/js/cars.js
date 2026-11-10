@@ -1515,23 +1515,29 @@ function evalTyreColor(rNorm, fwRing) {
 /**
  * Lightweight TSL material for 3D steerable/spinning car wheels (`buildSteerableWheelGeo`).
  * Instanced street-traffic wheels read per-instance `wheelStyle` (`carStyleCode` float); standalone player wheels
- * bake a fixed `style` code without compiling or evaluating body/window/lamp/plate graphs.
+ * read the `style` code from a uniform (`material.userData.style`), without compiling or evaluating
+ * body/window/lamp/plate graphs. With a `slot` (a player's car, as createLoftedCarMaterial) there's one material per
+ * wheel size for that player, its style set again each time they take another car, so it stays one shader.
  */
-function createCarWheelMaterial({ instanced = false, style = 0, wheelRadius = BODY_SPECS.sedan.wheelRadius } = {}) {
-  const cacheKey = `${instanced ? 'instanced' : `fixed_${style}`}_${wheelRadius}`;
+function createCarWheelMaterial({ instanced = false, style = 0, wheelRadius = BODY_SPECS.sedan.wheelRadius, slot = null } = {}) {
+  const cacheKey = `${instanced ? 'instanced' : slot !== null ? `slot${slot}` : `fixed_${style}`}_${wheelRadius}`;
   if (_carWheelMaterialCache.has(cacheKey)) {
-    return _carWheelMaterialCache.get(cacheKey);
+    const made = _carWheelMaterialCache.get(cacheKey);
+    if (made.userData.style) made.userData.style.value = style || 0;
+    return made;
   }
 
+  // the wheel field is masked to its two bits, as the body material does, so the plate bits above it don't leak in
+  const styleUniform = instanced ? null : slot !== null ? uniform(style || 0) : null;
   let isPolice, isBlackout, wheelCode;
-  if (instanced) {
-    const wCode = attribute('wheelStyle', 'float');
+  if (instanced || styleUniform) {
+    const wCode = instanced ? attribute('wheelStyle', 'float') : styleUniform;
     const vWheel = varying(
       vertexStage(
         vec3(
           step(abs(floor(fract(wCode.div(8.0)).mul(8.0).add(0.5)).sub(1.0)), 0.25),
           step(abs(floor(fract(floor(wCode.div(16.0).add(0.01)).mul(0.25)).mul(4.0).add(0.5)).sub(2.0)), 0.25),
-          floor(wCode.div(64.0).add(0.01))
+          floor(fract(floor(wCode.div(64.0).add(0.01)).mul(0.25)).mul(4.0).add(0.5))
         )
       )
     );
@@ -1574,6 +1580,7 @@ function createCarWheelMaterial({ instanced = false, style = 0, wheelRadius = BO
   mat.colorNode = colorFn();
   mat.roughnessNode = mix(float(0.78), mix(float(0.22), float(0.52), isPolice), isAlloy);
   mat.metalnessNode = mix(float(0.04), mix(float(0.84), float(0.22), isPolice), isAlloy);
+  if (styleUniform) mat.userData.style = styleUniform;
 
   _carWheelMaterialCache.set(cacheKey, mat);
   return mat;
@@ -1703,7 +1710,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
   const [tlX, tlY, tlW, tlH] = spec.taillight;
   const [grY, grW, grH] = spec.grille;
   const [inY, inW, inH] = spec.intake;
-  const [plateF, plateR] = spec.plates;
+  const plateR = spec.plates[1]; // (the front one's height is unused: Michigan cars carry a rear plate only)
   const frontZone = spec.zFront - 0.58;
   const rearZone = spec.zRear + 0.58;
   const sillY = spec.sill[1][1];
@@ -1867,12 +1874,10 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
 
     // Sample plate texture outside If() so hardware mipmaps + anisotropy filter cleanly without derivative issues
     const plateVariant = vPlate;
-    const isFrontSide = smoothstep(-0.02, 0.02, n.z);
-    const plateSignX = mix(float(-0.31), float(0.31), isFrontSide);
-    const plateCenterY = mix(float(plateR), float(plateF), isFrontSide);
+    // (Michigan issues rear plates only: none on the nose)
     const plateUV = vec2(
-      clamp(p.x.div(plateSignX).add(0.5), 0.02, 0.98),
-      clamp(p.y.sub(plateCenterY).div(0.115).add(0.5), 0.06, 0.94).add(plateVariant).div(PLATE_ROWS)
+      clamp(p.x.div(-0.31).add(0.5), 0.02, 0.98),
+      clamp(p.y.sub(plateR).div(0.115).add(0.5), 0.06, 0.94).add(plateVariant).div(PLATE_ROWS)
     );
     const plateCol = texture(carPlateTexture(), plateUV).rgb;
 
@@ -1942,7 +1947,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
         }
       });
 
-      // Front fascia: headlamps, honeycomb grille, lower intake, air curtains & front NY license plate
+      // Front fascia: headlamps, honeycomb grille, lower intake & air curtains (plain bumper where New York's plate was)
       If(p.z.greaterThan(frontZone).and(n.z.greaterThan(0.02)), () => {
         const front = smoothstep(0.12, 0.38, n.z);
         const hoodSeam = band(p.y.sub(spec.bumperLine[0]), 0.0035, fwY)
@@ -1973,13 +1978,8 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
         const lampColor = mix(mix(lampBezel, color(0xf4f8ff), headlightLens), color(0xffffff), drl);
         bCol.assign(mix(bCol, mix(lampColor, color(0xb85e16), turnFront), headlight));
 
-        const frontPlateEdge = rrectEdge(vec2(p.x, p.y.sub(plateF)), vec2(0.155, 0.055), 0.008, fwXY);
-        const plateRecessF = cov(frontPlateEdge.d.sub(0.015), frontPlateEdge.w).mul(front);
-        const plateFront = cov(frontPlateEdge.d, frontPlateEdge.w).mul(front);
-        bCol.assign(mix(bCol, color(0x1e2227), plateRecessF));
-        bCol.assign(mix(bCol, plateCol, plateFront));
       }).ElseIf(p.z.lessThan(rearZone).and(n.z.lessThan(-0.02)), () => {
-        // Rear fascia: wraparound tail lamps, diffuser, exhausts & rear NY license plate
+        // Rear fascia: wraparound tail lamps, diffuser, exhausts & the rear Michigan license plate
         const rear = smoothstep(0.12, 0.38, n.z.negate());
         const rearPlateEdge = rrectEdge(vec2(p.x, p.y.sub(plateR)), vec2(0.155, 0.06), 0.008, fwXY);
         const platePocket = rrect(vec2(p.x, p.y.sub(plateR + 0.01)), vec2(0.24, 0.105), 0.03, fwXY).mul(rear);

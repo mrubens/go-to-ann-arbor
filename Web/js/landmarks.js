@@ -127,7 +127,7 @@ function buildBigHouse(group, colliders) {
   for (const sx of [-1, 1]) flat(0.2, L + EZ * 2, 0xf2f2ee, 0.03, sx * W / 2, 0);
   for (const sz of [-1, 1]) flat(W, 0.2, 0xf2f2ee, 0.03, 0, sz * (L / 2 + EZ));
   // hash marks
-  for (let yd = 1; yd < 100; yd++) for (const hx of [-3.08, 3.08]) flat(0.6, 0.1, 0xf2f2ee, 0.03, hx, -L / 2 + (yd / 100) * L);
+  for (let yd = 1; yd < 100; yd++) for (const hx of [-6.096, 6.096]) flat(0.6, 0.1, 0xf2f2ee, 0.03, hx, -L / 2 + (yd / 100) * L);
   // MICHIGAN across each end zone in maize outlined in white, its tops toward the end line
   {
     const cv = document.createElement('canvas');

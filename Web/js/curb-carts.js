@@ -8,6 +8,7 @@ import * as THREE from 'three/webgpu';
 import { nearestRoads } from './city-config.js';
 import { landUseAt, LAND_USE } from './districts.js';
 import { groundHeight } from './terrain.js';
+import { curbParking } from './parked-cars.js';
 
 // Ann Arbor's carts: dark blue for trash, royal blue for recycling, brown for compost
 const COLORS = { trash: 0x18233f, recycling: 0x2456c8, compost: 0x5e3f24 };
@@ -114,6 +115,22 @@ function buildCurbCarts(group, data, addresses) {
       taken.set(k, true);
       return true;
     };
+    // kept out of the stalls a parked car stands in and out of the driveways' mouths (parked-cars.js)
+    const { spots, nearCut } = curbParking();
+    const stallCells = new Map();
+    for (const st of spots) {
+      const k = Math.floor(st.x / 20) * 100000 + Math.floor(st.z / 20);
+      if (!stallCells.has(k)) stallCells.set(k, []);
+      stallCells.get(k).push(st);
+    }
+    const inStall = (x, z) => {
+      const gx = Math.floor(x / 20), gz = Math.floor(z / 20);
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        for (const st of stallCells.get((gx + i) * 100000 + gz + j) || []) if (Math.hypot(st.x - x, st.z - z) < 3.6) return true;
+      }
+      return false;
+    };
+    const clear = (x, z) => !inStall(x, z) && !nearCut(x, z, 3.2);
     for (let i = 0; i + 2 < addresses.length; i += 3) {
       const x = addresses[i], z = addresses[i + 1];
       if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
@@ -128,11 +145,17 @@ function buildCurbCarts(group, data, addresses) {
       const side = Math.sign((x - s.x) * s.uz - (z - s.z) * s.ux) || 1;
       const nx = s.uz * side, nz = -s.ux * side; // from the street's middle toward the house
       const off = s.w / 2 - 0.45;
-      const along = 2.2 + hash(x, z, 1) * 1.2;
-      const cx = s.x + nx * off + s.ux * along, cz = s.z + nz * off + s.uz * along;
-      if (!free(cx, cz)) continue;
       const kinds = ['trash', 'recycling'];
       if (compost && hash(x, z, 2) < 0.35) kinds.push('compost');
+      // (and down the street from it, the drive's other side, where up the street is a parked car or the drive)
+      const reach = (kinds.length - 1) * 0.4;
+      const along = 2.2 + hash(x, z, 1) * 1.2;
+      let cx = 0, cz = 0, ok = false;
+      for (const a of [along, -along, along + 2.5, -along - 2.5]) {
+        cx = s.x + nx * off + s.ux * a; cz = s.z + nz * off + s.uz * a;
+        if (clear(cx - s.ux * reach, cz - s.uz * reach) && clear(cx + s.ux * reach, cz + s.uz * reach)) { ok = true; break; }
+      }
+      if (!ok || !free(cx, cz)) continue;
       // facing the street, side by side along the curb, each a little askew
       const yaw = Math.atan2(-nx, -nz);
       kinds.forEach((kind, k) => {

@@ -1,7 +1,7 @@
 // Kayaks pulled up on the Huron's banks at the parks where people put in (Argo, Bandemer, Island Park, Gallup, the
 // Arb...): two or three to a spot, on the grass a step from the water, in a row along the shore. Walk up to one and get
 // in (the same key as a car) and the player's kayak is put in the water there, facing downstream; the one taken leaves
-// the bank until another is taken.
+// the bank until another is taken (or another boat is), and stays off it after a reload.
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundHeight, groundTilt, nearestWater, riverDepth, waterLevel } from './terrain.js';
@@ -71,11 +71,26 @@ function buildKayakLaunches(group) {
     }
   }
 
+  // each put-in's kayaks their own pair of instanced meshes, hidden with it far off (scene-culling.js cullDistance)
+  // rather than one pair across the whole river drawn from anywhere in town
   const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.35, metalness: 0.0 });
-  const body = new THREE.InstancedMesh(hullGeometry(), mat, Math.max(1, sites.length));
-  body.name = 'BeachedKayaks';
   const cockpitMat = new THREE.MeshStandardNodeMaterial({ color: 0x15171a, roughness: 0.75 });
-  const cockpit = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 16).rotateX(-Math.PI / 2).scale(0.23, 1, 0.37).translate(0, 0.226, -0.12), cockpitMat, Math.max(1, sites.length));
+  const hullGeo = hullGeometry();
+  const cockpitGeo = new THREE.CircleGeometry(1, 16).rotateX(-Math.PI / 2).scale(0.23, 1, 0.37).translate(0, 0.226, -0.12);
+  const bySite = new Map();
+  for (const s of sites) {
+    if (!bySite.has(s.name)) bySite.set(s.name, []);
+    bySite.get(s.name).push(s);
+  }
+  const meshes = [];
+  for (const list of bySite.values()) {
+    const body = new THREE.InstancedMesh(hullGeo, mat, list.length);
+    body.name = 'BeachedKayaks';
+    const cockpit = new THREE.InstancedMesh(cockpitGeo, cockpitMat, list.length);
+    for (const m of [body, cockpit]) m.userData.cullDistance = 450;
+    list.forEach((s, j) => { s.body = body; s.cockpit = cockpit; s.slot = j; });
+    meshes.push(body, cockpit);
+  }
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), one = new THREE.Vector3(1, 1, 1);
   const zero = new THREE.Vector3(0, 0, 0), p = new THREE.Vector3(), color = new THREE.Color();
   const place = (i, shown) => {
@@ -86,17 +101,19 @@ function buildKayakLaunches(group) {
     q.setFromEuler(e);
     p.set(s.x, groundHeight(s.x, s.z) - 0.04, s.z);
     m.compose(p, q, shown ? one : zero);
-    body.setMatrixAt(i, m);
-    cockpit.setMatrixAt(i, m);
+    s.body.setMatrixAt(s.slot, m);
+    s.cockpit.setMatrixAt(s.slot, m);
+    s.body.instanceMatrix.needsUpdate = s.cockpit.instanceMatrix.needsUpdate = true;
   };
   sites.forEach((s, i) => {
     place(i, true);
-    body.setColorAt(i, color.setHex(s.color));
+    s.body.setColorAt(s.slot, color.setHex(s.color));
   });
-  if (!sites.length) body.count = cockpit.count = 0;
-  body.instanceMatrix.needsUpdate = cockpit.instanceMatrix.needsUpdate = true;
-  if (body.instanceColor) body.instanceColor.needsUpdate = true;
-  group.add(body, cockpit);
+  for (const mesh of meshes) {
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    group.add(mesh);
+  }
 
   let taken = -1;
   return {
@@ -111,14 +128,22 @@ function buildKayakLaunches(group) {
       });
       return best;
     },
+    // the one the player has (kept with the game's saves, so a reload leaves its spot empty), or -1
+    get taken() { return taken; },
     // takes it off the bank (and puts back the one taken before), saying where to put the player's kayak in
     take(i) {
+      const s = sites[i];
+      if (!s) return null;
       if (taken >= 0) place(taken, true);
       taken = i;
       place(i, false);
-      body.instanceMatrix.needsUpdate = cockpit.instanceMatrix.needsUpdate = true;
-      const s = sites[i];
       return { x: s.water.x, z: s.water.z, y: waterLevel(s.water.x, s.water.z) };
+    },
+    // another boat taken (or the game started over): the one taken goes back on its bank
+    release() {
+      if (taken < 0) return;
+      place(taken, true);
+      taken = -1;
     }
   };
 }

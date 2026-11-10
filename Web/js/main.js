@@ -99,6 +99,9 @@ if (window.webkit?.messageHandlers?.lampNative && /Mac/.test(navigator.platform)
 // works out how to draw every object anew for a new one of them, which held the game still for a second at each change.
 // Everything else here (the HUD, the controllers, the sound) is made again from the page as it is now.
 const live = hot(import.meta);
+// how many times the code has run in this page (more than once after a change while it's played: see watchWork)
+const liveRuns = live.keep('liveRuns', () => ({ n: 0 }));
+liveRuns.n++;
 
 // The generated data each part of the city is built from (its keep's `from`): a change to one, a street's lanes added to
 // the map or new tree points, builds those parts again in place.
@@ -136,10 +139,14 @@ async function initApp() {
 
   // Lamp: a start with the renderer kept (see the top of this file) shows no loading screen and doesn't wait for it
   let warmStart = false;
+  let paintedAt = -Infinity;
   async function showLoadingStage(message) {
     if (loadingStatus) loadingStatus.textContent = message;
     if (loadingTrack) loadingTrack.classList.add('is-indeterminate');
     if (document.hidden || warmStart) return;
+    // (a frame waited for only when the last label has been up a while: each wait is a frame and a timer, and a
+    // label shown for less than that isn't read)
+    if (performance.now() - paintedAt < 150) return;
     // Let the label paint before synchronous work. The timeout also lets hidden tabs keep loading.
     await new Promise((resolve) => {
       const timeout = setTimeout(resolve, 100);
@@ -148,6 +155,7 @@ async function initApp() {
         setTimeout(resolve, 0);
       });
     });
+    paintedAt = performance.now();
   }
 
   await showLoadingStage('Initializing graphics...');
@@ -579,7 +587,8 @@ async function initApp() {
     }
   });
   // Lamp: Ann Arbor's animals, near the player only; never anyone's obstacle (animals.js)
-  const animalsPart = live.keep('animals', () => cityPart((g) => buildAnimals(g)), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
+  // (none on the Xbox, where they're never shown: an empty part, so their models and shaders aren't made there at all)
+  const animalsPart = live.keep('animals', () => cityPart((g) => (XBOX ? { update() {} } : buildAnimals(g))), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
   const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
@@ -603,8 +612,12 @@ async function initApp() {
   // Lamp: snow lies where it really lies today (snow-cover.js), on what stands still: moving traffic, people, the
   // river and the sky stay as they are
   // (only once there is snow: on a bare day the materials keep their shaders as they are)
+  // (a pool's coping, deck and chairs too, but not what's under its water or floats on it: the water's left open, as
+  // nothing says which pools are covered)
   loadSnowCover().then((cover) => {
-    if (cover > 0) for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
+    if (cover <= 0) return;
+    poolsPart.group.traverse((o) => { if (o.isMesh && /^(Pool floor|Pool walls|Lane ropes)/.test(o.name)) for (const m of [o.material].flat()) m.userData.snow = 0; });
+    for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, poolsPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
   });
   const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
   scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
@@ -736,6 +749,7 @@ async function initApp() {
       controllerManager.dressBoat(saved.boat);
       if (saved.liveryTaken >= 0) liveryPart.made.take(saved.liveryTaken, true);
       if (saved.docksTaken >= 0) docksPart.made.take(saved.docksTaken);
+      if (saved.launchesTaken >= 0) kayakLaunches.take(saved.launchesTaken);
     }
   } catch { /* Missing or unavailable storage does not prevent playing. */ }
 
@@ -749,7 +763,8 @@ async function initApp() {
       }]));
       const leftEmpty = Object.keys(controllerManager.entities).filter((mode) => controllerManager.entities[mode].leftEmpty);
       save('player', { version: 2, activeMode: controllerManager.activeMode, entities, carLook: controllerManager.carLook, leftEmpty,
-        boat: controllerManager.entities.kayak.boat, liveryTaken: liveryPart.made.taken, docksTaken: docksPart.made.taken });
+        boat: controllerManager.entities.kayak.boat, liveryTaken: liveryPart.made.taken, docksTaken: docksPart.made.taken,
+        launchesTaken: kayakLaunches.taken });
       save('parkedSwaps', parkedCars.history);
     } catch { /* Storage may be disabled or full. */ }
   }
@@ -1063,12 +1078,20 @@ async function initApp() {
   let jumpOut = false;
   // On foot, what F would do now (what's in reach, looked for each quarter second below): '' with nothing near hides it
   let getInWords = '';
+  // the tee a round starts from with F, or -1: not while a car, bike or boat is in reach to get into (a car left by the
+  // tee is got back into, not a round started)
+  function teeToPlay(p) {
+    const tee = golf.teeNear(p.position.x, p.position.z);
+    if (tee < 0) return -1;
+    const c = controllerManager.enterOrExit(parkedCars, trafficSystem, true);
+    return c && !c.sit ? -1 : tee;
+  }
   function getInNow() {
     const cm = controllerManager, p = cm.entities.person;
     if (cm.activeMode !== 'person' || p.fallen || p.chute) return '';
     if (p.onBus) return 'Get off';
     if (golf.active) return 'Stop golfing';
-    if (!p.sitting && golf.teeNear(p.position.x, p.position.z) >= 0) return 'Play golf';
+    if (!p.sitting && teeToPlay(p) >= 0) return 'Play golf';
     if (trafficSystem.boardBus(p.position.x, p.position.z, 5, true)) return 'Board the bus';
     const c = cm.enterOrExit(parkedCars, trafficSystem, true);
     if (!c) return '';
@@ -1166,6 +1189,8 @@ async function initApp() {
   }
 
   function selectMode(mode) {
+    // (a landmark's flyover doesn't follow the player into another vehicle)
+    endChampionFlyover();
     selectingMode = true;
     try { controllerManager.setMode(mode); } finally { selectingMode = false; }
     showMode(mode);
@@ -1227,6 +1252,8 @@ async function initApp() {
     const cm = controllerManager;
     const p = cm.entities.person;
     p.fallen = null;
+    // (and the computer judged afresh: see watchWork)
+    save('slowWork', null);
     cm.dropChute();
     if (p.rig) p.rig.ragdolling = false;
     p.riding = null;
@@ -1237,6 +1264,7 @@ async function initApp() {
     cm.dressBoat('kayak');
     liveryPart.made.release();
     docksPart.made.release();
+    kayakLaunches.release();
     dropColliderCells();
     for (const [mode, s] of Object.entries(SCENIC_STARTS)) {
       const e = cm.entities[mode];
@@ -1270,6 +1298,7 @@ async function initApp() {
   function goToStart(mode) {
     const s = SCENIC_STARTS[mode];
     if (!s) return;
+    endChampionFlyover();
     if (s.atAirport != null) startInHelicopter(s); else controllerManager.teleportActiveTo(s.x, s.z, s.heading, s.above ? groundHeight(s.x, s.z) + s.above : null);
     touchControls.reset();
     gamepadControls.reset();
@@ -1334,7 +1363,7 @@ async function initApp() {
     // golf: from a tee, a round; while playing, stopped
     if (was === 'person' && golf.active) { golf.quit(); return; }
     if (was === 'person' && !p.sitting && !p.fallen && !p.chute && !p.onBus) {
-      const tee = golf.teeNear(p.position.x, p.position.z);
+      const tee = teeToPlay(p);
       if (tee >= 0) { golf.start(tee); return; }
     }
     // on a bench, a chair or the bleachers: up again
@@ -1449,6 +1478,7 @@ async function initApp() {
       const k = cm.entities.kayak, put = liveryPart.made.take(choice.boat.i);
       cm.dressBoat(put.kind);
       docksPart.made.release();
+      kayakLaunches.release();
       k.position.set(put.x, put.y, put.z);
       k.heading = put.heading ?? cm.downstreamHeading(put.x, put.z, k.heading);
       k.speed = k.driftX = k.driftZ = k.turnVel = 0;
@@ -1461,6 +1491,7 @@ async function initApp() {
       const k = cm.entities.kayak, put = docksPart.made.take(choice.tied.i);
       cm.dressBoat('kayak');
       liveryPart.made.release();
+      kayakLaunches.release();
       k.position.set(put.x, put.y, put.z);
       k.heading = put.heading;
       k.speed = k.driftX = k.driftZ = k.turnVel = 0;
@@ -1483,8 +1514,12 @@ async function initApp() {
     if (choice.mode === 'car' && !choice.stairs && !choice.parked && !choice.moving && !choice.rack && !choice.machine &&
       car.machine === 'stairtruck' && !airportPart.made.stairsHeld) airportPart.made.claimStairs?.(car.position.x, car.position.z);
     selectMode(choice.mode);
-    if (choice.mode === 'person' && was === 'car' && car.machine === 'stairtruck' && airportPart.made.stairsHeld) parkStairs();
+    const stairsLeft = choice.mode === 'person' && was === 'car' && car.machine === 'stairtruck' && airportPart.made.stairsHeld;
+    if (stairsLeft) parkStairs();
     if (choice.jump) cm.bailOut(choice.jump);
+    // (airstairs jumped out of on the move stand where they were left: the truck they're driven as doesn't roll on
+    // without them, which left a second one to drive away from the first)
+    if (stairsLeft && car.coasting) { car.coasting = false; cm.stopCar(car); }
     if (choice.jump === 'chute') {
       const on = input(), key = on.kind === 'keyboard' ? label('Space', on) : label(BUTTON.A, on);
       showNotice(key ? `${key} to open your parachute` : 'Jump to open your parachute', 3);
@@ -1564,15 +1599,15 @@ async function initApp() {
     trafficSystem.setCrowdBusy?.(crowdBusy(timeId));
     // rain or snow falls only under the real sky
     precipitation.set(timeId === 'now' ? lightingSystem.weather : null);
-    colorGrade.applyPreset(lightingSystem.lookId);
-    split.view?.grade.applyPreset(lightingSystem.lookId);
+    colorGrade.applyPreset(lightingSystem.lookId, lightingSystem.lookBlend);
+    split.view?.grade.applyPreset(lightingSystem.lookId, lightingSystem.lookBlend);
     timeButtons.forEach((btn) => {
       btn.classList.toggle('active', btn.getAttribute('data-time') === timeId);
     });
     if (timeId === 'now') describeNow();
   }
   // "Now": Ann Arbor's real sky, its sunrise and sunset worked out here, put on again every minute
-  let nowCheckedAt = 0;
+  let nowCheckedAt = Date.now();
   let releaseFrame = 0, freedSinceReport = 0, reportedAt = 0;
   function describeNow() {
     const btn = document.getElementById('time-now');
@@ -1770,7 +1805,7 @@ async function initApp() {
   elChampion.addEventListener('click', () => (championFlying ? endChampionFlyover() : startChampionFlyover()));
   // the keys (the page reads them itself): T flies round the tree whose card is up; Escape or a driving key comes back
   window.addEventListener('keydown', (e) => {
-    if (isTypingInField(e) || e.repeat || mapSystem.isFullMapOpen) return;
+    if (isTypingInField(e) || e.repeat || e.metaKey || e.ctrlKey || e.altKey || mapSystem.isFullMapOpen) return;
     if (championFlying && /^(Escape|Key[WASDT]|Arrow)/.test(e.code)) endChampionFlyover();
     else if (!championFlying && (championShown || viewLandmark) && e.code === 'KeyT') startChampionFlyover();
   });
@@ -1778,12 +1813,13 @@ async function initApp() {
     lastNow = now;
     if (now < championCheckAt) return;
     championCheckAt = now + 400;
-    let near = null;
+    // the nearest within 40 m (two champions can stand a few metres apart), its card shown as it becomes the nearest
+    let near = null, nearest = 40 * 40;
     for (const t of CHAMPION_TREES) {
-      const dx = t.x - pos.x, dz = t.z - pos.z;
-      if (dx * dx + dz * dz < 40 * 40) { near = t; break; }
+      const dx = t.x - pos.x, dz = t.z - pos.z, d = dx * dx + dz * dz;
+      if (d < nearest) { near = t; nearest = d; }
     }
-    if (near && near !== championNear && !championFlying) showChampion(near, !championFound.has(near.name));
+    if (near && near !== championShown && !championFlying) showChampion(near, !championFound.has(near.name));
     // gone well away from it: the next visit shows its card again
     if (championNear && !near) {
       const dx = championNear.x - pos.x, dz = championNear.z - pos.z;
@@ -1808,10 +1844,13 @@ async function initApp() {
   let locationText = '';
   const elViewHint = document.createElement('span');
   elViewHint.className = 'location-view';
+  // (on a touch screen, with no button to name, the hint itself is pressed: "Tap to view")
+  elViewHint.style.pointerEvents = 'auto';
+  elViewHint.addEventListener('click', () => (championFlying ? endChampionFlyover() : startChampionFlyover()));
   function drawViewHint(on = input()) {
     const keys = on.kind === 'keyboard';
     const g = glyph(championFlying ? (keys ? 'Escape' : CHAMPION_CONTROLS.back) : (keys ? 'KeyT' : CHAMPION_CONTROLS.flyover));
-    elViewHint.replaceChildren(...(g ? [g, document.createTextNode(championFlying ? ' to go back' : ' to view')] : []));
+    elViewHint.replaceChildren(g ? g : '', document.createTextNode(g ? (championFlying ? ' to go back' : ' to view') : (championFlying ? 'Tap to go back' : 'Tap to view')));
   }
   onInput((on) => drawViewHint(on));
   function renderLocation(label) {
@@ -1878,6 +1917,7 @@ async function initApp() {
   let arrival = null;
   function teleportTo(x, z, heading = Math.PI, lookUp) {
     arrival = null;
+    endChampionFlyover();
     const destination = controllerManager.teleportActiveTo(x, z, heading);
     log(`[teleport] asked ${x.toFixed(1)}, ${z.toFixed(1)} → landed ${destination.x.toFixed(1)}, ${destination.z.toFixed(1)} as ${controllerManager.activeMode}`);
     touchControls.reset();
@@ -1949,8 +1989,9 @@ async function initApp() {
 
   // Global keyboard shortcuts for modes (1-5), getting in and out (F), cameras (V / 6-0), and HUD (H)
   window.addEventListener('keydown', (e) => {
-    // (with the full map over the city its keys are the map's)
-    if (isTypingInField(e) || mapSystem.isFullMapOpen) return;
+    // (with the full map over the city its keys are the map's; a held key's repeats and Cmd, Ctrl or Option with a key
+    // are left alone, so holding V doesn't race through the cameras or Cmd+1 change vehicle)
+    if (isTypingInField(e) || mapSystem.isFullMapOpen || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
     switch (e.code) {
       case 'Digit1':
         travelBy('person');
@@ -1983,7 +2024,7 @@ async function initApp() {
         selectCamera('stateLiberty', true);
         break;
       case 'KeyF':
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) getInOrOut();
+        getInOrOut();
         break;
       case 'KeyV':
         cycleCamera(e.shiftKey ? -1 : 1);
@@ -1992,13 +2033,13 @@ async function initApp() {
         if (hudToggleBtn) hudToggleBtn.click();
         break;
       case 'KeyN':
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) audioSystem.setEnabled(!audioSystem.enabled);
+        audioSystem.setEnabled(!audioSystem.enabled);
         break;
       case 'KeyR':
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) carRadio.tune(e.shiftKey ? -1 : 1);
+        carRadio.tune(e.shiftKey ? -1 : 1);
         break;
       case 'KeyB':
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity());
+        audioSystem.honk(controllerManager.getActiveEntity());
         break;
     }
   });
@@ -2023,10 +2064,10 @@ async function initApp() {
   });
   selectCamera('chase', true);
   // Lamp: Ann Arbor's weather now (weather.js), on the "Now" sky and falling around the camera; asked for again every
-  // 15 minutes of play
+  // 15 minutes by the clock (not of play: after the lid's been shut or the page hidden, at once on its first frame back)
   let weatherAskedAt = -Infinity;
-  const askWeather = (elapsed) => {
-    weatherAskedAt = elapsed;
+  const askWeather = () => {
+    weatherAskedAt = Date.now();
     fetchWeather().then((w) => {
       lightingSystem.weather = w;
       log(`[weather] ${w.live ? 'Ann Arbor now' : 'offline, so'}: ${w.text}${w.tempF != null ? `, ${w.tempF}°F` : ''}`);
@@ -2114,7 +2155,15 @@ async function initApp() {
     setLoadingProgress(0);
     renderer.setRenderTarget(scenePass.renderTarget);
     renderer.setMRT(sceneMRT);
+    // one of each shader (warmKey: its materials, attributes, instancing and shadows), as compileLater and warmAhead
+    // do: each compileAsync walks the whole scene, and the meshes that share a shader with one already done need none
+    const compiledKeys = new Set();
     const compile = async (object) => {
+      if (object.isMesh && object.geometry?.attributes) {
+        const key = object.userData.warmKey ??= warmKey(object);
+        if (compiledKeys.has(key)) return;
+        compiledKeys.add(key);
+      }
       // Each compile starts in a task of its own: compileAsync() keeps one precompilation state on the renderer,
       // which must not be mid-step for two of them in the same microtask checkpoint
       await nextTask();
@@ -2147,7 +2196,8 @@ async function initApp() {
   // The shaders left for later, one at a time between frames: each takes the scene pass's target and every object
   // drawn unculled only while it's taken (compileAsync reads them at once, then waits for the GPU's compile)
   // (`detached`: objects made only to compile, in no scene: the cars a player might take, controllers.js)
-  async function compileLater(jobs, { detached = false, what = 'far parts' } = {}) {
+  // (`unshadowed`: the shaders as split screen draws them, without the sun's shadows: see warmSplit)
+  async function compileLater(jobs, { detached = false, what = 'far parts', unshadowed = false } = {}) {
     const began = performance.now();
     let count = 0;
     // one of each material and geometry layout (as warmAhead does): the objects that share one share its shader
@@ -2158,7 +2208,7 @@ async function initApp() {
         const key = object.userData.warmKey ??= warmKey(object);
         if (seen.has(key)) continue;
         seen.add(key);
-        if (!detached) warmSeen.add(key);
+        if (!detached && !unshadowed) warmSeen.add(key);
       }
       await nextTask();
       if (!object.parent && !detached) continue;
@@ -2166,8 +2216,12 @@ async function initApp() {
       object.traverse((o) => { if (o.frustumCulled) { wasCulled.push(o); o.frustumCulled = false; } });
       renderer.setRenderTarget(scenePass.renderTarget);
       renderer.setMRT(sceneMRT);
+      // (the shadows' setting is part of each shader's key, read as compileAsync sets the object up)
+      const shadowsWere = renderer.shadowMap.enabled;
+      if (unshadowed) renderer.shadowMap.enabled = false;
       let done;
       try { done = renderer.compileAsync(object, cameraSystem.camera, scene); } catch (e) { console.warn('[compile]', e); }
+      renderer.shadowMap.enabled = shadowsWere;
       renderer.setMRT(null);
       renderer.setRenderTarget(null);
       for (const o of wasCulled) o.frustumCulled = true;
@@ -2183,8 +2237,11 @@ async function initApp() {
   // streamed in), which would otherwise be made on the frame each first shows (arriving somewhere new stuttered for
   // ~10 s). One of each material and geometry layout is enough; the scene's looked over every two seconds.
   const warmSeen = new Set(), warmChecked = new WeakSet(), warmQueue = [], warmSphere = new THREE.Sphere();
-  let warmScanAt = 3, warming = false;
-  const warmKey = (o) => `${[o.material].flat().map((m) => m.id).join(',')}|${Object.keys(o.geometry.attributes).sort().join(',')}|${o.geometry.index ? 'i' : 'p'}|${o.isInstancedMesh ? 'n' : ''}${o.isBatchedMesh ? 'b' : ''}${o.castShadow ? 's' : ''}`;
+  // (looked over again sooner when the last look found something, later, up to every 16 s, when it found nothing,
+  // and at once after the camera has gone 150 m: a walk of the whole scene costs a frame a millisecond or more there)
+  let warmScanAt = 3, warming = false, warmEvery = 2;
+  const warmFrom = { x: Infinity, z: Infinity };
+  const warmKey = (o) => `${[o.material].flat().map((m) => m.id).join(',')}|${Object.keys(o.geometry.attributes).sort().join(',')}|${o.geometry.index ? 'i' : 'p'}|${o.isInstancedMesh ? 'n' : ''}${o.isBatchedMesh ? 'b' : ''}${o.castShadow ? 's' : ''}${o.receiveShadow ? 'r' : ''}${o.instanceColor ? 'c' : ''}${o.morphTexture ? 'm' : ''}`;
   const warmDistance = (o, x, z) => {
     const s = (o.isInstancedMesh && o.boundingSphere) || o.geometry.boundingSphere;
     if (!s) return 0;
@@ -2192,9 +2249,10 @@ async function initApp() {
     return Math.max(0, Math.hypot(warmSphere.center.x - x, warmSphere.center.z - z) - warmSphere.radius);
   };
   function warmAhead(now) {
-    if (now < warmScanAt) return;
-    warmScanAt = now + 2;
     const { x, z } = cameraSystem.camera.position;
+    if (now < warmScanAt && Math.hypot(x - warmFrom.x, z - warmFrom.z) < 150) return;
+    warmFrom.x = x; warmFrom.z = z;
+    const queued = warmQueue.length;
     scene.traverse((o) => {
       if (warmChecked.has(o) || !o.isMesh || !o.geometry?.attributes.position || o.userData.shadowProxy || !o.layers.test(cameraSystem.camera.layers)) return;
       const key = o.userData.warmKey ??= warmKey(o);
@@ -2204,6 +2262,8 @@ async function initApp() {
       warmChecked.add(o);
       warmQueue.push(o);
     });
+    warmEvery = warmQueue.length > queued ? 2 : Math.min(16, warmEvery * 2);
+    warmScanAt = now + warmEvery;
     if (!warming && warmQueue.length) warmQueued();
   }
   async function warmQueued() {
@@ -2270,23 +2330,33 @@ async function initApp() {
   // second holds at 30 however little each frame takes. Only when it holds: most frames of two half-minutes running,
   // once the city's in, with one view drawn and no map over it or recording. A phone, an Xbox and the slow city
   // itself are left as they are.
-  const SLOW_WORK_MS = 50;
-  const slowWatch = { t: 0, n: 0, over: 0, work: 0, windows: 0, told: false };
+  // The mark is a measurement, not a verdict: it lapses after a week (device-tier.js), Reset game clears it, it steps
+  // down one tier at a time (full to light, then light to slow), and a lighter city started by it that runs with
+  // plenty to spare (under 10 ms of work in most frames of two half-minutes running) clears it for the next start.
+  // Nothing's judged in a page whose code was changed while it ran, which slows it until it's loaded again.
+  const SLOW_WORK_MS = 50, EASY_WORK_MS = 10;
+  const slowWatch = { t: 0, n: 0, over: 0, easy: 0, work: 0, windows: 0, easyWindows: 0, told: false, marked: !!load('slowWork') };
   function watchWork(ms, rawDt) {
-    if (slowWatch.told || (TIER.name !== 'full' && TIER.name !== 'light')) return;
-    if (elapsed < 45 || rawDt > 0.5 || document.hidden || split.drawn || mapSystem.isFullMapOpen || videoRecorder.recording) return;
+    if (slowWatch.told || (TIER.name !== 'full' && TIER.name !== 'light' && !(TIER.name === 'slow' && slowWatch.marked))) return;
+    if (liveRuns.n > 1 || elapsed < 45 || rawDt > 0.5 || document.hidden || split.drawn || mapSystem.isFullMapOpen || videoRecorder.recording) return;
     slowWatch.t += rawDt; slowWatch.n++; slowWatch.work += ms;
     if (ms > SLOW_WORK_MS) slowWatch.over++;
+    if (ms < EASY_WORK_MS) slowWatch.easy++;
     if (slowWatch.t < 30) return;
     // (two half-minutes running, so a burst of building after a teleport doesn't count)
     const share = slowWatch.over / slowWatch.n, average = slowWatch.work / slowWatch.n;
-    slowWatch.windows = share > 0.75 ? slowWatch.windows + 1 : 0;
+    slowWatch.windows = TIER.name !== 'slow' && share > 0.75 ? slowWatch.windows + 1 : 0;
+    slowWatch.easyWindows = slowWatch.marked && slowWatch.easy / slowWatch.n > 0.9 ? slowWatch.easyWindows + 1 : 0;
     if (slowWatch.windows >= 2) {
       slowWatch.told = true;
-      save('slowWork', { ms: Math.round(average), at: Date.now() });
-      log(`[tier] ${average.toFixed(0)} ms of work a frame: lighter from the next start`);
+      save('slowWork', { ms: Math.round(average), at: Date.now(), from: TIER.name });
+      log(`[tier] ${average.toFixed(0)} ms of work a frame (${Math.round(share * 100)}% of frames over ${SLOW_WORK_MS} ms, slowest ${prof.worstLine || '?'}): ${TIER.name === 'full' ? 'light' : 'slow'} from the next start`);
+    } else if (slowWatch.easyWindows >= 2) {
+      slowWatch.told = true;
+      save('slowWork', null);
+      log(`[tier] ${average.toFixed(1)} ms of work a frame on ${TIER.name}: the fuller city again from the next start`);
     }
-    slowWatch.t = slowWatch.n = slowWatch.over = slowWatch.work = 0;
+    slowWatch.t = slowWatch.n = slowWatch.over = slowWatch.easy = slowWatch.work = 0;
   }
 
   // Split screen (split-screen.js): with a second controller connected, View on either controller puts that player in
@@ -2310,6 +2380,14 @@ async function initApp() {
     split.kept = null;
     dynamicRoots.push(...Object.values(split.second.cm.entities).flatMap((e) => [e.mesh, e.helmet]).filter(Boolean));
   }
+  // Split screen draws without the sun's shadows, which makes every shader in view anew: made in the background once a
+  // second controller connects, one of each between frames, so pressing View doesn't hold the game still while they
+  // compile in its first frame
+  function warmSplit() {
+    const meshes = [];
+    scene.traverseVisible((o) => { if (o.isMesh && o.geometry?.attributes.position && !o.userData.shadowProxy) meshes.push(o); });
+    compileLater([meshes], { what: 'split screen', unshadowed: true });
+  }
   // Each half's camera as wide as its half; one view again, the first camera as wide as the screen
   function showSplit(on) {
     if (on === split.drawn) return;
@@ -2317,7 +2395,7 @@ async function initApp() {
     if (on) {
       joinSecondPlayer();
       split.view ??= createSplitView(renderer, { samples: QUALITY.antialias ? 4 : 0 });
-      split.view.grade.applyPreset(lightingSystem.lookId);
+      split.view.grade.applyPreset(lightingSystem.lookId, lightingSystem.lookBlend);
     }
     fitCameras();
     // each half draws everything again: no sun shadows while there are two (soft shade on the ground instead)
@@ -2326,13 +2404,19 @@ async function initApp() {
     log(`[split] ${on ? 'two views side by side' : 'one view'}`);
   }
 
+  let frameAt = 0; // (when the last frame began, by the clock: see rawDt)
+  let radarTick = false;
   const frame = (f) => {
     profAt = performance.now();
     prof.cur.clear();
     renderer.info.reset();
     const now = f.time * 1000;
-    const rawDt = f.dt;
-    const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
+    // the real time since the last frame, by the clock (f.dt is held to 0.05 s for the game's own step, so a badge or a
+    // recording clock read from it couldn't go below 20 frames a second): the frame-rate badge, the slow watch and
+    // the recording's length
+    const rawDt = frameAt ? (profAt - frameAt) / 1000 : f.dt;
+    frameAt = profAt;
+    const dt = Math.min(Math.max(f.dt, 0.001), 0.05);
     elapsed += dt;
     tickNotice(dt);
     knockdowns.update(dt);
@@ -2351,7 +2435,7 @@ async function initApp() {
     skidEffects.update(dt, controllerManager.entities.car, controllerManager.activeMode === 'car', cameraSystem.camera);
 
     // Update 3rd-person controllers, camera, signals, traffic & vehicle collisions, building LODs, and dynamic shadow focus
-    championPad(f.pads[0]);
+    if (!mapSystem.isFullMapOpen) championPad(f.pads[0]);
     gamepadControls.supply(f.pads[0]);
     gamepadControls.update(dt);
     golf.update(dt);
@@ -2390,6 +2474,7 @@ async function initApp() {
       // a second controller: offered split screen once, and View on either controller turns it on and off
       const two = Boolean(f.pads[1]?.connected);
       if (two && !split.offered && !split.on) { split.offered = true; splitNotice('Second controller'); }
+      if (two && QUALITY.shadows && !split.warmed) { split.warmed = true; warmSplit(); }
       if (two && ((f.pads[0].pressed | f.pads[1].pressed) & BUTTON.VIEW)) {
         split.on = !split.on;
         if (!split.on) splitNotice('One view');
@@ -2397,7 +2482,7 @@ async function initApp() {
       showSplit(split.on && two);
       if (split.drawn) split.second.update(dt, elapsed, f.pads[1], !mapSystem.isFullMapOpen);
     }
-    tickRecording(dt);
+    tickRecording(rawDt);
 // the camera under the river's surface: murky green fog and a tint over the view
     {
       const under = underAt(cameraSystem.camera.position);
@@ -2453,11 +2538,12 @@ async function initApp() {
     mark('trains & parked');
     animalCtx.player = controllerManager.getActiveEntity();
     animalCtx.mode = controllerManager.activeMode;
+    animalCtx.player2 = split.drawn ? split.second.cm.getActiveEntity() : null;
+    animalCtx.mode2 = split.drawn ? split.second.cm.activeMode : null;
     animalCtx.look = lightingSystem.lookId;
     animalCtx.paddlers = riverPeoplePart.made.people || animalCtx.paddlers;
     // Lamp: no animals on the Xbox (their tree lookups stalled frames there by 100-170 ms; the person chose to do without)
-    if (XBOX) animalsPart.group.visible = false;
-    else animalsPart.made.update(dt, elapsed, animalCtx);
+    if (!XBOX) animalsPart.made.update(dt, elapsed, animalCtx);
     mark('animals');
     // the dial's name follows whatever the player is in, however they got into it
     const dialLabel = controllerManager.getActiveEntity()?.label;
@@ -2478,20 +2564,24 @@ async function initApp() {
       const two = split.drawn ? split.second.camera.position : null;
       cityBlocks.update(cameraSystem.currentPos.x, cameraSystem.currentPos.z, false, two?.x, two?.z);
     }
-    if (cityBlocks.updateLights) cityBlocks.updateLights(cameraSystem.camera);
+    // (the shops' pooled lights only with the clustered lighting: without it they were taken out of the scene)
+    if (cityBlocks.updateLights && QUALITY.streetLights) cityBlocks.updateLights(cameraSystem.camera);
     mark('blocks');
     // (the trees near the second player's camera too in split screen, each at the level of the nearer: trees.js)
     if (streetDetails.update) streetDetails.update(cameraSystem.camera, split.drawn ? split.second.camera : null);
     groundShade.update(cameraSystem.camera, !renderer.shadowMap.enabled, split.drawn ? split.second.camera : null);
     mark('street details');
     lightingSystem.update(cameraSystem.currentPos);
-    mapSystem.update();
+    // (the radar every other frame on the Xbox, where each redraw of it costs a few tenths of a millisecond)
+    radarTick = !radarTick;
+    if (!XBOX || radarTick || mapSystem.isFullMapOpen) mapSystem.update();
     placeChampionSign();
-    if (lightingSystem.activePresetId === 'now' && elapsed - nowCheckedAt > 60) {
-      nowCheckedAt = elapsed;
+    // (by the clock, as the weather is: a frame of play counts at most 0.05 s, and none while the page was hidden)
+    if (lightingSystem.activePresetId === 'now' && Date.now() - nowCheckedAt > 60e3) {
+      nowCheckedAt = Date.now();
       selectTime('now');
     }
-    if (elapsed - weatherAskedAt > 900) askWeather(elapsed);
+    if (Date.now() - weatherAskedAt > 15 * 60e3) askWeather();
     precipitation.update(cameraSystem.camera, elapsed);
     audioSystem.update(dt, elapsed, cameraSystem.camera, lightingSystem.lookId === 'midnight');
     {
@@ -2516,7 +2606,9 @@ async function initApp() {
     }
     wasSplit = split.drawn;
     if (warmedUp && TIER.warmReach) warmAhead(elapsed);
-    if (TIER.stream && (!XBOX || split.drawn || leapt || checkTick % 4 === 1)) {
+    // (the tiles wanted looked for every fourth frame on every device and in split screen: a player covers a few metres
+    // in four frames against 500 m tiles, and each look walks every tile of the town; at once after a leap)
+    if (TIER.stream && (!warmedUp || leapt || checkTick % 4 === 1)) {
       const { x, z } = cameraSystem.camera.position;
       const two = split.drawn ? split.second.camera.position : null;
       updateGroundStreaming(x, z, two?.x, two?.z);
@@ -2610,7 +2702,8 @@ async function initApp() {
         if (!prof.measured && renderer.userData.deviceLine) log(renderer.userData.deviceLine + ' (as found when the page opened)');
         prof.measured = true;
         showTriangles.frame = `${parts}; ${renderer.info.render.drawCalls} draws`;
-        showTriangles(reportTriangles(scene, cameraSystem.camera, lightingSystem.sunLight.shadow));
+        // (the shadow cascades' walks only while shadows are drawn)
+        showTriangles(reportTriangles(scene, cameraSystem.camera, renderer.shadowMap.enabled ? lightingSystem.sunLight.shadow : null));
       }
     }
     if (!warmedUp) {
@@ -2630,6 +2723,8 @@ async function initApp() {
         warm.compiled = true;
         // every kind of car ready to get into, compiled a few seconds into play (compileLater)
         compileLater([controllerManager.carsToPrepare()], { detached: true, what: 'cars to get into' });
+        // and the squirrels' and the deer's skinned bodies (animals.js; none on the Xbox)
+        if (!XBOX && animalsPart.made?.toPrepare) compileLater([animalsPart.made.toPrepare()], { detached: true, what: 'animals' });
         audioSystem.ready = true;
         // Lamp: the Mac app lets the page play sound unasked, so the city is heard as it appears, not at the first key
         audioSystem.unlock();
@@ -2653,8 +2748,10 @@ async function initApp() {
       const mphExact = (dialMode === 'kayak' ? ent.groundSpeed || 0 : Math.abs(ent.speed)) * 2.237;
       const mph = Math.round(mphExact);
       if (elSpeed && mph !== hud.shownMph) { hud.shownMph = mph; elSpeed.textContent = String(mph); }
+      // (written only when it moves by a pixel's worth: each new value is a style to work out again)
       if (elSpeedMeter && dialScale.max) {
-        elSpeedMeter.style.transform = `scaleX(${Math.min(1, mphExact / dialScale.max)})`;
+        const fill = Math.round(Math.min(1, mphExact / dialScale.max) * 200) / 200;
+        if (fill !== hud.shownFill) { hud.shownFill = fill; elSpeedMeter.style.transform = `scaleX(${fill})`; }
       }
       // the street's speed limit beside it, in the car or on the bike, looked up four times a second
       if (elLimit && hud.clock - (hud.limitAt || 0) >= 0.25) {

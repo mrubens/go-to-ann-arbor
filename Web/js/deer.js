@@ -18,6 +18,8 @@ import { Body, coatMaterial, paintHair } from './animal-models.js';
 
 const ALIVE = 420, LET_GO = 520; // the herds are about within this far of the view (m)
 const NEAR_DIST = 110; // skinned bodies within this far; the rest are stand-ins
+const HIDE = 160; // a deer leaving or fled is let go only out of the view or beyond this far from it (m)
+const STILL_LET_BE = 4; // someone on foot standing still this long (s) is let be: the deer graze, an eye on them
 const HOURS = new Set(['golden', 'twilight']);
 
 function hash(a, b, k = 0) {
@@ -207,6 +209,7 @@ function createDeerKit() {
   for (const k of ['doe', 'buck']) {
     const inst = new THREE.InstancedMesh(farGeo[k], mat, 12);
     inst.count = 0;
+    inst.visible = false; // only while it has some to draw (else it's in the render and shadow lists for nothing)
     inst.frustumCulled = false;
     inst.castShadow = true;
     inst.name = `deer far (${k})`;
@@ -227,9 +230,23 @@ function createDeerKit() {
     mesh.name = kind;
     return { mesh, bones, kind };
   }
+  // a doe and a buck and their stand-ins, in no scene, on their own copies of the shapes: their shaders made ahead
+  // (main.js' compileLater) rather than on the frame the herd first comes near
+  function* toPrepare() {
+    for (const k of ['doe', 'buck']) {
+      const { mesh } = make(k);
+      mesh.geometry = geos[k].clone();
+      mesh.updateMatrixWorld(true);
+      yield mesh;
+      const inst = new THREE.InstancedMesh(farGeo[k].clone(), mat, 1);
+      inst.castShadow = true;
+      inst.updateMatrixWorld(true);
+      yield inst;
+    }
+  }
   const bytes = (g) => Object.values(g.attributes).reduce((s, a) => s + a.array.byteLength, 0) + (g.index?.array.byteLength || 0);
   return {
-    make, far,
+    make, far, toPrepare,
     stats: { triangles: geos.buck.index.count / 3, farTriangles: farGeo.buck.index.count / 3,
       bytes: [...Object.values(geos), ...Object.values(farGeo)].reduce((s, g) => s + bytes(g), 0), textureBytes: tex.bytes },
     dispose() { for (const g of [...Object.values(geos), ...Object.values(farGeo)]) g.dispose(); tex.color.dispose(); tex.normal.dispose(); mat.dispose(); }
@@ -293,9 +310,9 @@ function poseDeer(bones, p) {
 // ============================================================================
 // THE HERDS
 // ============================================================================
-function createDeer(group, { parkAt }) {
+function createDeer(group, { parkAt, treesNear }) {
   const arb = (GEO.parks || []).find((p) => p.name === 'Nichols Arboretum');
-  if (!arb) return { update() {}, deer: [], get count() { return 0; }, dispose() {} };
+  if (!arb) return { update() {}, deer: [], get count() { return 0; }, *toPrepare() {}, dispose() {} };
   const kit = createDeerKit();
   for (const m of Object.values(kit.far)) group.add(m);
   const inArb = (x, z) => parkAt(x, z)?.name === 'Nichols Arboretum';
@@ -353,6 +370,7 @@ function createDeer(group, { parkAt }) {
   }
   function clear() {
     for (const d of deer) dropBody(d);
+    for (const m of Object.values(kit.far)) { m.count = 0; m.visible = false; }
     deer.length = 0;
     herdsOut = false;
   }
@@ -369,13 +387,15 @@ function createDeer(group, { parkAt }) {
     }
     // the rule: anything that reaches one (it couldn't get away), it's gone, untouched
     if (near && Math.hypot(near.x - d.x, near.z - d.z) < 3 + (near.r || 1)) { d.mode = 'gone'; return; }
+    // fled or leaving, it's let go only where no one sees it go: out of the view, far off, or in among the trees
     if (d.mode === 'flee') {
       d.timer -= dt;
-      if (d.timer <= 0) d.mode = 'gone';
+      if (d.timer <= 0 && (hidden(d) || d.timer < -15)) d.mode = 'gone';
       return;
     }
     if (d.mode === 'leave') {
-      if ((d.timer -= dt) <= 0) d.mode = 'gone';
+      d.timer -= dt;
+      if (hidden(d) || Math.hypot(d.tx - d.x, d.tz - d.z) < 1.2 || d.timer <= 0) d.mode = 'gone';
       return;
     }
     if (nd < 17) {
@@ -399,6 +419,10 @@ function createDeer(group, { parkAt }) {
       if (Math.abs(rel) > 1.1) { d.yaw += Math.sign(rel) * Math.min(Math.abs(rel) - 1.1, dt * 0.8); rel = Math.sign(rel) * 1.1; }
       d.want.look = rel;
       // someone standing still a while is let be: back to grazing, an eye kept on them
+      if (near.player && near.foot && near.speed < 0.35 && (near.still || 0) > STILL_LET_BE) {
+        d.mode = 'graze'; d.want.graze = 1; d.want.alert = 0; d.timer = Math.max(d.timer, 3);
+        return;
+      }
       if (near.player && near.foot && near.speed < 0.35 && nd > 26) d.want.alert = 0.4;
       return;
     }
@@ -430,7 +454,7 @@ function createDeer(group, { parkAt }) {
     const p = d.pose;
     let speed = 0;
     if (d.mode === 'walk' || d.mode === 'leave') {
-      const a = d.mode === 'leave' ? d.yawTo : Math.atan2(d.tx - d.x, d.tz - d.z);
+      const a = Math.atan2(d.tx - d.x, d.tz - d.z);
       const rel = ((a - d.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
       d.yaw += Math.sign(rel) * Math.min(Math.abs(rel), dt * 1.4);
       speed = Math.abs(rel) < 1 ? 1.1 : 0.3;
@@ -481,6 +505,43 @@ function createDeer(group, { parkAt }) {
     }
   }
 
+  // out of sight: beyond HIDE or outside the view
+  const frustum = new THREE.Frustum(), _vp = new THREE.Matrix4(), _sph = new THREE.Sphere(new THREE.Vector3(), 1.6);
+  let camAt = null;
+  function hidden(d) {
+    if (!camAt || (d.x - camAt.x) ** 2 + (d.z - camAt.z) ** 2 > HIDE * HIDE) return true;
+    _sph.center.set(d.x, d.y + 0.8, d.z);
+    return !frustum.intersectsSphere(_sph);
+  }
+  // where a deer leaving at the end of dawn or dusk walks to: a few metres in past the nearest tree that isn't toward
+  // the camera, or else the nearest edge of its open ground (the woods, the river bank, the Arb's end)
+  const nearTrees = [];
+  function cover(d, cp) {
+    let best = null, bestScore = Infinity;
+    for (const t of treesNear ? treesNear(d.x, d.z, 70, nearTrees) : []) {
+      const dd = Math.hypot(t.x - d.x, t.z - d.z);
+      if (dd < 4) continue;
+      const toward = Math.hypot(t.x - cp.x, t.z - cp.z) < Math.hypot(d.x - cp.x, d.z - cp.z);
+      const score = dd + (toward ? 40 : 0);
+      if (score < bestScore) { bestScore = score; best = t; }
+    }
+    if (best) {
+      const dd = Math.hypot(best.x - d.x, best.z - d.z);
+      d.tx = best.x + (best.x - d.x) / dd * 5; d.tz = best.z + (best.z - d.z) / dd * 5;
+      return;
+    }
+    let edge = null;
+    for (let r = 6; r <= 90 && !edge; r += 6) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2, x = d.x + Math.sin(a) * r, z = d.z + Math.cos(a) * r;
+        if (!open(x, z) && (!edge || Math.hypot(x - cp.x, z - cp.z) > Math.hypot(edge[0] - cp.x, edge[1] - cp.z))) edge = [x, z];
+      }
+    }
+    if (edge) { d.tx = edge[0]; d.tz = edge[1]; return; }
+    const a = Math.atan2(d.x - cp.x, d.z - cp.z);
+    d.tx = d.x + Math.sin(a) * 40; d.tz = d.z + Math.cos(a) * 40;
+  }
+
   let cue = null;
   const order = [];
   function update(dt, now, ctx, threats) {
@@ -495,10 +556,14 @@ function createDeer(group, { parkAt }) {
       if (!herdsOut && hours && d < ALIVE && now - goneAt > 90 && (d > 140 || !everOut)) { everOut = true; populate(); }
       else if (herdsOut && d > LET_GO) clear();
       else if (herdsOut && !hours) for (const o of deer) if (o.mode !== 'gone' && o.mode !== 'flee' && o.mode !== 'leave') {
-        o.mode = 'leave'; o.yawTo = Math.atan2(o.x - cp.x, o.z - cp.z); o.timer = 20;
+        o.mode = 'leave'; o.timer = 60; cover(o, cp);
       }
     }
     if (!herdsOut) return;
+    const cam = ctx.camera;
+    _vp.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(_vp, cam.coordinateSystem);
+    camAt = cp;
     order.length = 0;
     for (const d of deer) {
       if (d.mode !== 'gone') think(d, dt, now, threats);
@@ -509,7 +574,7 @@ function createDeer(group, { parkAt }) {
     }
     for (const m of Object.values(kit.far)) m.count = 0;
     for (const d of order) draw(d, d.d2 < NEAR_DIST * NEAR_DIST);
-    for (const m of Object.values(kit.far)) m.instanceMatrix.needsUpdate = m.count > 0;
+    for (const m of Object.values(kit.far)) { m.instanceMatrix.needsUpdate = m.count > 0; m.visible = m.count > 0; }
     // all gone (fled or wandered off): back another time
     if (!order.length) { clear(); goneAt = now; log('[deer] the deer have gone into the trees'); }
     if (!reported) {
@@ -524,7 +589,7 @@ function createDeer(group, { parkAt }) {
   }
 
   return {
-    update, deer,
+    update, deer, toPrepare: kit.toPrepare,
     get count() { return deer.length; },
     dispose() { clear(); kit.dispose(); }
   };

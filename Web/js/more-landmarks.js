@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { builder, groundOf, strips } from './campus-landmarks.js';
+import { builder, groundOf, strips, landmarkGlass } from './campus-landmarks.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
 import { groundHeight } from './terrain.js';
@@ -680,7 +680,7 @@ function buildMoreLandmarks(group, colliders) {
   };
   group.add(
     mesh(B.stone, new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide, flatShading: true }), 'MoreLandmarksMasonry'),
-    mesh(B.glass, new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.15, metalness: 0.5, side: THREE.DoubleSide, emissive: 0x1c1409 }), 'MoreLandmarksGlass'));
+    mesh(B.glass, landmarkGlass(), 'MoreLandmarksGlass'));
   return built;
 }
 

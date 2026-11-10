@@ -16,6 +16,8 @@ const BIG = new Set(['suv', 'forester', 'pickup', 'van']);
 const carVoice = (kind, engine) => ELECTRIC.has(kind) ? 'electric' : engine;
 const ownCarVoice = (kind) => ELECTRIC.has(kind) ? 'electric' : BIG.has(kind) ? 'suv' : 'sedan';
 const seedAt = (index) => ((Math.imul(index + 1, 2654435761) >>> 0) / 4294967296);
+// Patrol cars mostly cruise quietly: traffic.js sets `isPolice` only while a cruiser is on a call, so the siren
+// sounds exactly when it runs lights
 
 function driveLoad(keys, speed, cyclist) {
   // Match the controller's forward priority, and distinguish propulsion from braking.
@@ -158,7 +160,8 @@ class CityAudioSources {
       const v = vehicles[i];
       if (!v.edge) continue;
       const d2 = this.distanceSq(v.x, 0.7, v.z);
-      const range = v.isPolice ? SIREN_RANGE : MOTOR_RANGE;
+      const seed = seedAt(seedOffset + i), siren = !!v.isPolice;
+      const range = siren ? SIREN_RANGE : MOTOR_RANGE;
       if (!Number.isFinite(d2) || d2 > range * range) continue;
       if (d2 <= MOTOR_RANGE * MOTOR_RANGE) {
         this.snapshot.traffic += (1 - d2 / (MOTOR_RANGE * MOTOR_RANGE)) * (0.2 + 0.8 * unit(v.speed / 12));
@@ -166,7 +169,7 @@ class CityAudioSources {
       const green = !v.edge.to.signal || signalPhase(elapsed, v.edge.axisIndex === 0) === 'green';
       const blocked = v.wait > 2 && v.speed < 0.5 && v.gap < 8 && v.leaderSpeed < 0.5 && green && !v.conn && !v.yielding;
       this.motor(v, v.bus ? 'bus' : carVoice(v.bodyType, v.engine), v.x, (v._gy ?? 0) + 0.7, v.z,
-        v.speed, roadLoad(v.speed, v.acc, v.driver.a), v.yaw + v.yawOffset, !!v.isPolice, false, seedAt(seedOffset + i), blocked);
+        v.speed, roadLoad(v.speed, v.acc, v.driver.a), v.yaw + v.yawOffset, siren, false, seed, blocked);
     }
   }
 

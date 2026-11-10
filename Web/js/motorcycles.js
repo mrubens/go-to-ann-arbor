@@ -42,8 +42,9 @@ const ALU = 0x9ea4aa, GOLD = 0xc49a35, CARBON = 0x222326;
 const PAINT = { paint: 1, rough: 0.22, metal: 0.15 }, SHINY = { metal: 1, rough: 0.18 }, DARKMETAL = { metal: 0.6, rough: 0.4 };
 
 // One part: its geometry, colour and finish. paint 1 takes the bike's paint; lamp 1 is a headlamp, 2 a tail lamp.
+// (kept indexed, its shared corners shared: the same shading at well under half the data)
 function finish(geo, hex, { paint = 0, lamp = 0, metal = 0, rough = 0.6 } = {}) {
-  geo = geo.index ? geo.toNonIndexed() : geo;
+  if (!geo.index) geo.setIndex([...Array(geo.attributes.position.count).keys()]);
   if (geo.attributes.uv) geo.deleteAttribute('uv');
   const n = geo.attributes.position.count;
   const c = new THREE.Color(hex);
@@ -526,9 +527,11 @@ function buildMotoWheel(spec, front) {
 // One material for every kind: the part's colour or the bike's paint, its finish, and its lamps (dipped and tail lamps
 // lit at night, the tail lamp brighter while braking)
 // (traffic's, instanced), or one bike's (the player's): its paint fixed and its lamps from userData.carState
-let _material = null;
-function createMotoMaterial(fixedHex = null) {
-  if (fixedHex === null && _material) return _material;
+// `parked`: for bikes and scooters standing with nobody on them (bike-racks.js, scooters.js), lamps dark as a parked
+// car's are
+let _material = null, _parkedMaterial = null;
+function createMotoMaterial(fixedHex = null, { parked = false } = {}) {
+  if (fixedHex === null && (parked ? _parkedMaterial : _material)) return parked ? _parkedMaterial : _material;
   const fixed = fixedHex !== null;
   const stateUniform = fixed ? uniform(new THREE.Vector4(0, 0, 0, 0)) : null;
   const part = attribute('motoPart', 'vec4');
@@ -543,15 +546,17 @@ function createMotoMaterial(fixedHex = null) {
   const night = smoothstep(0.6, 1.15, cityUniforms.uInteriorGlow);
   const head = step(0.5, part.y).mul(step(part.y, 1.5));
   const tail = step(1.5, part.y);
-  mat.emissiveNode = color(0xfff4e0).mul(head.mul(night.mul(1.4).add(0.8)))
-    .add(color(0xff0c16).mul(tail.mul(state.x.mul(2.3).add(night.mul(0.55)).add(0.24))))
-    .add(vec3(float(0)));
+  if (!parked) {
+    mat.emissiveNode = color(0xfff4e0).mul(head.mul(night.mul(1.4).add(0.8)))
+      .add(color(0xff0c16).mul(tail.mul(state.x.mul(2.3).add(night.mul(0.55)).add(0.24))))
+      .add(vec3(float(0)));
+  }
   if (fixed) {
     mat.userData.carState = stateUniform;
     mat.userData.paint = paintUniform;
     return mat;
   }
-  _material = mat;
+  if (parked) _parkedMaterial = mat; else _material = mat;
   return mat;
 }
 

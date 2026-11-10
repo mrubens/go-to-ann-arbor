@@ -51,11 +51,14 @@ function createMoon(group) {
   mesh.name = 'Moon';
   mesh.frustumCulled = false;
   mesh.renderOrder = -1;
-  mesh.visible = lit > 0.015;
+  const phased = lit > 0.015;
+  mesh.visible = phased;
   group.add(mesh);
   log(`[moon] ${PHASES[Math.round(age * 8) % 8]}, ${Math.round(lit * 100)}% lit`);
 
   function update(camera) {
+    // not drawn by day, when its opacity (`night` above) is nothing anyway
+    mesh.visible = phased && cityUniforms.uInteriorGlow.value > 0.7;
     if (!mesh.visible || !camera) return;
     const distance = Math.min(DISTANCE, (camera.far || DISTANCE) * 0.9);
     mesh.scale.setScalar(distance / DISTANCE);

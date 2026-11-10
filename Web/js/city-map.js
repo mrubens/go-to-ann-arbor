@@ -17,6 +17,7 @@ import { groundHeight } from './terrain.js';
 import { layOutHoles } from './golf.js';
 import { AIRPORT } from './airport-data.js';
 import { onAirfield } from './airport.js';
+import { TIER } from './device-tier.js';
 import { hot, BUTTON, STICK, TRIGGER, glyph, onInput, asset, log } from '../lamp-game.js';
 
 // The city's street addresses (build-address-search.py), loaded the first time a search starts with a house number
@@ -374,7 +375,7 @@ for (const r of ROADS) {
   ROAD_LABELS.push({
     text,
     lower: text.toLowerCase(),
-    raw: r.name.toLowerCase(),
+    raw: (r.raw ?? r.name).toLowerCase(),
     road: r,
     major: r.highway || r.w >= 15,
     highway: r.highway,
@@ -511,14 +512,101 @@ function drawPlayerArrow(ctx, tipY, halfWidth, tailY) {
   ctx.fill();
 }
 
-// GPS route from the player to the waypoint, along the grid (x first, then z): taxi yellow on a dark casing
-function drawRoute(ctx, x0, y0, x1, y1, width) {
+// The GPS route along the streets (GEO.roadGraph): the shortest way by length from the junction nearest the player to
+// the one nearest the waypoint, one-way streets only their way (any way if that finds none), as world points from
+// `from` to `to`; a straight line where the streets don't join them
+let ROUTE_GRAPH = null;
+function routeGraph() {
+  if (ROUTE_GRAPH) return ROUTE_GRAPH;
+  const RG = GEO.roadGraph;
+  const n = RG ? RG.nodes.length / 2 : 0;
+  const adj = Array.from({ length: n }, () => []);
+  for (const [a, b, , , , dir, inner = []] of RG ? RG.links : []) {
+    let len = 0, x = RG.nodes[a * 2], z = RG.nodes[a * 2 + 1];
+    for (let k = 0; k <= inner.length; k += 2) {
+      const nx = k < inner.length ? inner[k] : RG.nodes[b * 2], nz = k < inner.length ? inner[k + 1] : RG.nodes[b * 2 + 1];
+      len += Math.hypot(nx - x, nz - z);
+      x = nx; z = nz;
+    }
+    adj[a].push({ to: b, len, inner, back: false, oneWay: false });
+    adj[b].push({ to: a, len, inner, back: true, oneWay: Boolean(dir) });
+  }
+  return (ROUTE_GRAPH = { n, adj, nodes: RG ? RG.nodes : [] });
+}
+function nearestJunction(G, x, z) {
+  let best = -1, bestD = Infinity;
+  for (let i = 0; i < G.n; i++) {
+    if (!G.adj[i].length) continue;
+    const d = (G.nodes[i * 2] - x) ** 2 + (G.nodes[i * 2 + 1] - z) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+function shortestPath(G, from, to, oneWays) {
+  const dist = new Float64Array(G.n).fill(Infinity), via = new Array(G.n);
+  const heap = [[0, from]];
+  dist[from] = 0;
+  const push = (e) => {
+    heap.push(e);
+    for (let i = heap.length - 1; i > 0;) {
+      const p = (i - 1) >> 1;
+      if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const pop = () => {
+    const top = heap[0], last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      for (let i = 0; ;) {
+        const l = i * 2 + 1, r = l + 1;
+        let m = i;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === i) break;
+        [heap[m], heap[i]] = [heap[i], heap[m]];
+        i = m;
+      }
+    }
+    return top;
+  };
+  while (heap.length) {
+    const [d, i] = pop();
+    if (i === to) break;
+    if (d > dist[i]) continue;
+    for (const e of G.adj[i]) {
+      if (oneWays && e.oneWay) continue;
+      const nd = d + e.len;
+      if (nd < dist[e.to]) { dist[e.to] = nd; via[e.to] = { from: i, e }; push([nd, e.to]); }
+    }
+  }
+  if (!Number.isFinite(dist[to])) return null;
+  const pts = [];
+  for (let i = to; i !== from;) {
+    const { from: j, e } = via[i];
+    pts.push({ x: G.nodes[i * 2], z: G.nodes[i * 2 + 1] });
+    // the link's bends, walked back from i to j
+    const k0 = e.back ? 0 : e.inner.length - 2, step = e.back ? 2 : -2;
+    for (let k = k0; k >= 0 && k < e.inner.length; k += step) pts.push({ x: e.inner[k], z: e.inner[k + 1] });
+    i = j;
+  }
+  pts.push({ x: G.nodes[from * 2], z: G.nodes[from * 2 + 1] });
+  return pts.reverse();
+}
+function findRoute(fx, fz, tx, tz) {
+  const G = routeGraph();
+  const a = nearestJunction(G, fx, fz), b = nearestJunction(G, tx, tz);
+  const mid = a >= 0 && b >= 0 ? (a === b ? [] : shortestPath(G, a, b, true) || shortestPath(G, a, b, false)) : null;
+  return [{ x: fx, z: fz }, ...(mid || []), { x: tx, z: tz }];
+}
+
+// GPS route from the player to the waypoint (world points, `findRoute`): taxi yellow on a dark casing
+function drawRoute(ctx, pts, toX, toY, width) {
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(x0, y0);
-  ctx.lineTo(x1, y0);
-  ctx.lineTo(x1, y1);
+  pts.forEach((p, i) => (i ? ctx.lineTo(toX(p.x), toY(p.z)) : ctx.moveTo(toX(p.x), toY(p.z))));
   ctx.strokeStyle = MAP.halo;
   ctx.lineWidth = width + 3;
   ctx.stroke();
@@ -579,6 +667,10 @@ class CityMapSystem {
     this.fullStatic = null; // the full map's ground layers & labels for the current view
     this.fullStaticKey = '';
     this.elHoverInfo = document.getElementById('fullmap-hover-info');
+    this.hoverDefault = this.elHoverInfo ? this.elHoverInfo.textContent : '';
+    // the phone, slow and Xbox tiers (the Xbox's is 'phone'): the HUD's glass is a solid fill, not a blur of the live
+    // city behind it every frame (style.css)
+    document.documentElement.classList.toggle('flat-glass', TIER.name === 'phone' || TIER.name === 'slow');
     this.elPlayerInfo = document.getElementById('fullmap-player-info');
     this.elSearchInput = document.getElementById('fullmap-search');
     if (this.elSearchInput) this.elSearchInput.placeholder = `Search ${ROAD_NAME_COUNT} streets & landmarks…`;
@@ -679,7 +771,7 @@ class CityMapSystem {
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape' && this.isFullMapOpen) {
         this.toggleFullMap(false);
-      } else if (e.code === 'KeyM' && !isTypingInField(e)) {
+      } else if (e.code === 'KeyM' && !isTypingInField(e) && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
         this.toggleFullMap(!this.isFullMapOpen);
       }
     });
@@ -734,6 +826,7 @@ class CityMapSystem {
           const wPos = this.screenToWorld(mx, my, rect.width, rect.height);
           if (this.elHoverInfo) {
             this.elHoverInfo.textContent = `${getLocationLabel(wPos.x, wPos.z)} · Click to teleport here · Right-click to set a route`;
+            delete this.elHoverInfo.dataset.place;
           }
         }
       });
@@ -820,8 +913,20 @@ class CityMapSystem {
       return;
     }
     if (q.length > 0) {
-      const lmMatch = LANDMARKS.find((l) => l.name.toLowerCase().includes(q) || l.short.toLowerCase().includes(q));
+      // the best landmark: named exactly (its short name without 'the' too), then a word of its short name or its name
+      // starting so, then the text anywhere in it (a champion tree after any other at the same rank). Streets with a
+      // word starting so win over all but an exact name: 'maple' is Maple Rd, 'huron' Huron St, 'arb' still the Arb
+      const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const wordStart = new RegExp(`(^|[^a-z0-9])${esc}`);
+      let lmMatch = null, lmRank = Infinity;
+      for (const l of LANDMARKS) {
+        const name = l.name.toLowerCase(), short = l.short.toLowerCase();
+        const rank = (name === q || short === q || short.replace(/^the /, '') === q ? 0 : wordStart.test(short) ? 1 : wordStart.test(name) ? 2
+          : name.includes(q) || short.includes(q) ? 3 : Infinity) + (l.art === 'tree' ? 0.5 : 0);
+        if (rank < lmRank) { lmRank = rank; lmMatch = l; }
+      }
       const roads = ROAD_LABELS.filter((l) => l.lower.includes(q) || l.raw.includes(q));
+      if (lmMatch && lmRank > 0 && roads.some((l) => wordStart.test(l.lower))) lmMatch = null;
       if (roads.length) {
         this.searchPath = new Path2D();
         const b = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
@@ -860,9 +965,14 @@ class CityMapSystem {
 
   // The controller on the full map: the left stick moves a cursor (pushing the map along at its edges), the right
   // stick pans, the triggers or the pad's up and down zoom about the cursor, A teleports there, X sets the GPS route
-  // there and Y clears it
-  gamepad({ move, pan, zoom, go, mark, clear }, dt) {
+  // there and Y clears it; View goes to the search field (B there comes back to the cursor)
+  gamepad({ move, pan, zoom, go, mark, clear, search }, dt) {
     if (!this.isFullMapOpen || !this.fullCanvas) return;
+    if (search && this.elSearchInput) {
+      this.elSearchInput.focus();
+      this.elSearchInput.select?.();
+      return;
+    }
     dt = Math.max(0, Math.min(0.1, dt || 0));
     const { w, h } = this.fullSize();
     const c = this.cursor;
@@ -964,6 +1074,7 @@ class CityMapSystem {
     part(STICK.RIGHT, 'pan');
     const zoomIn = glyph(TRIGGER.RT), zoomOut = glyph(TRIGGER.LT);
     if (zoomIn && zoomOut) el.append(' · ', zoomOut, ' ', zoomIn, ' zoom');
+    part(BUTTON.VIEW, 'search');
   }
 
   cancelPan() {
@@ -976,7 +1087,15 @@ class CityMapSystem {
 
   toggleFullMap(open) {
     this.isFullMapOpen = Boolean(open);
-    if (!this.isFullMapOpen) this.cancelPan();
+    if (!this.isFullMapOpen) {
+      this.cancelPan();
+      // the search field gives the keys and the controller back to the game (an engine may keep a hidden field focused)
+      this.elSearchInput?.blur();
+      // and its two full-screen canvases give their memory back (made again on opening)
+      for (const c of [this.fullCanvas, this.fullStatic]) if (c) { c.width = 0; c.height = 0; }
+      this.fullStaticKey = '';
+      this.fullStaticView = null;
+    }
     this.showCursor(false);
     if (this.onToggle) this.onToggle(this.isFullMapOpen);
     if (!this.modal) return;
@@ -990,6 +1109,20 @@ class CityMapSystem {
       this.viewCenterX = ent.position.x;
       this.viewCenterZ = ent.position.z;
       this.resizeFullCanvas();
+      // with a controller the cursor's there from the start, in the middle, with its prompt; with the mouse, the
+      // mouse's prompt
+      if (document.body.dataset.input === 'controller' && this.fullCanvas) {
+        const { w, h } = this.fullSize();
+        this.cursor.x = w * 0.5;
+        this.cursor.y = h * 0.5;
+        this.showCursor(true);
+        if (this.elCursor) this.elCursor.style.transform = `translate(${this.cursor.x}px, ${this.cursor.y}px)`;
+        this.cursorPlace = getLocationLabel(this.viewCenterX, this.viewCenterZ);
+        this.drawCursorHint(true);
+      } else if (this.elHoverInfo) {
+        this.elHoverInfo.textContent = this.hoverDefault;
+        delete this.elHoverInfo.dataset.place;
+      }
       this.renderFullMap();
     }
   }
@@ -1112,8 +1245,10 @@ class CityMapSystem {
     ctx.stroke(L.runwayLines);
     ctx.setLineDash([]);
 
-    // 5. Building footprints, lowest first (the airport's hangars with them)
-    if (s >= 0.18) {
+    // 5. Building footprints, lowest first (the airport's hangars with them): from 0.3 px/m, where a house is more than a
+    // speck (the full map opens at 0.22 px/m, most of the town, and drawing all its buildings each time it settled was
+    // most of the map's cost)
+    if (s >= 0.3) {
       ctx.fillStyle = MAP.buildings[1];
       ctx.fill(L.airBuildings);
       const fp = footprintLayers(this.allBlocks);
@@ -1251,6 +1386,11 @@ class CityMapSystem {
   }
 
   update() {
+    // Arrived: the GPS route goes once the player is within 25 m of its end
+    if (this.waypoint && !this.isFullMapOpen) {
+      const p = this.controllerManager.getActiveEntity().position;
+      if (Math.hypot(p.x - this.waypoint.x, p.z - this.waypoint.z) < 25) this.waypoint = null;
+    }
     // The full map covers the whole screen, radar included
     if (this.isFullMapOpen) {
       this.renderFullMap();
@@ -1258,6 +1398,19 @@ class CityMapSystem {
       this.renderMinimap();
       for (const r of this.radars || []) this.renderMinimap(r);
     }
+  }
+
+  // The GPS route along the streets for a player at (x, z) (`r`: this map, or another player's radar): found again
+  // when the waypoint changes or the player has gone 15 m from where it was last found, from the player otherwise
+  routeFor(r, x, z) {
+    const c = r.route;
+    if (c && c.waypoint === this.waypoint && Math.hypot(x - c.x, z - c.z) < 15) {
+      c.pts[0].x = x;
+      c.pts[0].z = z;
+      return c.pts;
+    }
+    r.route = { waypoint: this.waypoint, x, z, pts: findRoute(x, z, this.waypoint.x, this.waypoint.z) };
+    return r.route.pts;
   }
 
   // Lamp: another player's radar (split screen, split-screen.js): its own canvas and street label, centred on their
@@ -1276,11 +1429,26 @@ class CityMapSystem {
   renderMinimap(r = this) {
     if (!r.miniCtx || !r.miniCanvas) return;
     // Nothing to draw while the radar is hidden (narrow screens, clean view)
-    if (!r.miniCanvas.offsetParent || document.body.classList.contains('hud-minimized')) return;
+    // (its size kept by a ResizeObserver where there is one, rather than read from the layout each frame, which made
+    // the page lay itself out again mid-frame; a hidden radar is 0 by 0)
+    if (!r.miniSize) {
+      r.miniSize = { w: r.miniCanvas.clientWidth, h: r.miniCanvas.clientHeight, watched: typeof ResizeObserver === 'function' };
+      if (r.miniSize.watched) {
+        new ResizeObserver(() => {
+          r.miniSize.w = r.miniCanvas.clientWidth;
+          r.miniSize.h = r.miniCanvas.clientHeight;
+        }).observe(r.miniCanvas);
+      }
+    }
+    if (!r.miniSize.watched) {
+      r.miniSize.w = r.miniCanvas.offsetParent ? r.miniCanvas.clientWidth : 0;
+      r.miniSize.h = r.miniCanvas.clientHeight;
+    }
+    if (!r.miniSize.w || !r.miniSize.h || document.body.classList.contains('hud-minimized')) return;
     const ctx = r.miniCtx;
     // Radar size in CSS pixels, backed at the device pixel ratio (crisp street names on HiDPI screens)
-    const w = r.miniCanvas.clientWidth;
-    const h = r.miniCanvas.clientHeight;
+    const w = r.miniSize.w;
+    const h = r.miniSize.h;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const bw = Math.round(w * dpr);
     const bh = Math.round(h * dpr);
@@ -1298,7 +1466,10 @@ class CityMapSystem {
     r.miniScale += (target - r.miniScale) * 0.08;
     const scale = r.miniScale;
 
-    if (r.elMiniStreet) {
+    // the street under the player, looked up four times a second
+    const now = performance.now();
+    if (r.elMiniStreet && !(now < r.miniLabelAt)) {
+      r.miniLabelAt = now + 250;
       const label = getLocationLabel(px, pz);
       if (label !== r.miniStreetText) {
         r.miniStreetText = label;
@@ -1365,7 +1536,7 @@ class CityMapSystem {
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
       const wy = toY(this.waypoint.z);
-      drawRoute(ctx, 0, 0, wx, wy, 3);
+      drawRoute(ctx, this.routeFor(r, px, pz), toX, toY, 3);
       drawWaypoint(ctx, wx, wy, 4.5);
     }
 
@@ -1396,15 +1567,17 @@ class CityMapSystem {
 
 
     // Camera FOV Cone & Player Arrow at center (0, 0)
-    const camDir = r.cameraSystem.currentLookAt.clone().sub(r.cameraSystem.currentPos);
-    const camAngle = Math.atan2(camDir.x, camDir.z);
+    const look = r.cameraSystem.currentLookAt, from = r.cameraSystem.currentPos;
+    const camAngle = Math.atan2(look.x - from.x, look.z - from.z);
 
     ctx.save();
     ctx.rotate(-camAngle + Math.PI);
-    const grad = ctx.createRadialGradient(0, 0, 2, 0, 0, 58);
-    grad.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
-    grad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
-    ctx.fillStyle = grad;
+    if (!r.miniGrad) {
+      r.miniGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, 58);
+      r.miniGrad.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
+      r.miniGrad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+    }
+    ctx.fillStyle = r.miniGrad;
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.arc(0, 0, 58, -Math.PI * 0.72, -Math.PI * 0.28);
@@ -1501,7 +1674,7 @@ class CityMapSystem {
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
       const wy = toY(this.waypoint.z);
-      drawRoute(ctx, toX(ent.position.x), toY(ent.position.z), wx, wy, 4);
+      drawRoute(ctx, this.routeFor(this, ent.position.x, ent.position.z), toX, toY, 4);
       drawWaypoint(ctx, wx, wy, 7);
     }
 
@@ -1563,34 +1736,48 @@ class CityMapSystem {
     const o = this.overviewBox(v);
     this.overview = o;
     if (!o) return;
-    const L = mapLayers(), dpr = v.dpr;
+    const dpr = v.dpr;
+    // the panel and its city never change: drawn once into a picture of its own (again when its size does)
+    const key = `${o.w}|${o.h}|${dpr}`;
+    if (this.overviewKey !== key) {
+      this.overviewKey = key;
+      const pic = this.overviewPic || (this.overviewPic = document.createElement('canvas'));
+      pic.width = Math.ceil(o.w * dpr) + 2;
+      pic.height = Math.ceil(o.h * dpr) + 2;
+      const c = pic.getContext('2d'), L = mapLayers();
+      c.setTransform(dpr, 0, 0, dpr, dpr * 0.5 + 0.5, dpr * 0.5 + 0.5);
+      c.fillStyle = 'rgba(10, 13, 18, 0.82)';
+      c.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+      c.lineWidth = 1;
+      c.beginPath();
+      c.roundRect(0, 0, o.w, o.h, 12);
+      c.fill();
+      c.stroke();
+      c.clip();
+      // the city in world metres, inside the panel
+      const k = o.s * dpr;
+      c.setTransform(k, 0, 0, k, dpr * (o.pad - o.b.minX * o.s) + dpr * 0.5 + 0.5, dpr * (o.pad - o.b.minZ * o.s) + dpr * 0.5 + 0.5);
+      c.fillStyle = MAP.streets;
+      c.fill(L.limits, 'evenodd');
+      c.fill(L.field);
+      c.fillStyle = MAP.water;
+      c.fill(L.river, 'evenodd');
+      c.fillStyle = '#4a525e';
+      c.fill(L.airport);
+      c.strokeStyle = MAP.highway;
+      c.lineWidth = 1.4 / o.s;
+      c.stroke(L.highways);
+      c.strokeStyle = MAP.limits;
+      c.lineWidth = 1 / o.s;
+      c.stroke(L.limits);
+    }
     ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.overviewPic, Math.round(dpr * o.x - dpr * 0.5 - 0.5), Math.round(dpr * o.y - dpr * 0.5 - 0.5));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = 'rgba(10, 13, 18, 0.82)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
-    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(o.x, o.y, o.w, o.h, 12);
-    ctx.fill();
-    ctx.stroke();
     ctx.clip();
-    // the city in world metres, inside the panel
-    const k = o.s * dpr;
-    ctx.setTransform(k, 0, 0, k, dpr * (o.x + o.pad - o.b.minX * o.s), dpr * (o.y + o.pad - o.b.minZ * o.s));
-    ctx.fillStyle = MAP.streets;
-    ctx.fill(L.limits, 'evenodd');
-    ctx.fill(L.field);
-    ctx.fillStyle = MAP.water;
-    ctx.fill(L.river, 'evenodd');
-    ctx.fillStyle = '#4a525e';
-    ctx.fill(L.airport);
-    ctx.strokeStyle = MAP.highway;
-    ctx.lineWidth = 1.4 / o.s;
-    ctx.stroke(L.highways);
-    ctx.strokeStyle = MAP.limits;
-    ctx.lineWidth = 1 / o.s;
-    ctx.stroke(L.limits);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const X = (x) => o.x + o.pad + (x - o.b.minX) * o.s, Y = (z) => o.y + o.pad + (z - o.b.minZ) * o.s;
     // what's on screen now
     const x0 = X(v.minX), y0 = Y(v.minZ), x1 = X(v.maxX), y1 = Y(v.maxZ);
@@ -1726,7 +1913,9 @@ class CityMapSystem {
     const pow = Math.pow(10, Math.floor(Math.log10(target)));
     const step = [1, 2, 5, 10].map((m) => m * pow).filter((m) => m <= target).pop() || pow;
     const len = step * v.s;
-    const x0 = -v.w * 0.5 + 24;
+    // beside the whole-city inset where that sits in the bottom left corner (wide windows), not under it
+    const o = this.overviewBox(v);
+    const x0 = -v.w * 0.5 + (o && o.y + o.h > v.h - 40 ? o.x + o.w + 16 : 24);
     const y0 = v.h * 0.5 - 26;
     const label = step >= 1000 ? `${step / 1000} km` : `${step} m`;
     ctx.lineJoin = 'round';
@@ -1760,6 +1949,7 @@ live.accept((next, { changed }) => {
   for (const system of systems) {
     system.miniCache = null;
     system.fullStaticKey = '';
+    system.overviewKey = '';
     if (system.isFullMapOpen) system.renderFullMap();
   }
 });

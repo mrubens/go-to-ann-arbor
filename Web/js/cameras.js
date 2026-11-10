@@ -184,6 +184,11 @@ class CameraSystem {
     this.followOffset.set(0, 0, 0);
     this.followLookOffset.set(0, 0, 0);
     this.followBaseY = 0;
+    // a landmark flyover or a jump camera ends here too, or it keeps watching the old place (main.js puts the
+    // champion card away once the player is well clear of the tree)
+    this.flyover = null;
+    this.jumpCam = null;
+    this._jumpLooked = false;
     this.setCameraPreset('chase', true);
   }
 

@@ -11100,7 +11100,7 @@
         }
 
         /// `data` is text from outside the app (an email, a web page, a file) for the AI to work on, not obey.
-        /// `model` overrides the app's text model for one call, by Lamp's id ("sonnet", "opus", "haiku", "claude-fable-5-1").
+        /// `model` overrides the app's text model for one call, by Lamp's id ("sonnet", "opus", "haiku", "claude-fable-5-2").
         static func ask(_ prompt: String, data: String? = nil, images: [LampImage] = [],
                         system: String? = nil, model: String? = nil) async throws -> String {
             try await call(prompt: prompt, data: data, images: images, system: system, json: false, model: model)

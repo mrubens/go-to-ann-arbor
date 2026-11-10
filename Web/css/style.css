@@ -165,6 +165,13 @@ body::after {
   border-radius: var(--r-panel);
   box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow);
 }
+/* The phone, slow and Xbox tiers (city-map.js sets the class from TIER): a solid fill instead of blurring the live 3D
+   canvas behind every panel every frame */
+html.flat-glass .panel, html.flat-glass .popover {
+  background: var(--grain), var(--glass-strong);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 
 /* ------------------------------------------------------------------------------------------------------------------
    Loading screen
@@ -1000,7 +1007,6 @@ body[data-mode='helicopter'] .gauge-alt {
   background: var(--text);
   transform-origin: left center;
   transform: scaleX(0);
-  transition: transform 0.25s linear;
 }
 
 .camera-switch {
@@ -1708,7 +1714,8 @@ body.split .split-divider {
 .golf-line {
   position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 6; pointer-events: none;
   display: none; flex-direction: column; align-items: center; gap: 8px;
-  color: #fff; font: 700 21px/1.2 system-ui, sans-serif; white-space: nowrap;
+  color: #fff; font: 700 21px/1.2 system-ui, sans-serif; white-space: normal; text-align: center;
+  width: max-content; max-width: calc(100% - 32px);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.75), 0 0 18px rgba(0, 0, 0, 0.5);
 }
 .golf-line.show { display: flex; }

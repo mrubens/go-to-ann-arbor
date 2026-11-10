@@ -168,7 +168,8 @@ function buildRiver(group, geos, waterMat) {
     }
   }
   group.add(river);
-  buildBridges(river);
+  // (the bridges' parapets and railings, as colliders for the city's list: city-grid.js)
+  return buildBridges(river);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -229,8 +230,8 @@ function pierPush(x, z, radius, out) {
 
 function buildBridges(group) {
   piers = new Map();
-  const decks = bridgeDecks();
-  if (!decks.length) return;
+  const decks = bridgeDecks(), colliders = [];
+  if (!decks.length) return colliders;
   const concrete = [], steel = [], wood = [], rail = [];
   const fb = { planks: [], beams: [], rails: [], concrete: [] }; // the footbridges' smooth parts (footbridge())
 
@@ -283,6 +284,25 @@ function buildBridges(group) {
     } else {
       footbridge(d, fb);
     }
+    // The parapets, girders and railings along both edges are solid: thin boxes from the deck up about 1.1 m over it (a
+    // car that leaves the deck can still clear them), in straight runs of up to 20 m
+    const edge = d.kind === 0 ? [hw - 0.15, 0.15] : d.kind === 1 ? [hw + 0.075, 0.175] : [hw - 0.05, 0.08];
+    for (let i = 0; i + 1 < P.length;) {
+      let j = i + 1;
+      while (j + 1 < P.length && P[j + 1][2] - P[i][2] < 20 && T[j + 1][0] * T[i][0] + T[j + 1][1] * T[i][1] > 0.999) j++;
+      const ax = P[i][0], az = P[i][1], bx = P[j][0], bz = P[j][1], len = Math.hypot(bx - ax, bz - az);
+      if (len > 0.1) {
+        const ux = (bx - ax) / len, uz = (bz - az) / len, hx = len / 2, hz = edge[1];
+        const low = Math.min(P[i][3], P[j][3]), high = Math.max(P[i][3], P[j][3]);
+        for (const sd of [-1, 1]) {
+          const cx = (ax + bx) / 2 - uz * edge[0] * sd, cz = (az + bz) / 2 + ux * edge[0] * sd;
+          const ex = Math.abs(ux) * hx + Math.abs(uz) * hz, ez = Math.abs(uz) * hx + Math.abs(ux) * hz;
+          colliders.push({ minX: cx - ex, maxX: cx + ex, minZ: cz - ez, maxZ: cz + ez, minY: low - 0.05, maxY: high + 1.1,
+            obb: { cx, cz, hx, hz, cs: ux, sn: -uz }, thin: true });
+        }
+      }
+      i = j;
+    }
     // Piers in the water every 25 m or so, and an abutment where each end meets the bank
     const wet = P.map((p) => riverDepth(p[0], p[1]) > 0.05);
     const first = wet.indexOf(true), last = wet.lastIndexOf(true);
@@ -322,9 +342,19 @@ function buildBridges(group) {
   for (const [pos, m, name] of [[concrete, mat(0xb3ada3, 0.9), 'BridgeConcrete'], [steel, mat(0x4d5a5e, 0.6, 0.3), 'BridgeSteel'],
     [wood, mat(0x8a7356, 0.9), 'BridgeDecks'], [rail, mat(0x2f3436, 0.5, 0.4), 'BridgeRailings']]) {
     if (!pos.length) continue;
-    const mesh = meshOf(pos, m, name);
-    mesh.castShadow = true;
-    group.add(mesh);
+    // in 700 m squares as the banks are, so a square out of view or far off (meshOf's cullDistance) isn't drawn
+    const tiles = new Map();
+    for (let i = 0; i < pos.length; i += 9) {
+      const key = Math.floor((pos[i] + pos[i + 3] + pos[i + 6]) / 3 / 700) * 1000 + Math.floor((pos[i + 2] + pos[i + 5] + pos[i + 8]) / 3 / 700);
+      if (!tiles.has(key)) tiles.set(key, []);
+      const t = tiles.get(key);
+      for (let k = 0; k < 9; k++) t.push(pos[i + k]);
+    }
+    for (const t of tiles.values()) {
+      const mesh = meshOf(t, m, name);
+      mesh.castShadow = true;
+      group.add(mesh);
+    }
   }
   // merged in 250 m squares, so the fine parts (the railings above all) of the footbridges further off are hidden
   for (const [list, m, name, cull] of [[fb.planks, mat(0x94785a, 0.85), 'FootbridgePlanks', 1100], [fb.beams, mat(0x6e5640, 0.8), 'FootbridgeBeams', 600],
@@ -346,6 +376,7 @@ function buildBridges(group) {
       group.add(mesh);
     }
   }
+  return colliders;
 }
 
 // Every part merged alike: indexed, with positions and normals only

@@ -2136,7 +2136,7 @@ class PersonRig {
   // still for a while.
   stepRagdoll(dt, ground, owner, updatePose = true) {
     const P = this.rag;
-    const pp = P.p, po = P.o, h = RAG_STEP, g = 9.81 * h * h;
+    const pp = P.p, po = P.o, h = RAG_STEP, g = 9.81 * h * h, fl = P.floor || (P.floor = new Float32Array(RAG_N));
     P.time += dt;
     P.carry = Math.min((P.carry || 0) + dt, h * 8);
     let motion = 0;
@@ -2149,6 +2149,8 @@ class PersonRig {
         po[k] = x; po[k + 1] = y; po[k + 2] = z;
         pp[k] = x + vx; pp[k + 1] = y + vy - g; pp[k + 2] = z + vz;
         motion = Math.max(motion, vx * vx + vy * vy + vz * vz);
+        // the ground under it, looked up once a step (the joints move millimetres between the passes below)
+        fl[i] = ground(owner, pp[k], pp[k + 2]) + RAG_RADIUS[i] * this.s;
       }
       for (let it = 0; it < 4; it++) {
         for (let l = 0; l < RAG_LINKS.length; l++) {
@@ -2166,7 +2168,7 @@ class PersonRig {
         // the ground: joints rest on it with their thickness, sliding to a stop
         for (let i = 0; i < RAG_N; i++) {
           const k = i * 3;
-          const floor = ground(owner, pp[k], pp[k + 2]) + RAG_RADIUS[i] * this.s;
+          const floor = fl[i];
           if (pp[k + 1] >= floor) continue;
           pp[k + 1] = floor;
           if (po[k + 1] < floor) po[k + 1] = floor + (floor - po[k + 1]) * 0.15;
@@ -2239,7 +2241,7 @@ class PersonRig {
   // hangs upright in the harness, hands up on the steering toggles.
   skydive(dt, x, y, z, heading, flat, bank, track = 0, hang = 0) {
     const s = this.s;
-    if (!this.placed) this.placed = true;
+    this.placed = false; // posed off its feet: the next walk (update) stands it afresh, feet under it, as perch does
     this.time += Math.min(Math.max(dt, 1e-4), 0.1);
     this.x = x;
     this.z = z;
@@ -2279,7 +2281,7 @@ class PersonRig {
   // and round under the chest while the legs draw up, then a frog kick as the hands shoot forward into the glide
   swim(dt, x, level, z, heading, swim) {
     const s = this.s;
-    if (!this.placed) this.placed = true;
+    this.placed = false; // posed off its feet: the next walk (update) stands it afresh, feet under it, as perch does
     dt = Math.min(Math.max(dt, 1e-4), 0.1);
     this.time += dt;
     this.swimPhase = ((this.swimPhase || 0) + dt * (0.6 + 0.35 * swim)) % 1;
@@ -2502,6 +2504,7 @@ class PersonRig {
     const s = this.s;
     this.gait = 0;
     this.run = 0;
+    this.placed = false;
     root.updateWorldMatrix(true, false);
     root.matrixWorld.decompose(_rootPos, _qRoot, _v);
     this.seat(); // the pose written here is the one a throw starts from (startRagdoll), not the walking body's
@@ -2552,6 +2555,7 @@ class PersonRig {
     const s = this.s;
     this.gait = 0;
     this.run = 0;
+    this.placed = false;
     root.updateWorldMatrix(true, false);
     root.matrixWorld.decompose(_rootPos, _qRoot, _v);
     this.seat(); // the pose written here is the one a throw starts from (startRagdoll), not the walking body's

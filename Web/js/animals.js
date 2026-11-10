@@ -17,15 +17,17 @@ import { GEO } from './city-geodata.js';
 import { TIER } from './device-tier.js';
 import { log } from '../lamp-game.js';
 import { createSquirrelKit, poseSquirrel } from './animal-models.js';
-import { createRiverBirds } from './river-birds.js';
 import { createDeer } from './deer.js';
-import { createCityBirds } from './city-birds.js';
 
 const BIRDS = false;
+// the birds' modules are only fetched when they're on (about 105 KB of code otherwise loaded for nothing)
+const { createRiverBirds } = BIRDS ? await import('./river-birds.js') : {};
+const { createCityBirds } = BIRDS ? await import('./city-birds.js') : {};
 
 const POPULATE = 62, RELEASE = 85; // alive within this far of the view (m); let go beyond this
-const MAX = TIER.stream ? 10 : 16; // alive at once
-const NEAR = TIER.stream ? 5 : 8, NEAR_DIST = 24; // skinned bodies, within this far
+const FULL = TIER.name === 'full'; // the strongest tier gets the designed counts; the leaner ones fewer
+const MAX = FULL ? 16 : 10; // alive at once
+const NEAR = FULL ? 8 : 5, NEAR_DIST = 24; // skinned bodies, within this far
 const CELL = 16;
 
 function hash(x, z, k = 0) {
@@ -100,7 +102,7 @@ function buildAnimals(group) {
   // bring the river's and the town's birds back.
   const noBirds = { update() {}, dispose() {} };
   const riverBirds = BIRDS ? createRiverBirds(group, { parkAt: habitat.parkAt }) : noBirds;
-  const deer = createDeer(group, { parkAt: habitat.parkAt });
+  const deer = createDeer(group, { parkAt: habitat.parkAt, treesNear: (x, z, r, out) => treesNear(x, z, r, out) });
   const cityBirds = !BIRDS ? noBirds : createCityBirds(group, { parkAt: habitat.parkAt, treesNear: (x, z, r, out) => treesNear(x, z, r, out) });
 
   // --- trees, in cells -------------------------------------------------------------------------------------------
@@ -260,9 +262,14 @@ function buildAnimals(group) {
   const RADIUS = { person: 0.45, cyclist: 1.0, car: 2.5, helicopter: 7, kayak: 1.6 };
   const threats = [];
   const player = { x: 0, y: 0, z: 0, vx: 0, vz: 0, has: false, still: 0 };
+  const player2 = { x: 0, y: 0, z: 0, vx: 0, vz: 0, has: false, still: 0 }; // the second split-screen player
   function gatherThreats(ctx, dt) {
     threats.length = 0;
-    const ent = ctx.player, mode = ctx.mode;
+    playerThreat(player, ctx.player, ctx.mode, dt);
+    if (ctx.player2) playerThreat(player2, ctx.player2, ctx.mode2, dt);
+    else player2.has = false;
+  }
+  function playerThreat(player, ent, mode, dt) {
     if (ent?.position) {
       const p = ent.position;
       if (player.has && dt > 0) {
@@ -276,9 +283,11 @@ function buildAnimals(group) {
       player.still = mode === 'person' && speed < 0.35 ? player.still + dt : 0;
       const r = mode === 'car' && ent.bike ? 1.1 : RADIUS[mode] ?? 1;
       const vehicle = mode === 'car' || mode === 'cyclist';
-      threats.push({ x: p.x, y: p.y, z: p.z, vx: player.vx, vz: player.vz, speed, r, loud: vehicle && speed > 2, air: mode === 'helicopter', player: true, foot: mode === 'person',
+      threats.push({ x: p.x, y: p.y, z: p.z, vx: player.vx, vz: player.vz, speed, r, loud: vehicle && speed > 2, air: mode === 'helicopter', player: true, foot: mode === 'person', still: player.still,
         lawn: vehicle && speed > 2 && habitat.lawnAt(p.x, p.z) });
     }
+  }
+  function threatsAround(ctx) {
     const cx = ctx.camera.position.x, cz = ctx.camera.position.z;
     for (const list of [ctx.cars, ctx.buses]) {
       if (!list) continue;
@@ -714,6 +723,7 @@ function buildAnimals(group) {
       populate(cp.x, cp.z, elapsed, ctx.look);
     }
     gatherThreats(ctx, dt);
+    threatsAround(ctx);
     order.length = 0;
     for (const s of alive.values()) {
       think(s, dt, elapsed, ctx);
@@ -727,7 +737,7 @@ function buildAnimals(group) {
     // the skinned bodies go to the nearest; anyone further gives theirs back first
     for (let i = 0; i < order.length; i++) if (!(i < NEAR && order[i].d2 < NEAR_DIST * NEAR_DIST)) dropBody(order[i]);
     for (let i = 0; i < order.length; i++) draw(order[i], elapsed, order[i].d2, i < NEAR && order[i].d2 < NEAR_DIST * NEAR_DIST);
-    for (const m of Object.values(kit.far)) m.instanceMatrix.needsUpdate = m.count > 0;
+    for (const m of Object.values(kit.far)) { m.instanceMatrix.needsUpdate = m.count > 0; m.visible = m.count > 0; }
     riverBirds.update(dt, elapsed, ctx, threats);
     deer.update(dt, elapsed, ctx, threats);
     cityBirds.update(dt, elapsed, ctx, threats, player);
@@ -747,6 +757,8 @@ function buildAnimals(group) {
 
   return {
     update,
+    // the squirrels' and the deer's shaders, to make ahead (main.js' compileLater, detached)
+    *toPrepare() { yield* kit.toPrepare(); yield* deer.toPrepare(); },
     stats: kit.stats,
     get count() { return alive.size; },
     riverBirds,

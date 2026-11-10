@@ -451,6 +451,8 @@ function createAirport(group) {
   // the door; each on the lowest ground under it
   const colliders = [];
   let far = false; // the camera far off (update)
+  let gone = false; // the whole field not drawn (update)
+  let circuit = null; // the touch-and-go plane (below)
   const BP = { steel: [], roof: [], tan: [], doors: [], glass: [], dark: [], lamps: [], canopy: [] };
   const flatArea = (r) => { let a = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j].x + r[i].x) * (r[j].z - r[i].z); return Math.abs(a) / 2; };
   const prism = (ring, y0, y1) => {
@@ -493,7 +495,7 @@ function createAirport(group) {
     }
     const area = flatArea(ring), boxy = area / ((s1 - s0) * (t1 - t0)) > 0.85;
     const W = (sv, tv, y) => [best.p.x + ux * sv + nx * tv, y, best.p.z + uz * sv + nz * tv];
-    const span = Math.min(maxX - minX, maxZ - minZ);
+    const span = t1 - t0; // the width across the longest side (a slanted ring's axis-aligned box overstates it)
     const h = b.hangar ? Math.min(9, 4.2 + span * 0.12) : 4.6, top = low + h;
     if (b.hangar) {
       BP.steel.push(prism(ring, low - 0.6, top));
@@ -621,28 +623,40 @@ function createAirport(group) {
     group.add(m);
   }
 
-  // the airstairs, each its own truck to drive away (where they were left is kept with the game's saves)
-  const S = AIRPORT.stairs || [], stairs = [], stairGeos = stairTruckGeometries();
+  // the airstairs, each its own truck to drive away (where they were left is kept with the game's saves); drawn as
+  // instances, one draw per part for all of them, a truck standing empty (held, or left out) shrunk to nothing
+  const S = AIRPORT.stairs || [], stairs = [], stairGeos = stairTruckGeometries(), stairMeshes = [];
+  for (const k in stairGeos) {
+    if (!stairGeos[k] || !S.length) continue;
+    const m = new THREE.InstancedMesh(stairGeos[k], stairMaterial(k), S.length / 3);
+    m.name = `AirStairs_${k}`;
+    m.castShadow = k !== 'glass' && k !== 'amber' && k !== 'red';
+    m.receiveShadow = true;
+    m.visible = !far;
+    group.add(m);
+    stairMeshes.push(m);
+  }
   let moved = null, heldStairs = -1;
   try { moved = load('airportStairs'); heldStairs = load('airportStairsHeld') ?? -1; } catch { moved = null; }
   for (let i = 0; i < S.length; i += 3) {
-    const s = { x: S[i], z: S[i + 1], heading: S[i + 2], root: buildStairTruck(stairGeos) };
+    const s = { x: S[i], z: S[i + 1], heading: S[i + 2] };
     const m = moved?.[i / 3];
     if (m && m.every(Number.isFinite)) [s.x, s.z, s.heading] = m;
     // a mapped spot that would put the truck into a hangar's wall is left empty (kept in the list for the saves)
     else if (!clearOfBuildings(s.x, s.z, s.heading, STAIR_FOOT)) s.blocked = true;
-    s.root.name = `AirStairs${i / 3 + 1}`;
-    group.add(s.root);
     stairs.push(s);
     setStairs(s);
   }
   function setStairs(s) {
     s.g = groundHeight(s.x, s.z) + (onAirfield(s.x, s.z) ? PAVE : 0);
     s.sn = Math.sin(s.heading); s.cs = Math.cos(s.heading);
-    s.root.position.set(s.x, s.g, s.z);
-    s.root.rotation.y = s.heading;
-    s.root.visible = !far && !s.blocked && stairs.indexOf(s) !== heldStairs;
-    s.root.updateMatrixWorld(true); // the scene's world matrices are made once (main.js): a moved truck makes its own
+    const i = stairs.indexOf(s), shown = !s.blocked && i !== heldStairs;
+    const mx = new THREE.Matrix4().compose(V(s.x, s.g, s.z), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), s.heading), shown ? V(1, 1, 1) : V(0, 0, 0));
+    for (const m of stairMeshes) {
+      m.setMatrixAt(i, mx);
+      m.instanceMatrix.needsUpdate = true;
+      m.computeBoundingSphere(); // a truck can be left anywhere in town
+    }
   }
   const saveStairs = () => { save('airportStairs', stairs.map((s) => [s.x, s.z, s.heading])); save('airportStairsHeld', heldStairs); };
   // the stair truck nearest (x, z), from beside its cab or its flight
@@ -828,7 +842,11 @@ function createAirport(group) {
       p.mesh.instanceMatrix.needsUpdate = true;
     }
   }
-  const showFleet = () => { for (const m of fleet) m.visible = !far; };
+  // (shown neither far off nor while the field itself isn't drawn, `gone`, so nothing parks on bare lawn)
+  const showFleet = () => {
+    for (const m of fleet) m.visible = !far && !gone;
+    if (circuit) circuit.plane.visible = !far && !gone;
+  };
   showFleet();
 
   // the runway's edge lights every 60 m, a green bar of them across each threshold, and the taxiways' blue ones
@@ -859,7 +877,10 @@ function createAirport(group) {
       const dx = (bx - ax) / len, dz = (bz - az) / len;
       for (let t = 10; t < len - 9; t += 30) for (const off of [-7, 7]) {
         const x = ax + dx * t - dz * off, z = az + dz * t + dx * off;
-        if (!nearTaxiway(x, z, 6.2)) lamp(x, z, blueLamps);
+        // (not on another taxiway, the runways' pavement or in a building)
+        if (nearTaxiway(x, z, 6.2) || RINGS.some((r) => inRing(r, x, z))) continue;
+        if (AIRPORT.runways.some((r) => segDist(x, z, r.a[0], r.a[1], r.b[0], r.b[1]) < r.width / 2 + 2)) continue;
+        lamp(x, z, blueLamps);
       }
     }
   }
@@ -947,7 +968,6 @@ function createAirport(group) {
   }
 
   // a plane flying touch-and-goes round the paved runway's circuit, on the side away from town (update)
-  let circuit = null;
   if (rw) {
     const [ax, az] = rw.a, [bx, bz] = rw.b, len = Math.hypot(bx - ax, bz - az), dx = (bx - ax) / len, dz = (bz - az) / len;
     const cx = (ax + bx) / 2, cz = (az + bz) / 2, g0 = groundHeight(cx, cz) + PAVE + 0.25, L = len / 2;
@@ -966,7 +986,6 @@ function createAirport(group) {
   // aren't drawn (`far`, set here)
   // Lamp: on the Xbox the whole field isn't drawn from over a kilometre beyond its edge (device-tier.js), but for
   // airstairs the player left standing somewhere else
-  let gone = false;
   // `cam2`: the second player's camera in split screen, whose half shows the field when they're near it
   function update(dt, cam, cam2 = null) {
     const offOf = (c) => Math.hypot(c.x - AIRFIELD_CENTRE.x, c.z - AIRFIELD_CENTRE.z);
@@ -975,16 +994,15 @@ function createAirport(group) {
     if (TIER.landmarkReach && (off > TIER.landmarkReach + 900) !== gone) {
       gone = !gone;
       for (const o of group.children) {
-        if (stairs.some((s) => s.root === o)) continue;
+        if (stairMeshes.includes(o)) continue;
         if (gone) { o.userData.shownNear = o.visible; o.visible = false; } else o.visible = o.userData.shownNear ?? true;
       }
-      if (!gone) { showFleet(); if (circuit) circuit.plane.visible = !far; }
+      showFleet();
     }
     if (away !== far) {
       far = away;
       showFleet();
-      for (const s of stairs) s.root.visible = !far && !s.blocked && stairs.indexOf(s) !== heldStairs;
-      if (circuit) circuit.plane.visible = !far;
+      for (const m of stairMeshes) m.visible = !far;
     }
     if (far) return;
     beacon.rotation.y += dt * 2.1;

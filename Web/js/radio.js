@@ -13,7 +13,7 @@ const STATIONS = [
   { call: 'WEMU', dial: '89.1', about: 'Jazz, blues and news', url: STW('WEMUFM') },
   { call: 'Michigan Public', dial: '91.7', about: 'NPR news and talk', url: STW('WUOMFM') },
   { call: 'W4 Country', dial: '102.9', about: 'Country', url: STW('WWWWFM') },
-  { call: '107one', dial: '107.1', about: 'Adult hits', url: STW('WQKLFM') },
+  { call: '107one', dial: '107.1', about: 'Adult album alternative', url: STW('WQKLFM') },
   { call: 'WTKA', dial: '1050 AM', about: 'Michigan sports talk', url: STW('WTKAAM') }
 ];
 const OFF = -1;

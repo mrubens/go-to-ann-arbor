@@ -291,7 +291,8 @@ function buildHelicopterTailRotorGeometry() {
     const blade = new THREE.BoxGeometry(0.022, 0.76, 0.13)
       .translate(0, 0.42, 0)
       .rotateX(angle);
-    parts.push(part(blade, HELI_PARTS.ROTOR));
+    // (a rotor's blade still, marked a tenth on so its tips are measured round its own axle: the material)
+    parts.push(part(blade, HELI_PARTS.ROTOR + 0.1));
   }
   return mergeGeometries(parts);
 }
@@ -422,10 +423,10 @@ function createLoftedHelicopterMaterial() {
     const finCol = mix(navyPaint, goldPaint, clamp(max(finGold, step(0.6, abs(p.x))), 0.0, 1.0));
 
     // 5. Rotor Blades: Matte Anthracite Carbon with High-Visibility Yellow Safety Tips
+    // (the main rotor's tips round its mast, in x and z; the tail rotor's, all four, round its axle along x, in y and z)
     const radialDist = length(vec2(p.x, p.z));
-    const isBladeTip = smoothstep(4.35, 4.42, radialDist).add(
-      smoothstep(0.65, 0.68, abs(p.y)).mul(step(radialDist, 0.35))
-    );
+    const isTail = step(HELI_PARTS.ROTOR + 0.05, partId);
+    const isBladeTip = mix(smoothstep(4.35, 4.42, radialDist), smoothstep(0.65, 0.68, length(vec2(p.y, p.z))), isTail);
     const rotorCol = mix(color(0x1e232a), goldPaint, clamp(isBladeTip, 0.0, 1.0));
 
     const skidCol = color(0x22272e);

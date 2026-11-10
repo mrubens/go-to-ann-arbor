@@ -405,33 +405,43 @@ function riverDepth(x, z) {
 
 // Which way the river runs: the distance along the water (on a 6 m grid of its open water) from the lowest point of its
 // largest stretch, measured once when it's first asked for. Downstream is where that distance falls.
-const FLOW_STEP = 6;
+// The water is a few hundredths of the grid, so only its cells are kept: numbered in turn, found through 64 x 64 blocks
+// of the grid (null where a block has none), each cell's distance in one short array
+const FLOW_STEP = 6, FLOW_BLOCK = 64;
 function flowField() {
   const r = grid?.river;
   if (!r) return null;
   if (r.flow !== undefined) return r.flow;
   const cols = Math.floor((r.dcols - 1) * r.dstep / FLOW_STEP), rows = Math.floor((r.drows - 1) * r.dstep / FLOW_STEP);
-  const n = cols * rows, x0 = r.dx0 + FLOW_STEP / 2, z0 = r.dz0 + FLOW_STEP / 2;
-  const wet = new Uint8Array(n);
+  const x0 = r.dx0 + FLOW_STEP / 2, z0 = r.dz0 + FLOW_STEP / 2, B = FLOW_BLOCK;
+  const bcols = Math.ceil(cols / B), brows = Math.ceil(rows / B), blocks = new Array(bcols * brows).fill(null);
+  const cellC = [], cellW = [];
   for (let w = 0; w < rows; w++) for (let c = 0; c < cols; c++) {
-    if (digAt(r, x0 + c * FLOW_STEP, z0 + w * FLOW_STEP) > 0.35) wet[w * cols + c] = 1;
+    if (!(digAt(r, x0 + c * FLOW_STEP, z0 + w * FLOW_STEP) > 0.35)) continue;
+    const b = (w >> 6) * bcols + (c >> 6);
+    (blocks[b] ??= new Int32Array(B * B).fill(-1))[(w & 63) * B + (c & 63)] = cellC.length;
+    cellC.push(c); cellW.push(w);
   }
+  const n = cellC.length;
+  const id = (c, w) => {
+    if (c < 0 || w < 0 || c >= cols || w >= rows) return -1;
+    const blk = blocks[(w >> 6) * bcols + (c >> 6)];
+    return blk ? blk[(w & 63) * B + (c & 63)] : -1;
+  };
   const NB = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]];
   // the stretches of water that join up, and the biggest of them
   const part = new Int32Array(n).fill(-1);
-  const queue = new Int32Array(n);
+  const queue = new Int32Array(Math.max(1, n));
   let best = -1, bestSize = 0;
   for (let i = 0; i < n; i++) {
-    if (!wet[i] || part[i] >= 0) continue;
+    if (part[i] >= 0) continue;
     let head = 0, tail = 0;
     queue[tail++] = i; part[i] = i;
     while (head < tail) {
-      const k = queue[head++], c = k % cols, w = (k - c) / cols;
+      const k = queue[head++], c = cellC[k], w = cellW[k];
       for (const [dc, dw] of NB) {
-        const cc = c + dc, ww = w + dw;
-        if (cc < 0 || ww < 0 || cc >= cols || ww >= rows) continue;
-        const j = ww * cols + cc;
-        if (wet[j] && part[j] < 0) { part[j] = i; queue[tail++] = j; }
+        const j = id(c + dc, w + dw);
+        if (j >= 0 && part[j] < 0) { part[j] = i; queue[tail++] = j; }
       }
     }
     if (tail > bestSize) { bestSize = tail; best = i; }
@@ -440,8 +450,7 @@ function flowField() {
   // each stretch runs to its own lowest point (a pond above a dam to the dam, the river on to Gallup)
   const lows = new Map();
   for (let i = 0; i < n; i++) {
-    if (part[i] < 0) continue;
-    const c = i % cols, w = (i - c) / cols, lv = levelAt(r, x0 + c * FLOW_STEP, z0 + w * FLOW_STEP);
+    const lv = levelAt(r, x0 + cellC[i] * FLOW_STEP, z0 + cellW[i] * FLOW_STEP);
     const was = lows.get(part[i]);
     if (!was || lv < was.level) lows.set(part[i], { level: lv, at: i });
   }
@@ -452,20 +461,20 @@ function flowField() {
   for (const { at } of lows.values()) { dist[at] = 0; queue[size++] = at; inQueue[at] = 1; }
   while (size > 0) {
     const k = queue[head]; head = (head + 1) % n; size--; inQueue[k] = 0;
-    const c = k % cols, w = (k - c) / cols, d = dist[k];
+    const c = cellC[k], w = cellW[k], d = dist[k];
     for (const [dc, dw, cost] of NB) {
-      const cc = c + dc, ww = w + dw;
-      if (cc < 0 || ww < 0 || cc >= cols || ww >= rows) continue;
-      const j = ww * cols + cc;
-      if (part[j] !== part[k] || dist[j] <= d + cost) continue;
+      const j = id(c + dc, w + dw);
+      if (j < 0 || part[j] !== part[k] || dist[j] <= d + cost) continue;
       dist[j] = d + cost;
       if (!inQueue[j]) { inQueue[j] = 1; queue[(head + size) % n] = j; size++; }
     }
   }
   let far = 0;
   for (let i = 0; i < n; i++) if (part[i] === best && dist[i] > far) far = dist[i];
-  console.log(`[terrain] the river runs ${Math.round(far * FLOW_STEP / 1000 * 10) / 10} km to its lowest point here, in ${lows.size} stretches`);
-  return (r.flow = { cols, rows, x0, z0, wet, dist });
+  console.log(`[terrain] the river runs ${Math.round(far * FLOW_STEP / 1000 * 10) / 10} km to its lowest point here, in ${lows.size} stretches (${n} wet cells kept)`);
+  // the distance at grid cell (c, w): Infinity off the water
+  const distAt = (c, w) => { const j = id(c, w); return j < 0 ? Infinity : dist[j]; };
+  return (r.flow = { cols, rows, x0, z0, distAt });
 }
 
 // The way the river runs at (x, z), into `out` as a unit { x, z } downstream; false where there's no current there
@@ -475,13 +484,13 @@ function riverFlow(x, z, out) {
   const fx = (x - f.x0) / FLOW_STEP, fz = (z - f.z0) / FLOW_STEP;
   const c0 = Math.floor(fx), w0 = Math.floor(fz);
   if (c0 < 1 || w0 < 1 || c0 >= f.cols - 2 || w0 >= f.rows - 2) return false;
-  const { cols, dist } = f;
+  const { distAt } = f;
   let gx = 0, gz = 0;
   for (let dw = 0; dw <= 1; dw++) for (let dc = 0; dc <= 1; dc++) {
-    const c = c0 + dc, w = w0 + dw, i = w * cols + c, d = dist[i];
+    const c = c0 + dc, w = w0 + dw, d = distAt(c, w);
     if (!Number.isFinite(d)) continue;
     const wgt = (dc ? fx - c0 : 1 - (fx - c0)) * (dw ? fz - w0 : 1 - (fz - w0));
-    const e = dist[i + 1], we = dist[i - 1], s = dist[i + cols], nn = dist[i - cols];
+    const e = distAt(c + 1, w), we = distAt(c - 1, w), s = distAt(c, w + 1), nn = distAt(c, w - 1);
     gx += wgt * ((Number.isFinite(e) ? e : d) - (Number.isFinite(we) ? we : d));
     gz += wgt * ((Number.isFinite(s) ? s : d) - (Number.isFinite(nn) ? nn : d));
   }
@@ -501,8 +510,7 @@ function nearestWater(x, z, reach = 600) {
   let best = null, bestD = Infinity;
   for (let w = Math.max(0, fw - span); w <= Math.min(f.rows - 1, fw + span); w++) {
     for (let c = Math.max(0, fc - span); c <= Math.min(f.cols - 1, fc + span); c++) {
-      const i = w * f.cols + c;
-      if (!f.wet[i] || !Number.isFinite(f.dist[i])) continue;
+      if (!Number.isFinite(f.distAt(c, w))) continue;
       const px = f.x0 + c * FLOW_STEP, pz = f.z0 + w * FLOW_STEP;
       if (riverDepth(px, pz) < 0.9) continue;
       const d = (px - x) ** 2 + (pz - z) ** 2;
@@ -725,7 +733,8 @@ function splitIntoTiles(geometry) {
 function meshOnGround(mesh, draped) {
   draped.computeBoundingBox();
   draped.computeBoundingSphere();
-  const big = draped.attributes.position.count > 30000 && !draped.index;
+  // (a mesh already in chunks hidden far off, road-paint.js's, is kept whole, so it keeps its cullDistance)
+  const big = draped.attributes.position.count > 30000 && !draped.index && !mesh.userData.cullDistance;
   if (!big) {
     mesh.geometry = draped;
     return null;
@@ -1190,6 +1199,7 @@ function streamFromSquares(part, { name, key, squares, make, look, tolerance = 0
   group.userData.terrain = 'set';
   const layer = { part, key: `${groundKey}.s${tolerance}.${key}`, tolerance, group, make, flat: new Map(squares.map((k) => [k, null])), built: new Map(), away: 0,
     look: { castShadow: false, receiveShadow: true, renderOrder: 0, frustumCulled: true, mask: 1, ...look } };
+  if (opaque(layer.look.material)) layer.look.renderOrder += GROUND_ORDER; // (the ground drawn last: groundOrder)
   stream.layers.push(layer);
   return layer;
 }
@@ -1201,12 +1211,15 @@ function streamNear(layers) {
 
 // The tiles wanted near (x, z) and not drawn, nearest first, as [layer, tile key]
 function wantedTiles(x, z, layers = stream.layers) {
-  const want = [];
-  for (const layer of layers) {
-    for (const k of layer.flat.keys()) {
-      if (layer.built.has(k)) continue;
-      const d = tileDistance(k, x, z);
-      if (d < stream.radius) want.push([d, layer, k]);
+  const want = [], R = stream.radius;
+  // only the squares that can be within the radius are asked about, not every square of every layer
+  const tx0 = Math.floor((x - R) / STREAM_TILE), tx1 = Math.floor((x + R) / STREAM_TILE);
+  const tz0 = Math.floor((z - R) / STREAM_TILE), tz1 = Math.floor((z + R) / STREAM_TILE);
+  for (let tx = tx0; tx <= tx1; tx++) {
+    for (let tz = tz0; tz <= tz1; tz++) {
+      const k = tx * 100000 + tz, d = tileDistance(k, x, z);
+      if (d >= R) continue;
+      for (const layer of layers) if (layer.flat.has(k) && !layer.built.has(k)) want.push([d, layer, k]);
     }
   }
   return want.sort((a, b) => a[0] - b[0]).map(([, layer, k]) => [layer, k]);
@@ -1360,6 +1373,16 @@ function groundStreamStats() {
   return { layers, tiles, radius: stream.radius };
 }
 
+// The ground is drawn after everything else that isn't see-through: what's laid on it here (its opaque layers, given
+// renderOrder GROUND_ORDER more than their own) and the outskirts' land. So a pool's opening (pools.js), drawn between
+// the two, hides only the ground over the pool, not a swimmer, a car or a ladder under its water, which drew before it.
+const GROUND_ORDER = 10;
+const opaque = (m) => (Array.isArray(m) ? !m.some((x) => x.transparent) : !m?.transparent);
+function groundOrder(obj) {
+  if (obj.userData.groundOrdered || !opaque(obj.material)) return;
+  obj.renderOrder += GROUND_ORDER;
+  obj.userData.groundOrdered = true;
+}
 const IDENTITY = new THREE.Matrix4();
 const isIdentity = (m) => m.elements.every((v, i) => Math.abs(v - IDENTITY.elements[i]) < 1e-6);
 
@@ -1377,6 +1400,7 @@ function setOnTerrain(root, tolerance = 0.16) {
   const visit = (obj) => {
     if (obj.userData.terrain === 'set') return;
     if (obj.isInstancedMesh) {
+      if (obj.userData.terrain === 'drape') groundOrder(obj);
       if (obj.userData.terrain === 'drape') jobs.push({ obj, instances: true, inputs: instanceInputs(obj), make: () => layerOfInstances(obj), tolerance });
       else liftInstances(obj);
     } else if ((obj.isMesh || obj.isLine || obj.isPoints) && obj.geometry?.attributes.position) {
@@ -1385,6 +1409,7 @@ function setOnTerrain(root, tolerance = 0.16) {
         // they're built in short lengths instead and only laid on the ground; lines and points can't be cut
         // (on the city's mesh every mesh is cut along its triangles, the markings too: an edge's cut interpolates them)
         const cut = obj.isMesh && !obj.geometry.attributes.side ? obj.userData.terrainTolerance ?? tolerance : 0;
+        if (obj.isMesh) groundOrder(obj);
         if (cut || (grid.core && obj.isMesh)) jobs.push({ obj, inputs: geometryInputs(obj.geometry), make: () => layerOfGeometry(obj.geometry), tolerance: cut });
         else if (obj.isMesh) {
           const tiles = meshOnGround(obj, drapeGeometry(obj.geometry, 0));
@@ -1424,6 +1449,9 @@ function setOnTerrain(root, tolerance = 0.16) {
           tile.frustumCulled = obj.frustumCulled;
           tile.layers.mask = obj.layers.mask;
         }
+        // (a chunk hidden far off stays so in its tiles: road-paint.js)
+        if (obj.userData.cullDistance) tile.userData.cullDistance = obj.userData.cullDistance;
+        if (obj.userData.sharesPipelineWith) tile.userData.sharesPipelineWith = obj.userData.sharesPipelineWith;
         tile.name = obj.name;
         group.add(tile);
       }
@@ -1486,7 +1514,7 @@ function drawOver(mat, lift = LIFT.over) {
 
 export {
   drawOver, cityGround,
-  loadTerrain, setPools, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
+  GROUND_ORDER, loadTerrain, setPools, groundHeight, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
   tessellate, drapeGeometry, liftGeometry, liftInstances, setOnTerrain,
   streamGround, updateGroundStreaming, putStreamedGround, groundStreamStats, groundStreamCenter, groundStreamBytes, streamFromSquares, streamNear
 };

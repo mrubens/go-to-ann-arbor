@@ -25,10 +25,10 @@ async function hedgeDriveways(yard) {
   if (!hedges.length) return;
   const keys = new Set();
   for (const it of hedges) for (const dx of [-20, 20]) for (const dz of [-20, 20]) keys.add(Math.floor((it.x + dx) / 500) * 100000 + Math.floor((it.z + dz) / 500));
+  // (the squares read side by side, not one after another)
   const drives = [];
-  for (const k of keys) {
-    try { for (const rings of (await squareYards(k)).driveways) if (rings[0]?.length >= 6) drives.push(rings[0]); } catch { /* no yards there */ }
-  }
+  const squares = await Promise.all([...keys].map((k) => squareYards(k).catch(() => null))); // (null: no yards there)
+  for (const sq of squares) if (sq) for (const rings of sq.driveways) if (rings[0]?.length >= 6) drives.push(rings[0]);
   for (const it of hedges) {
     it.drives = drives.filter((r) => {
       for (let i = 0; i < r.length; i += 2) if (Math.abs(r[i] - it.x) < 25 && Math.abs(r[i + 1] - it.z) < 25) return true;

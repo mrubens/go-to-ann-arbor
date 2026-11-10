@@ -58,13 +58,20 @@ async function chooseTier() {
   // frames a second, which a 30 Hz screen holds down on any Mac, so it's no longer read.
   let why = null;
   if (!TOUCH_DEVICE && !XBOX) {
-    const gpu = gpuName();
+    // (the mark lapses after a week, and main.js clears it when the lighter city runs with plenty to spare; one saved
+    // on 'full' steps down to 'light' first, one saved on 'light' to 'slow')
     const slowWork = load('slowWork');
-    if (slowWork) why = `${slowWork.ms ?? '?'} ms of work a frame last time`;
+    const marked = slowWork && Date.now() - (slowWork.at || 0) < 7 * 864e5;
+    if (marked && (slowWork.from ?? 'full') === 'full' && name === 'full') { name = 'light'; log(`[tier] light: ${slowWork.ms ?? '?'} ms of work a frame last time`); }
+    else if (marked) why = `${slowWork.ms ?? '?'} ms of work a frame last time`;
     else if (typeof memory === 'number' && memory <= 8.5) why = `${Math.round(memory)} GB`;
     else if (navigator.deviceMemory && navigator.deviceMemory <= 4) why = `${navigator.deviceMemory} GB`;
     else if (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) why = `${navigator.hardwareConcurrency} cores`;
-    else if (/Intel|SwiftShader|llvmpipe|Software|Basic Render|Mali|Adreno|PowerVR/i.test(gpu)) why = gpu;
+    else {
+      // (the graphics asked for only when nothing above decided: it makes a throwaway context)
+      const gpu = gpuName();
+      if (/Intel|SwiftShader|llvmpipe|Software|Basic Render|Mali|Adreno|PowerVR/i.test(gpu)) why = gpu;
+    }
     if (why) name = 'slow';
   }
   const asked = new URLSearchParams(location.search).get('tier');

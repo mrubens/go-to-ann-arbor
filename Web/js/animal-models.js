@@ -494,8 +494,23 @@ function createSquirrelKit({ farCount = 16 } = {}) {
     return { mesh, bones, coat };
   }
   const bytes = (g) => Object.values(g.attributes).reduce((s, a) => s + a.array.byteLength, 0) + (g.index?.array.byteLength || 0);
+  // one skinned body per coat and one stand-in each, in no scene and on their own copies of the shapes, for main.js'
+  // compileLater to make their shaders a few seconds into play (else the first squirrel near stalls the frame)
+  function* toPrepare() {
+    for (const coat of Object.keys(mats)) {
+      const { mesh } = make(coat);
+      mesh.geometry = nearGeo.clone();
+      mesh.updateMatrixWorld(true);
+      yield mesh;
+    }
+    for (const m of Object.values(mats)) {
+      const inst = new THREE.InstancedMesh(farGeo.clone(), m, 1);
+      inst.updateMatrixWorld(true);
+      yield inst;
+    }
+  }
   return {
-    make, far, materials: mats,
+    make, far, materials: mats, toPrepare,
     stats: { triangles: nearGeo.index.count / 3, farTriangles: farGeo.index.count / 3, bytes: bytes(nearGeo) + bytes(farGeo), textureBytes: tex.bytes },
     dispose() { nearGeo.dispose(); farGeo.dispose(); tex.color.dispose(); tex.normal.dispose(); for (const m of Object.values(mats)) m.dispose(); }
   };

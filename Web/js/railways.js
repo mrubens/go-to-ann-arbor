@@ -417,13 +417,17 @@ function buildRailways(group, crossings = [], wolverine = null) {
     let s = train.s;
     for (const car of train.cars) {
       const mid = s - train.dir * car.L / 2;
+      s -= train.dir * (car.L + 1);
+      // a car past either end of the line isn't there yet (or any more): hidden one by one as each passes the end,
+      // rather than heaped on its last point
+      car.mesh.visible = mid >= 0 && mid <= train.path.length;
+      if (!car.mesh.visible) continue;
       sample(train.path, mid + car.L * 0.35, front);
       sample(train.path, mid - car.L * 0.35, back);
       const fy = front.y, by = back.y; // (the route's own profile, its bridges' decks in it)
       const dx = front.x - back.x, dz = front.z - back.z, h = Math.hypot(dx, dz) || 1;
       car.mesh.position.set((front.x + back.x) / 2, (fy + by) / 2 + TOP - 0.02, (front.z + back.z) / 2);
       car.mesh.rotation.set(-Math.atan2(fy - by, h), Math.atan2(dx, dz), 0, 'YXZ'); // facing the way it was built
-      s -= train.dir * (car.L + 1);
     }
   };
   // A train on Amtrak's timetable: the stop at Ann Arbor in service today nearest the time now puts
@@ -465,8 +469,7 @@ function buildRailways(group, crossings = [], wolverine = null) {
     if (t.lastSec !== now.sec) { t.lastSec = now.sec; t.frac = 0; }
     t.stopKey = stop;
     const inside = t.s - dir * t.length > -50 && t.s - dir * t.length < t.path.length + 50 && t.s > -50 && t.s < t.path.length + 50;
-    for (const car of t.cars) car.mesh.visible = inside;
-    if (!inside) { t.moving = false; return; }
+    if (!inside) { for (const car of t.cars) car.mesh.visible = false; t.moving = false; return; }
     t.v = v;
     t.waiting = v === 0 ? 1 : 0;
     // the horn as it pulls out, and now and then on the way

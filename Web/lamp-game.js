@@ -1371,15 +1371,22 @@ async function swapModules(changed) {
         again.add(path);
         if (takes(path)) { boundaries.add(path); return null; }
         const by = importers.get(path) || [];
-        if (!by.length) return roots.includes(path) ? `${path} doesn't take changes while the game runs` : `nothing imports ${path}`;
-        for (const above of by) { const why = up(above); if (why) return why; }
+        // Nothing above takes it: the module that starts the game, or one nothing imports.
+        if (!by.length) return roots.includes(path) ? { root: path } : { orphan: path };
+        for (const above of by) { const stop = up(above); if (stop) return stop; }
         return null;
     };
     for (const path of changed) {
         if (lampOwn(path)) return { why: `Lamp's own ${path} changed` };
         if (!imports.has(path)) return { why: `nothing imports ${path}` };
-        const why = up(path);
-        if (why) return { why };
+        // The reason names the file that changed first: an `accept()` there is what would take the change, and the
+        // module it's loaded through is only where the search for one ended.
+        const stop = up(path);
+        if (stop) {
+            return { why: stop.orphan ? `nothing imports ${stop.orphan}`
+                : stop.root === path ? `${path} doesn't take changes while the game runs`
+                : `${path} doesn't take changes while the game runs, nor does ${stop.root}, which it's loaded through` };
+        }
     }
     // Run again in order, what each imports before it.
     const order = [], seen = new Map();
@@ -2540,12 +2547,15 @@ async function putPage(page, paths, still) {
     if (still) curtain.append(still);
     curtain.append(...old);
     // Scripts from the new page don't run as they go in: the modules run from runAgain.
-    body.replaceChildren(...[...page.body.childNodes].map(n => document.adoptNode(n)), curtain, ...[touchLayer, pill, hint].filter(Boolean));
+    fromPage = [...page.body.childNodes].map(n => document.adoptNode(n));
+    body.replaceChildren(...fromPage, curtain, ...[touchLayer, pill, hint].filter(Boolean));
 }
 
 // The frame just drawn, as a picture placed where the game's canvas is, for runAgain to hold on screen; asked of the
 // next frame, since a WebGL canvas keeps what it drew only until the frame is shown.
 let shooting = null, curtain = null, lifting = 0;
+// What the page's HTML put back in at the last run in place, where a loading screen of the game's own is.
+let fromPage = [];
 // The change whose new code is about to be on screen, for `shown`: after a run in place as the old frame goes, after a
 // reload at the first frame.
 let shownFor = null;
@@ -2575,9 +2585,34 @@ function lift() {
     const going = curtain;
     curtain = null;
     lifting = 0;
+    // The page was put back as its HTML has it, so a game with a loading screen of its own there shows it again and
+    // fades it out as it starts. That fade is finished under the old page, at once and for as long as the old page
+    // takes to go, so the old page gives way to the game and never to its loading screen on the way out.
+    putAway(going);
+    for (const ms of [60, 120, 180, 240]) after(ms, () => putAway(going));
     going.style.transition = 'opacity 0.2s';
     going.style.opacity = '0';
     after(250, () => going.remove());
+}
+
+// Finishes a screen of the page's own HTML being put away across most of the window (its loading screen, put back as
+// the page went in), which is a matter of a second at most. Only a fade out of what the HTML put back is: a scene the
+// game fades in, or one it times its play by and made itself, runs its course, as does anything small.
+function putAway(held) {
+    try {
+        if (typeof CSSTransition === 'undefined' || !document.getAnimations) return;
+        const most = innerWidth * innerHeight / 2;
+        for (const fade of document.getAnimations()) {
+            const el = fade instanceof CSSTransition && fade.effect && fade.effect.target;
+            if (!el || held.contains(el) || !['opacity', 'visibility'].includes(fade.transitionProperty)) continue;
+            if (!fromPage.some(n => n === el || (n.contains && n.contains(el)))) continue;
+            const frames = fade.effect.getKeyframes(), to = frames.length ? frames[frames.length - 1] : {};
+            if (!(fade.transitionProperty === 'opacity' ? Number(to.opacity) === 0 : to.visibility === 'hidden')) continue;
+            const timing = fade.effect.getComputedTiming(), r = el.getBoundingClientRect();
+            if (!(timing.endTime <= 1500) || r.width * r.height < most) continue;
+            fade.finish();
+        }
+    } catch (e) {}
 }
 
 function ranAgain(again) {

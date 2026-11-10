@@ -201,7 +201,7 @@ function createSecondPlayer({ scene, colliders, share, beside, map = null, kept 
     // Taken out of the city: its meshes, its camera and its speedometer
     dispose() {
       cs.release();
-      for (const e of Object.values(cm.entities)) { e.mesh?.removeFromParent(); e.helmet?.removeFromParent(); }
+      for (const e of Object.values(cm.entities)) { e.mesh?.removeFromParent(); e.helmet?.removeFromParent(); e.earbuds?.removeFromParent(); }
       dropRadar();
       hud.remove();
       radarHud.remove();

@@ -48,9 +48,9 @@ function readPb(bytes, start, end, onField) {
     const key = varint();
     const field = Math.floor(key / 8), wire = key & 7;
     if (wire === 0) onField(field, 'int', varint());
-    else if (wire === 1) { onField(field, 'f64', view.getFloat64(i, true)); i += 8; }
-    else if (wire === 2) { const n = varint(); onField(field, 'bytes', i, i + n); i += n; }
-    else if (wire === 5) { onField(field, 'f32', view.getFloat32(i, true)); i += 4; }
+    else if (wire === 1) { if (i + 8 > end) break; onField(field, 'f64', view.getFloat64(i, true)); i += 8; }
+    else if (wire === 2) { const n = varint(); if (i + n > end) break; onField(field, 'bytes', i, i + n); i += n; }
+    else if (wire === 5) { if (i + 4 > end) break; onField(field, 'f32', view.getFloat32(i, true)); i += 4; }
     else break;
   }
 }

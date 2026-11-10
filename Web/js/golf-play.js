@@ -913,11 +913,13 @@ export class GolfPlay {
     o.strokes++;
     o.phase = 'holed';
     o.wait = 2.6;
-    o.card.push({ ref: this.holeNumber(), par: h.par, strokes: o.strokes });
+    // (its number before it's counted played: off Huron Hills the number is how many are played)
+    const n = this.holeNumber();
+    o.card.push({ ref: n, par: h.par, strokes: o.strokes });
     o.played.push(o.hole);
     this.notice(`Picked up · ${o.strokes}`, 2.4);
-    log(`[golf] picked up on ${this.holeNumber()} at ${o.strokes} (par ${h.par})`);
-    this.words.textContent = `Hole ${this.holeNumber()} · ${o.strokes} · ${this.total()}`;
+    log(`[golf] picked up on ${n} at ${o.strokes} (par ${h.par})`);
+    this.words.textContent = `Hole ${n} · ${o.strokes} · ${this.total()}`;
   }
 
   penalty(words) {
@@ -943,13 +945,14 @@ export class GolfPlay {
     o.wait = 3.2;
     const diff = o.strokes - h.par;
     const words = o.strokes === 1 ? 'Hole in one!' : RESULT[diff] || `${o.strokes} strokes`;
-    o.card.push({ ref: this.holeNumber(), par: h.par, strokes: o.strokes });
+    const n = this.holeNumber();
+    o.card.push({ ref: n, par: h.par, strokes: o.strokes });
     o.played.push(o.hole);
     this.notice(words, 2.8);
     if (this.soundOn()) sound.play(this.sounds.cup, { volume: 0.8 });
     rumble(0, 0.2, 0.35, 0.15);
-    log(`[golf] holed out on ${this.holeNumber()} in ${o.strokes} (par ${h.par}): ${words}`);
-    this.words.textContent = `Hole ${this.holeNumber()} · ${o.strokes} · ${this.total()}`;
+    log(`[golf] holed out on ${n} in ${o.strokes} (par ${h.par}): ${words}`);
+    this.words.textContent = `Hole ${n} · ${o.strokes} · ${this.total()}`;
   }
 
   total() {

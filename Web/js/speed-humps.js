@@ -134,14 +134,18 @@ function buildSpeedHumps(group, data) {
     const k = Math.floor(h.x / CELL) * 100000 + Math.floor(h.z / CELL);
     (cells.get(k) || cells.set(k, []).get(k)).push(h);
   }
-  // the hump an axle went over between (x0, z0) and (x1, z1), or null
+  // the hump an axle went over between (x0, z0) and (x1, z1), or null: looked for in the axle's cell and the eight
+  // around it, since a hump filed by its middle reaches up to 6.3 m into the next cell
   const over = (x0, z0, x1, z1) => {
-    const list = cells.get(Math.floor(x1 / CELL) * 100000 + Math.floor(z1 / CELL));
-    if (!list) return null;
-    for (const h of list) {
-      const a = (x0 - h.x) * h.ux + (z0 - h.z) * h.uz, b = (x1 - h.x) * h.ux + (z1 - h.z) * h.uz;
-      if (Math.sign(a) === Math.sign(b) || Math.abs(a - b) > 6) continue;
-      if (Math.abs((x1 - h.x) * h.uz - (z1 - h.z) * h.ux) < h.w / 2 + 0.3) return h;
+    const cx = Math.floor(x1 / CELL), cz = Math.floor(z1 / CELL);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+      const list = cells.get((cx + i) * 100000 + cz + j);
+      if (!list) continue;
+      for (const h of list) {
+        const a = (x0 - h.x) * h.ux + (z0 - h.z) * h.uz, b = (x1 - h.x) * h.ux + (z1 - h.z) * h.uz;
+        if (Math.sign(a) === Math.sign(b) || Math.abs(a - b) > 6) continue;
+        if (Math.abs((x1 - h.x) * h.uz - (z1 - h.z) * h.ux) < h.w / 2 + 0.3) return h;
+      }
     }
     return null;
   };

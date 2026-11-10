@@ -33,7 +33,7 @@ function createSkidEffects(scene) {
   marks.count = 0;
   marks.renderOrder = 1;
   const markAge = new Float32Array(MAX_MARKS), markStrength = new Float32Array(MAX_MARKS);
-  let markCursor = 0, markCount = 0;
+  let markCursor = 0, markCount = 0, sinceLaid = 0; // (s since the newest streak was laid)
 
   // smoke: soft round puffs turned to the camera
   const smokeGeo = new THREE.PlaneGeometry(1, 1);
@@ -58,16 +58,20 @@ function createSkidEffects(scene) {
   // where each back wheel's streak last left off
   const wheelsLast = [{ on: false, x: 0, y: 0, z: 0 }, { on: false, x: 0, y: 0, z: 0 }];
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
-  const up = new THREE.Vector3(0, 1, 0), wp = new THREE.Vector3();
+  const wp = new THREE.Vector3(), tilt = new THREE.Euler(0, 0, 0, 'YXZ');
   let liveMarks = false;
+  // the back wheels, picked out once for each car (or bike) the player has
+  let rearOf = null, rear = [];
 
   function lay(a, x, y, z, strength) {
-    const dx = x - a.x, dz = z - a.z, len = Math.hypot(dx, dz);
+    const dx = x - a.x, dz = z - a.z, dy = y - a.y, len = Math.hypot(dx, dz);
     if (len < SEGMENT) return;
     const i = markCursor; markCursor = (markCursor + 1) % MAX_MARKS; markCount = Math.min(MAX_MARKS, markCount + 1);
-    q.setFromAxisAngle(up, Math.atan2(dx, dz));
+    sinceLaid = 0;
+    // turned along the way it went, and tilted up or down the hill between its two ends
+    q.setFromEuler(tilt.set(-Math.atan2(dy, len), Math.atan2(dx, dz), 0));
     p.set((x + a.x) / 2, (y + a.y) / 2, (z + a.z) / 2);
-    sc.set(MARK_WIDTH, 1, len + 0.04);
+    sc.set(MARK_WIDTH, 1, Math.hypot(len, dy) + 0.04);
     marks.setMatrixAt(i, m.compose(p, q, sc));
     markAge[i] = 0; markStrength[i] = 0.35 + 0.45 * strength * (0.8 + random() * 0.2);
     a.x = x; a.y = y; a.z = z;
@@ -77,12 +81,16 @@ function createSkidEffects(scene) {
   function update(dt, car, driving, camera) {
     dt = Math.min(dt, 0.05);
     const skid = driving && car ? car.skid || 0 : 0;
-    const rear = car?.wheels?.filter((w) => !w.isFront) || [];
+    // nothing sliding, laid or drifting: nothing to do
+    if (skid < 0.15 && !markCount && !smoke.count) { wheelsLast[0].on = wheelsLast[1].on = false; return; }
+    if (rearOf !== (car?.wheels ?? null)) { rearOf = car?.wheels ?? null; rear = rearOf?.filter((w) => !w.isFront) || []; }
     for (let k = 0; k < 2; k++) {
       const a = wheelsLast[k], w = rear[k];
       if (skid < 0.15 || !w) { a.on = false; continue; }
       w.steerPivot.getWorldPosition(wp);
-      const y = car.position.y + 0.03;
+      // on the road under the wheel (its axle a wheel's radius up), not at the car's middle: downhill the back wheels
+      // stand higher than that, uphill lower
+      const y = wp.y - (car.wheelRadius ?? 0.35) + 0.03;
       if (!a.on) { a.on = true; a.x = wp.x; a.y = y; a.z = wp.z; continue; }
       if (Math.hypot(wp.x - a.x, wp.z - a.z) > 6) { a.x = wp.x; a.y = y; a.z = wp.z; continue; } // a teleport
       lay(a, wp.x, y, wp.z, skid);
@@ -101,6 +109,9 @@ function createSkidEffects(scene) {
     }
 
     // streaks fade over time
+    if (markCount) sinceLaid += dt;
+    // all of them faded off the road: none left to fade, send or draw
+    if (markCount && sinceLaid > MARK_FADE) { markCount = markCursor = 0; }
     if (markCount) {
       for (let i = 0; i < markCount; i++) {
         markAge[i] += dt;

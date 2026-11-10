@@ -1,6 +1,5 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { createFireEscapes } from './fire-escapes.js';
 import { addBuildingDetails } from './building-details.js';
 import {
   Fn,
@@ -38,7 +37,7 @@ import { createBuildingFootprints } from './building-footprints.js';
 import { buildHouses, streamHouses, shopLook } from './houses.js';
 import { TIER } from './device-tier.js';
 import { groundStreamCenter } from './terrain.js';
-import { buildChurches, churchPlan } from './churches.js';
+import { buildChurches, churchPlan, churchLayout } from './churches.js';
 import { log } from '../lamp-game.js';
 import { buildGasStations, canopyFootprints, insideCanopy } from './gas-stations.js';
 import { landUseAt, historicDistrictAt, LAND_USE } from './districts.js';
@@ -155,72 +154,6 @@ class Quadtree {
     this.se.queryRange(cx, cz, radius, found);
     return found;
   }
-}
-
-// A hipped roof over a house's footprint: its oriented bounding box (aligned with the longest wall), a ridge along
-// the long side, slopes of about 35°, 0.35 m eaves. The ridge sits at the surveyed height.
-function houseRoof(b) {
-  const ring = b.polygons[0] && b.polygons[0].outer;
-  if (!ring || ring.length < 3 || b.polygons.length > 1) return null;
-  let best = 0, ux = 1, uz = 0;
-  for (let i = 0; i < ring.length; i++) {
-    const a = ring[i], c = ring[(i + 1) % ring.length];
-    const dx = c.x - a.x, dz = c.z - a.z, L = Math.hypot(dx, dz);
-    if (L > best) { best = L; ux = dx / L; uz = dz / L; }
-  }
-  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
-  for (const p of ring) {
-    const u = p.x * ux + p.z * uz, v = -p.x * uz + p.z * ux;
-    u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v);
-  }
-  let L = u1 - u0, W = v1 - v0;
-  if (L < 4 || W < 4 || L * W > 900) return null;
-  const cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
-  const cx = cu * ux - cv * uz, cz = cu * uz + cv * ux;
-  // the ridge runs along the long side
-  let ax = ux, az = uz;
-  if (W > L) { [L, W] = [W, L]; ax = -uz; az = ux; }
-  const h = Math.min(4.2, W * 0.35, b.height * 0.45);
-  return { cx, cz, ax, az, L: L + 0.7, W: W + 0.7, h, top: b.ground + b.height + 0.22, tone: b.tone };
-}
-
-function createHouseRoofs(items) {
-  const cells = new Map();
-  for (const r of items) {
-    const key = Math.floor(r.cx / 1000) + ',' + Math.floor(r.cz / 1000);
-    if (!cells.has(key)) cells.set(key, { pos: [], col: [] });
-    const cell = cells.get(key);
-    const bx = -r.az, bz = r.ax; // across the ridge
-    const hl = r.L / 2, hw = r.W / 2, ridge = Math.max(0, hl - hw);
-    const eave = r.top - r.h;
-    const P = (u, v, y) => [r.cx + r.ax * u + bx * v, y, r.cz + r.az * u + bz * v];
-    const c0 = P(-hl, -hw, eave), c1 = P(hl, -hw, eave), c2 = P(hl, hw, eave), c3 = P(-hl, hw, eave);
-    const r0 = P(-ridge, 0, r.top), r1 = P(ridge, 0, r.top);
-    // asphalt shingles: charcoal, weathered brown, slate grey or green
-    const shade = [[0.17, 0.17, 0.18], [0.27, 0.22, 0.19], [0.30, 0.31, 0.33], [0.2, 0.25, 0.22]][Math.floor((r.tone ?? 0.5) * 7.99) % 4];
-    const tri = (a, b, c) => {
-      cell.pos.push(...a, ...b, ...c);
-      for (let k = 0; k < 3; k++) cell.col.push(...shade);
-    };
-    tri(c0, r0, c1); tri(c1, r0, r1); // the long slopes
-    tri(c2, r1, c3); tri(c3, r1, r0);
-    tri(c1, r1, c2); tri(c3, r0, c0); // the hips at the ends
-  }
-  const material = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.92, side: THREE.DoubleSide });
-  const group = new THREE.Group();
-  group.name = 'HouseRoofs';
-  for (const cell of cells.values()) {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(cell.pos, 3));
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(cell.col, 3));
-    geometry.computeVertexNormals();
-    geometry.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = mesh.receiveShadow = true;
-    mesh.userData.shadowStandIn = true;
-    group.add(mesh);
-  }
-  return group;
 }
 
 function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasStations = null) {
@@ -416,47 +349,6 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       { x: r.x0, z: r.z0 }, { x: r.x1, z: r.z0 }, { x: r.x1, z: r.z1 }, { x: r.x0, z: r.z1 }
     ], holes: [] }] });
   }
-  function reserveFireEscape(fe) {
-    const cs = Math.cos(fe.facing), sn = Math.sin(fe.facing);
-    const outer = [[-1.7, -0.55], [1.7, -0.55], [1.7, 0.57], [-1.7, 0.57]].map(([x, z]) =>
-      ({ x: fe.x + x * cs + z * sn, z: fe.z - x * sn + z * cs }));
-    const xs = outer.map((p) => p.x), zs = outer.map((p) => p.z);
-    const r = { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs),
-      height: 0, polygons: [{ outer, holes: [] }] };
-    addReserve(r);
-    return r;
-  }
-
-  function addSurveyedFireEscapes(b, detail, storey, neighbours) {
-    if (!b.year || b.year >= 1945 || b.height > 30) return;
-    const floors = Math.floor((b.height + 0.22) / storey);
-    if (floors < 3) return;
-    const landings = Math.min(floors - 1, 7), h = (landings - 1) * storey + 1;
-    for (const polygon of b.polygons) {
-      for (const ring of [polygon.outer, ...polygon.holes]) {
-        for (let i = 0; i < ring.length; i++) {
-          const a = ring[i], c = ring[(i + 1) % ring.length];
-          const dx = c.x - a.x, dz = c.z - a.z, length = Math.hypot(dx, dz);
-          if (length < 4.6) continue;
-          const nx = dz / length, nz = -dx / length;
-          const count = length >= 15 ? 2 : 1;
-          for (let k = 0; k < count; k++) {
-            const t = (k + 0.5) / count, x = a.x + dx * t, z = a.z + dz * t;
-            // The clearance box starts just outside the wall, including on concave footprints.
-            if (neighbours.some((r) => r.polygons.some((p) =>
-              polygonBoxOverlaps(p, x + nx * 0.75, z + nz * 0.75, 1.9, 0.65, nz, nx)))) continue;
-            const fe = {
-              x: x + nx * 0.55, y: storey + 0.1, z: z + nz * 0.55, h, storey, landings,
-              facing: Math.atan2(nx, nz)
-            };
-            detail.fireEscapes.push(fe);
-            neighbours.push(reserveFireEscape(fe));
-            if (detail.fireEscapes.length === 4) return;
-          }
-        }
-      }
-    }
-  }
 
   const surveyedBuckets = materials.map(() => []);
   const detailsToPlace = [];
@@ -495,14 +387,36 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       const ground = maxGround + LAWN_Y;
       b.ground = ground;
       b.minGround = minGround;
-      churches.push({ ...b, tone, ground, minGround, plan });
+      const church = { ...b, tone, ground, minGround, plan };
+      churches.push(church);
       const detail = { cx: b.cx, cz: b.cz, minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, cornices: [],
         waterTowers: [], hvacUnits: [], fireEscapes: [], awnings: [], scaffoldSheds: [], footprints: [] };
+      // its colliders as it's drawn (churches.js churchLayout): a gabled box is its oriented box, the slopes its
+      // roof; an outline is itself; and the tower, up to the spire's point, a box of its own
+      const lay = churchLayout(church);
+      const { ax, az } = plan;
+      const box = (cx, cz, hx, hz, minY, maxY, roofs) => {
+        const ex = Math.abs(ax) * hx + Math.abs(az) * hz, ez = Math.abs(az) * hx + Math.abs(ax) * hz;
+        colliders.push({ minX: cx - ex, maxX: cx + ex, minZ: cz - ez, maxZ: cz + ez, minY, maxY,
+          obb: { cx, cz, hx, hz, cs: ax, sn: -az }, roofs });
+      };
+      if (lay.rect) {
+        box(plan.cx, plan.cz, lay.hl, lay.hw, minGround, lay.ridge, [{ cx: plan.cx, cz: plan.cz, ax, az, bx: -az, bz: ax,
+          ha: lay.hl, hb: lay.hw, top: lay.eave, rh: lay.ridge - lay.eave, type: 'gable' }]);
+      }
       for (const polygon of b.polygons) {
         const xs = polygon.outer.map((p) => p.x), zs = polygon.outer.map((p) => p.z);
-        colliders.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs),
-          minY: minGround, maxY: ground + b.height + 0.22, polygon });
+        if (!lay.rect) {
+          colliders.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs),
+            minY: minGround, maxY: ground + b.height + 0.22, polygon });
+        }
         detail.footprints.push({ h: b.height + 0.22, pts: polygon.outer, holes: polygon.holes });
+      }
+      if (lay.hasTower) {
+        const h2 = lay.tw / 2, tx = plan.cx + ax * lay.towerU, tz = plan.cz + az * lay.towerU;
+        // (the spire's slopes a pyramid over the shaft's top)
+        box(tx, tz, h2, h2, minGround, lay.towerTop + 0.35 + lay.spireH, [{ cx: tx, cz: tz, ax, az, bx: -az, bz: ax,
+          ha: h2, hb: h2, top: lay.towerTop + 0.35, rh: lay.spireH, type: 'hip' }]);
       }
       quadtree.insert(detail);
       allBlocks.push(detail);
@@ -568,8 +482,7 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       colliders.push({ minX, maxX, minZ, maxZ, minY: minGround, maxY: ground + top, polygon });
       detail.footprints.push({ h: top, pts: polygon.outer, holes: polygon.holes });
     }
-    const neighbours = nearbyReserves(b, 6);
-    addSurveyedFireEscapes(b, detail, storeys[mat], neighbours);
+    // (no fire escapes: the survey gives no building's year to tell a pre-war walk-up by, so none was ever placed)
     if (mat < 5 || mat > 7) detailsToPlace.push({ b: record, detail, masonry: mat < 2 || mat > 7, rand });
     else quadtree.insert(detail); // houses: no storefront awnings or rooftop plant
     allBlocks.push(detail);
@@ -586,19 +499,8 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     for (const s of detail.scaffoldSheds) s.y += groundHeight(s.x, s.z);
     quadtree.insert(detail);
   }
-  // Lamp: Ann Arbor's houses wear pitched roofs: the survey's height is the ridge, so the walls stop at the eaves
-  const roofItems = [];
-  // (only the house materials 5..7: the University's, the city's and industry's buildings keep flat roofs, whose cornices
-  // and rooftop plant stand at the survey's height, so a lowered wall left them floating over park buildings)
-  for (let i = 5; i <= 7; i++) {
-    surveyedBuckets[i] = surveyedBuckets[i].map((r) => {
-      const roof = houseRoof(r);
-      if (!roof) return r;
-      roofItems.push(roof);
-      return { ...r, height: Math.max(2.6, r.height - roof.h) };
-    });
-  }
-  if (roofItems.length) group.add(createHouseRoofs(roofItems));
+  // (the house-colored blocks left here, materials 5..7, are the big low apartment buildings over 900 m²: houses.js
+  // draws every smaller one with its pitched roof, so these keep flat roofs at the survey's height)
   // Lamp: on a phone, or a Mac without much memory (device-tier.js), only the houses near the player are built
   if (houseRecords.length) {
     group.add(TIER.stream
@@ -828,9 +730,6 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
   hvacInst.frustumCulled = false;
   group.add(hvacInst);
 
-  // 4. Instanced fire escapes: real steps nearby, lightweight silhouettes in the distance.
-  const fireEscapeSystem = createFireEscapes(group);
-
   // 5. Ground-floor retail canvas awnings & illuminated storefront fascia signs
   const awningMat = new THREE.MeshStandardNodeMaterial({ color: 0xffffff, roughness: 0.65 });
   const awningPalette = [
@@ -849,74 +748,23 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
   }
   group.add(awningInst);
 
-  const signThemes = [
-    { bg: '#161210', border: '#c89d54', text: 'MAIN STREET BISTRO · EST. 1928', color: '#ffe4a8' },
-    { bg: '#0c2244', border: '#38b6ff', text: 'CORNER PHARMACY', color: '#ffffff' },
-    { bg: '#142b20', border: '#d4af37', text: 'KERRYTOWN BOOKS & ESPRESSO', color: '#fff2cc' },
-    { bg: '#280a10', border: '#ff5252', text: 'LIBERTY DELI & GRILL', color: '#ffd180' },
-    { bg: '#101318', border: '#e0e6ed', text: 'STATE STREET WATCHES', color: '#f5f9ff' }
-  ];
-  const MAX_SIGNS_PER_THEME = Math.ceil(MAX_AWNINGS / signThemes.length) + 32;
-  const signInsts = signThemes.map((st) => {
-    const c = document.createElement('canvas');
-    c.width = 512;
-    c.height = 96;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = st.bg;
-    ctx.fillRect(0, 0, 512, 96);
-    ctx.strokeStyle = st.border;
-    ctx.lineWidth = 6;
-    ctx.strokeRect(6, 6, 500, 84);
-    ctx.fillStyle = st.color;
-    ctx.font = '800 26px Inter, Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(st.text, 256, 50);
-
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const sMat = new THREE.MeshBasicNodeMaterial({ map: tex });
-    const sInst = new THREE.InstancedMesh(unitBox, sMat, MAX_SIGNS_PER_THEME);
-    sInst.frustumCulled = false;
-    group.add(sInst);
-    return sInst;
-  });
-
   // 6. Sidewalk construction scaffolding sheds
   const shedMat = new THREE.MeshStandardNodeMaterial({ color: 0x214f37, roughness: 0.6, metalness: 0.25 });
   const shedInst = new THREE.InstancedMesh(unitBox, shedMat, MAX_SHEDS);
   shedInst.castShadow = shedInst.receiveShadow = true;
   shedInst.frustumCulled = false;
   group.add(shedInst);
+  // its posts, one at each corner, down to the sidewalk (the deck isn't left hanging in the air)
+  const shedPostInst = new THREE.InstancedMesh(unitBox, shedMat, MAX_SHEDS * 4);
+  shedPostInst.castShadow = shedPostInst.receiveShadow = true;
+  shedPostInst.frustumCulled = false;
+  group.add(shedPostInst);
 
-  // 7. Ground-floor storefront clustered SpotLights (awnings/fascia signs)
+  // 7. (no storefront spotlights: Ann Arbor's awnings come from photos and get none; the empty group stays for main.js,
+  //    which updates its matrices with the other moving parts)
   const storeLightGroup = new THREE.Group();
   storeLightGroup.name = 'StoreClusteredLights';
   scene.add(storeLightGroup);
-
-  const storeThemeColors = [
-    new THREE.Color(0xffd896), // Bistro warm gold
-    new THREE.Color(0xd8eeff), // Pharmacy crisp cool white
-    new THREE.Color(0xffe4ad), // Bookstore warm amber
-    new THREE.Color(0xffbe88), // 24hr Deli warm orange-gold
-    new THREE.Color(0xfff2d6)  // Watch boutique warm ivory
-  ];
-
-  const STORE_SPOT_POOL = 28;
-  const STORE_SPOT_INTENSITY = 46 * ((0.85 - 0.15) / 0.90);
-  const storeSpotPool = [];
-  for (let i = 0; i < STORE_SPOT_POOL; i++) {
-    const spot = new THREE.SpotLight(0xffd896, 0, 12.0, 0.84, 0.80, 1.30);
-    spot.castShadow = false;
-    spot.position.set(0, -1000, 0);
-    spot.target.position.set(0, -1001, 0);
-    storeLightGroup.add(spot);
-    storeLightGroup.add(spot.target);
-    storeSpotPool.push(spot);
-  }
-
-  const activeAwnings = [];
-  const spotCandidates = [];
 
   // ============================================================================
   // STREAMING AROUND THE PLAYER / CAMERA
@@ -961,20 +809,14 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       return two ? Math.min(d, (blk.cx - focus2X) * (blk.cx - focus2X) + (blk.cz - focus2Z) * (blk.cz - focus2Z)) : d;
     };
     nearbyBlocks.sort((a, b) => away(a) - away(b));
-    activeAwnings.length = 0;
 
     let corniceCount = 0;
     let wtCount = 0;
     let hvacCount = 0;
-    fireEscapeSystem.begin(focusX, focusZ);
     let awningCount = 0;
-    let awningBlocks = 0;
     let shedCount = 0;
-    const signCounts = signInsts.map(() => 0);
 
     for (const blk of nearbyBlocks) {
-      const collectNearLights = blk.awnings.length > 0 && awningBlocks++ < 20;
-
       // 1. Stone cornices & setback ledges, hung just below their roof line (top 0.1h under it, so no two ledges or
       //    roofs share a plane) so roofs & terraces keep their own roofing instead of a stone lid
       for (let i = 0; i < blk.cornices.length && corniceCount < MAX_CORNICES; i++) {
@@ -1016,9 +858,6 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
         hvacInst.setMatrixAt(hvacCount++, dummy.matrix);
       }
 
-      // 4. Wrought-iron fire escapes
-      for (const fe of blk.fireEscapes) fireEscapeSystem.add(fe);
-
       // 5. Retail awnings & illuminated storefront fascia signs
       for (let i = 0; i < blk.awnings.length && awningCount < MAX_AWNINGS; i++) {
         const a = blk.awnings[i];
@@ -1030,19 +869,7 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
         awningInst.setMatrixAt(awningCount, dummy.matrix);
         awningInst.setColorAt(awningCount, awningPalette[a.colorIdx % awningPalette.length]);
 
-        // Lamp: a photo's awning (building-details.js) gets no made-up sign or spotlight: the shop's own sign is
-        // shop-signs.js's
-        const themeIdx = a.colorIdx % signInsts.length;
-        if (a.seen) { awningCount++; continue; }
-        if (signCounts[themeIdx] < MAX_SIGNS_PER_THEME) {
-          dummy.position.set(a.x, a.y + 0.88, a.z);
-          dummy.scale.set(0.28, 0.86, a.d * 0.92);
-          dummy.updateMatrix();
-          signInsts[themeIdx].setMatrixAt(signCounts[themeIdx]++, dummy.matrix);
-        }
-        if (collectNearLights) {
-          activeAwnings.push({ a, themeIdx, ry: a.ry || 0 });
-        }
+        // (a photo's awning, building-details.js: no made-up sign or spotlight, the shop's own sign is shop-signs.js's)
         awningCount++;
       }
 
@@ -1053,7 +880,17 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
         dummy.position.set(s.x, s.y + 3.6, s.z);
         dummy.scale.set(s.w, 0.85, s.d);
         dummy.updateMatrix();
-        shedInst.setMatrixAt(shedCount++, dummy.matrix);
+        shedInst.setMatrixAt(shedCount, dummy.matrix);
+        // the deck's underside is at s.y + 3.175: a 0.12 m post at each corner, set in from its edges
+        const cs = Math.cos(s.ry || 0), sn = Math.sin(s.ry || 0);
+        for (const [lx, lz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+          const ox = lx * (s.w / 2 - 0.12), oz = lz * (s.d / 2 - 0.12);
+          dummy.position.set(s.x + ox * cs + oz * sn, s.y + 3.175 / 2, s.z - ox * sn + oz * cs);
+          dummy.scale.set(0.12, 3.175, 0.12);
+          dummy.updateMatrix();
+          shedPostInst.setMatrixAt(shedCount * 4 + (lx < 0 ? (lz < 0 ? 0 : 3) : (lz < 0 ? 1 : 2)), dummy.matrix);
+        }
+        shedCount++;
       }
     }
     dummy.rotation.set(0, 0, 0);
@@ -1071,83 +908,18 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     hvacInst.count = hvacCount;
     flagRange(hvacInst.instanceMatrix, hvacCount);
 
-    fireEscapeSystem.end();
-
     awningInst.count = awningCount;
     flagRange(awningInst.instanceMatrix, awningCount);
     if (awningInst.instanceColor) flagRange(awningInst.instanceColor, awningCount);
 
-    signInsts.forEach((sInst, idx) => {
-      sInst.count = signCounts[idx];
-      flagRange(sInst.instanceMatrix, signCounts[idx]);
-    });
-
     shedInst.count = shedCount;
     flagRange(shedInst.instanceMatrix, shedCount);
-  }
+    shedPostInst.count = shedCount * 4;
+    flagRange(shedPostInst.instanceMatrix, shedCount * 4);
 
-  function smoothFade(d, start, end) {
-    const t = Math.min(1, Math.max(0, (end - d) / (end - start)));
-    return t * t * (3 - 2 * t);
-  }
-
-  function updateLights(camera) {
-    if (!camera) {
-      for (let i = 0; i < STORE_SPOT_POOL; i++) {
-        storeSpotPool[i].intensity = 0;
-        storeSpotPool[i].position.set(0, -1000, 0);
-      }
-      return;
-    }
-
-    const camX = camera.position.x;
-    const camY = camera.position.y;
-    const camZ = camera.position.z;
-    const e = camera.matrixWorld.elements;
-    const fwdLen = Math.hypot(e[8], e[10]) || 1;
-    const fwdX = -e[8] / fwdLen;
-    const fwdZ = -e[10] / fwdLen;
-    const STORE_MAX_DIST = 115;
-
-    spotCandidates.length = 0;
-    for (let i = 0; i < activeAwnings.length; i++) {
-      const item = activeAwnings[i];
-      const a = item.a;
-      const dx = a.x - camX;
-      const dy = a.y - camY;
-      const dz = a.z - camZ;
-      const d2 = dx * dx + dz * dz + dy * dy;
-      if (d2 > STORE_MAX_DIST * STORE_MAX_DIST) continue;
-      const d = Math.sqrt(d2);
-      const forwardDot = dx * fwdX + dz * fwdZ;
-      const effDist = d + Math.max(0, 6.0 - forwardDot) * 2.8;
-      if (effDist >= STORE_MAX_DIST) continue;
-      spotCandidates.push({ item, effDist });
-    }
-    spotCandidates.sort((a, b) => a.effDist - b.effDist);
-
-    const storeCutoff = spotCandidates.length > STORE_SPOT_POOL
-      ? Math.min(STORE_MAX_DIST, spotCandidates[STORE_SPOT_POOL].effDist)
-      : STORE_MAX_DIST;
-    const activeSpots = Math.min(STORE_SPOT_POOL, spotCandidates.length);
-    for (let i = 0; i < STORE_SPOT_POOL; i++) {
-      const spot = storeSpotPool[i];
-      if (i < activeSpots) {
-        const cand = spotCandidates[i];
-        const { a, themeIdx, ry } = cand.item;
-        const fade = smoothFade(cand.effDist, storeCutoff * 0.62, storeCutoff);
-        const outX = Math.cos(ry);
-        const outZ = -Math.sin(ry);
-        spot.position.set(a.x + outX * 0.45, a.y + 0.55, a.z + outZ * 0.45);
-        spot.target.position.set(a.x + outX * 1.85, a.y - 3.8, a.z + outZ * 1.85);
-        spot.target.updateMatrixWorld();
-        spot.color.copy(storeThemeColors[themeIdx % storeThemeColors.length]);
-        spot.intensity = STORE_SPOT_INTENSITY * fade;
-      } else {
-        spot.intensity = 0;
-        spot.position.set(0, -1000, 0);
-      }
-    }
+    // (a pool with nothing in it this time is left out of the renderer's set-up altogether)
+    for (const [inst, n] of [[corniceInst, corniceCount], [legsInst, wtCount], [barrelInst, wtCount], [coneInst, wtCount],
+      [hvacInst, hvacCount], [awningInst, awningCount], [shedInst, shedCount], [shedPostInst, shedCount]]) inst.visible = n > 0;
   }
 
   // Initial Quadtree stream centered at Midtown 5th Ave & 42nd St
@@ -1158,8 +930,7 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     group,
     colliders,
     allBlocks,
-    update,
-    updateLights
+    update
   };
 }
 

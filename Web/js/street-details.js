@@ -16,7 +16,7 @@ import {
   BLOCKS,
   LANDMARK_SITES
 } from './city-config.js';
-import { cityUniforms, createSteamMaterial, createTreeGrateMaterial, createGodRayMaterial } from './tsl-materials.js';
+import { cityUniforms, createSteamMaterial, createTreeGrateMaterial } from './tsl-materials.js';
 import { createTreeField, createShrubs } from './trees.js';
 import { REAL_TREES, REAL_TREE_KINDS, REAL_TREE_HEIGHTS } from './tree-geodata.js';
 import { placeStreetTrees, dropCanopyFill } from './tree-placements.js';
@@ -598,27 +598,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   }
   addMatrixArrayInstanced(pedGlobeGeo, pedGlobeGlow, pedPostMatrices, false);
 
-  // =========================================================================
-  // 2B. VOLUMETRIC GOLDEN-HOUR CANYON SUN SHAFTS (GOD RAYS)
-  // =========================================================================
-  const godRayMat = createGodRayMaterial();
-  const godRayGeo = new THREE.PlaneGeometry(54, 92);
-  const canyonShafts = [
-    { x: 0,    y: 42, z: 180,  rotY: 0.32,  rotZ: -0.46 }, // 34th St & 5th Ave (Empire State Canyon)
-    { x: 0,    y: 44, z: 0,    rotY: 0.28,  rotZ: -0.44 }, // 42nd St & 5th Ave (NYPL / Bryant Park)
-    { x: 165,  y: 46, z: 0,    rotY: 0.25,  rotZ: -0.45 }, // 42nd St & Park/Lexington (Grand Central & Chrysler)
-    { x: -110, y: 42, z: -90,  rotY: 0.30,  rotZ: -0.44 }, // 47th St & 6th Ave (Rockefeller Center)
-    { x: -215, y: 40, z: -45,  rotY: 0.35,  rotZ: -0.42 }, // Times Square / Broadway Canyon
-    { x: -55,  y: 48, z: -360, rotY: 0.28,  rotZ: -0.46 }  // 59th St / Central Park South Canyon
-  ];
-  for (const cs of canyonShafts) {
-    const shaft = new THREE.Mesh(godRayGeo, godRayMat);
-    shaft.name = 'CanyonSunShaft';
-    const at = fromOldFrame(cs.x, cs.z); // (authored on the former compressed grid)
-    shaft.position.set(at.x, cs.y, at.z);
-    shaft.rotation.set(0.12, cs.rotY, cs.rotZ);
-    group.add(shaft);
-  }
+  // (New York's golden-hour 'canyon' sun shafts: none in Ann Arbor, whose downtown has no tower canyons)
 
   // =========================================================================
   // 3. STEAM STACKS & BARRICADES (New York's; none in Ann Arbor, see steamLocations)
@@ -641,7 +621,6 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
     color: 0xf4f6f8,
     roughness: 0.45
   });
-  const steamMat = createSteamMaterial();
   const puffsPerStack = 36;
   const totalSteamSprites = steamLocations.length * puffsPerStack;
   const smokeOriginArr = new Float32Array(totalSteamSprites * 3);
@@ -743,15 +722,18 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   addMatrixArrayInstanced(unitBox, steamOrangeMat, barricadeOrangeMatrices);
   addMatrixArrayInstanced(unitBox, steamWhiteMat, barricadeWhiteMatrices);
 
-  const steamSpriteGeo = new THREE.PlaneGeometry(1, 1);
-  steamSpriteGeo.setAttribute('aSmokeOrigin', new THREE.InstancedBufferAttribute(smokeOriginArr, 3));
-  steamSpriteGeo.setAttribute('aSmokeWind', new THREE.InstancedBufferAttribute(smokeWindArr, 3));
-  steamSpriteGeo.setAttribute('aSmokeParams', new THREE.InstancedBufferAttribute(smokeParamsArr, 4));
-  const steamInstancedSprites = new THREE.Mesh(steamSpriteGeo, steamMat);
-  steamInstancedSprites.count = totalSteamSprites;
-  steamInstancedSprites.frustumCulled = false;
-  steamInstancedSprites.renderOrder = 2;
-  if (totalSteamSprites > 0) group.add(steamInstancedSprites);
+  // (the steam material and its smoke texture are made only when there is a steam stack)
+  if (totalSteamSprites > 0) {
+    const steamSpriteGeo = new THREE.PlaneGeometry(1, 1);
+    steamSpriteGeo.setAttribute('aSmokeOrigin', new THREE.InstancedBufferAttribute(smokeOriginArr, 3));
+    steamSpriteGeo.setAttribute('aSmokeWind', new THREE.InstancedBufferAttribute(smokeWindArr, 3));
+    steamSpriteGeo.setAttribute('aSmokeParams', new THREE.InstancedBufferAttribute(smokeParamsArr, 4));
+    const steamInstancedSprites = new THREE.Mesh(steamSpriteGeo, createSteamMaterial());
+    steamInstancedSprites.count = totalSteamSprites;
+    steamInstancedSprites.frustumCulled = false;
+    steamInstancedSprites.renderOrder = 2;
+    group.add(steamInstancedSprites);
+  }
 
   // =========================================================================
   // 5. STREET FOOD CARTS (none in Ann Arbor)
@@ -1215,13 +1197,34 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
 
   // B6. The drafted houses' yard trees (drafted-yards.js), as Open Facades saw them in the street photos: the canopy's
   // fill trees close to one are left out, since the canopy data saw the same tree from above
+  // (sites are tested against 50 m cells of the trees, and the survivors kept in one pass, not spliced one by one)
+  const cellKey = (ix, iz) => ix * 100003 + iz;
+  const cellsOf = (list) => {
+    const cells = new Map();
+    for (const t of list) {
+      const k = cellKey(Math.floor(t.x / 50), Math.floor(t.z / 50));
+      if (!cells.has(k)) cells.set(k, []);
+      cells.get(k).push(t);
+    }
+    return cells;
+  };
+  const anyNear = (cells, t, test) => {
+    const ix = Math.floor(t.x / 50), iz = Math.floor(t.z / 50);
+    for (let a = ix - 1; a <= ix + 1; a++) for (let b = iz - 1; b <= iz + 1; b++) {
+      for (const c of cells.get(cellKey(a, b)) || []) if (test(c)) return true;
+    }
+    return false;
+  };
+  const keepWhere = (list, keep) => {
+    let n = 0;
+    for (let i = 0; i < list.length; i++) if (keep(list[i])) list[n++] = list[i];
+    list.length = n;
+  };
   const yardTrees = yardTreeSites(draftedYard);
   if (yardTrees.length) {
-    const near = (t) => yardTrees.some((y) => (y.x - t.x) ** 2 + (y.z - t.z) ** 2 < 36);
-    for (let i = treePositions.length - 1; i >= 0; i--) {
-      const t = treePositions[i];
-      if (t.likeStreet && !t.height && near(t)) treePositions.splice(i, 1);
-    }
+    const yardCells = cellsOf(yardTrees);
+    keepWhere(treePositions, (t) => !(t.likeStreet && !t.height &&
+      anyNear(yardCells, t, (y) => (y.x - t.x) ** 2 + (y.z - t.z) ** 2 < 36)));
     for (const y of yardTrees) treePositions.push(y);
   }
 
@@ -1232,9 +1235,39 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   // B7. The city's champion trees (champion-trees.js), at their real places, heights and crown spreads: the trees the
   // other data put under or beside one are taken away, since it's the same tree or one its crown overshadows
   const champions = CHAMPION_TREES.map((c) => ({ x: c.x, y: 0, z: c.z, species: c.shape, height: c.height, spread: c.spread, champion: c.name }));
+  // one whose mapped spot falls in the roadway (2315 Newport Rd's Black Oak) stands just inside the nearest block's
+  // edge instead, as placeStreetTrees does for a surveyed tree in the road: its trunk is solid
+  for (const c of champions) {
+    if (blockAt(c.x, c.z)) continue;
+    let best = null;
+    for (let r = 2; r <= 16 && !best; r += 2) {
+      const blocks = new Set();
+      for (let k = 0; k < 16; k++) {
+        const b = blockAt(c.x + Math.cos(k / 16 * Math.PI * 2) * r, c.z + Math.sin(k / 16 * Math.PI * 2) * r);
+        if (b && !b.median) blocks.add(b);
+      }
+      for (const block of blocks) {
+        for (let j = 0; j < block.poly.length; j++) {
+          const a = block.poly[j], b = block.poly[(j + 1) % block.poly.length];
+          const dx = b.x - a.x, dz = b.z - a.z, len2 = dx * dx + dz * dz;
+          if (len2 < 1e-4) continue;
+          const t = Math.max(0, Math.min(1, ((c.x - a.x) * dx + (c.z - a.z) * dz) / len2));
+          const ex = a.x + t * dx, ez = a.z + t * dz, d = Math.hypot(c.x - ex, c.z - ez);
+          if (best && d >= best.d) continue;
+          const len = Math.sqrt(len2);
+          let nx = -dz / len, nz = dx / len;
+          if (blockAt(ex + nx * 0.9, ez + nz * 0.9) !== block) { nx = -nx; nz = -nz; }
+          best = { block, x: ex + nx * 2.2, z: ez + nz * 2.2, d };
+        }
+      }
+    }
+    if (best && blockAt(best.x, best.z) === best.block) { c.x = best.x; c.z = best.z; }
+  }
   if (champions.length) {
-    const under = (t) => champions.some((c) => (c.x - t.x) ** 2 + (c.z - t.z) ** 2 < Math.max(16, (c.spread * 0.35) ** 2));
-    for (let i = treePositions.length - 1; i >= 0; i--) if (under(treePositions[i])) treePositions.splice(i, 1);
+    const championCells = cellsOf(champions);
+    const under = (t) => anyNear(championCells, t,
+      (c) => (c.x - t.x) ** 2 + (c.z - t.z) ** 2 < Math.max(16, (c.spread * 0.35) ** 2));
+    keepWhere(treePositions, (t) => !under(t));
   }
   const keptTrees = dropCanopyFill(treePositions);
   keptTrees.push(...champions);
@@ -1388,6 +1421,8 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   function update(camera, camera2 = null) {
     if (!camera) return;
     treeField.update(camera.position, camera2?.position ?? null);
+    // without the clustered lighting main.js takes every small light out of the scene: nothing left to place
+    if (!streetlightSpotPool[0]?.parent && !streetPointPool[0]?.parent) return;
     const glow = cityUniforms.uInteriorGlow.value;
     // Increase streetlight intensity toward dusk.
     const lampScale = Math.min(1.25, Math.max(0.0, (glow - 0.36) * 1.15));

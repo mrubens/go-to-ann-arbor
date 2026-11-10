@@ -11,7 +11,7 @@ function hashPos(x, y, z) {
 function placeStreetTrees(points, existingSites, isClear, kinds = null, heights = null) {
   const cells = new Map();
   const insert = (site) => {
-    const key = Math.floor(site.x / 4) + ',' + Math.floor(site.z / 4);
+    const key = Math.floor(site.x / 4) * 100000 + Math.floor(site.z / 4);
     if (!cells.has(key)) cells.set(key, []);
     cells.get(key).push(site);
   };
@@ -20,7 +20,7 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
     const cx = Math.floor(x / 4), cz = Math.floor(z / 4);
     for (let ix = cx - 1; ix <= cx + 1; ix++) {
       for (let iz = cz - 1; iz <= cz + 1; iz++) {
-        for (const s of cells.get(ix + ',' + iz) || []) {
+        for (const s of cells.get(ix * 100000 + iz) || []) {
           if ((s.x - x) ** 2 + (s.z - z) ** 2 < 9) return true;
         }
       }
@@ -32,7 +32,6 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
   for (let i = 0; i < points.length; i += 2) {
     const sourceX = points[i], sourceZ = points[i + 1];
     const originalBlock = blockAt(sourceX, sourceZ);
-    if (originalBlock?.median) continue;
     const kind = kinds ? kinds[i / 2] : 255, height = heights ? heights[i / 2] : 0;
     // Lamp: the city's survey lists its park trees too (157 in Allmendinger Park): a tree in a park, or in a block
     // far from its curb, stands where it was surveyed, on the lawn, at its real kind and height, in place of the
@@ -46,6 +45,12 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
       insert(site);
     };
     if (originalBlock && originalBlock.park > 0.6) { standing(); continue; }
+    // a tree the survey has on a street's island (a boulevard median, a cul-de-sac's circle) stands where it was
+    // surveyed, if the island is wide enough round it to hold one
+    if (originalBlock?.median) {
+      if ([[-1, 0], [1, 0], [0, -1], [0, 1]].every(([dx, dz]) => blockAt(sourceX + dx * 1.2, sourceZ + dz * 1.2) === originalBlock)) standing();
+      continue;
+    }
     const blocks = new Set();
     if (originalBlock) blocks.add(originalBlock);
     else {

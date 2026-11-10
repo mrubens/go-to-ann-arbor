@@ -52,11 +52,12 @@ function overlap(h, b) {
 // draws. Here every piece is baked where it stands and pieces that look alike (same material, same shadow) are joined
 // into one mesh per block of the city, so a street of drafted houses costs a few dozen draws and blocks out of view
 // are still skipped.
-const CELL = 160;
+const CELL = 320; // (a few blocks: a draw costs far more than its triangles, and the cells are hidden by distance)
 function merger(group) {
   const buckets = new Map(), mats = new Map();
-  // pieces of every color share a draw: the color goes into the vertices, the material keeps the rest
-  const r2 = (v) => Math.round((v ?? 0) * 20) / 20;
+  // pieces of every color share a draw: the color goes into the vertices, the material keeps the rest (its roughness
+  // and metalness in quarter steps, so the many near-alike pieces join too)
+  const r2 = (v) => Math.round((v ?? 0) * 4) / 4;
   const keyOf = (m) => [m.map?.uuid || '', r2(m.roughness), r2(m.metalness), m.transparent ? m.opacity : 1, m.side, m.flatShading ? 1 : 0, m.emissive?.getHexString?.() || ''].join('|');
   const shared = (m, k) => {
     if (!mats.has(k)) { const c = m.clone(); c.color?.set(0xffffff); c.vertexColors = true; c.roughness = r2(m.roughness); c.metalness = r2(m.metalness); mats.set(k, c); }

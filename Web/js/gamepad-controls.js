@@ -8,15 +8,19 @@ function axis(value) {
   return Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
 }
 
-function steeringAxis(value) {
-  const v = axis(value);
-  return Math.sign(v) * Math.max(0, (Math.abs(v) - DEAD_ZONE) / (1 - DEAD_ZONE));
+// Lamp's pad (id 'lamp') arrives with its sticks' dead zone already taken off (lamp-game.js), so only the raw
+// Gamepad API's are given one here: taking it twice left over a quarter of the stick's travel doing nothing
+const deadZone = (pad) => (pad.id === 'lamp' ? 0 : DEAD_ZONE);
+
+function steeringAxis(pad, value) {
+  const v = axis(value), dz = deadZone(pad);
+  return Math.sign(v) * Math.max(0, (Math.abs(v) - dz) / (1 - dz));
 }
 
 function stick(pad, offset) {
   const x = axis(pad.axes?.[offset]), y = axis(pad.axes?.[offset + 1]);
-  const distance = Math.hypot(x, y);
-  const strength = Math.max(0, (Math.min(distance, 1) - DEAD_ZONE) / (1 - DEAD_ZONE));
+  const distance = Math.hypot(x, y), dz = deadZone(pad);
+  const strength = Math.max(0, (Math.min(distance, 1) - dz) / (1 - dz));
   return distance ? { x: x / distance * strength, y: y / distance * strength } : { x: 0, y: 0 };
 }
 
@@ -229,6 +233,11 @@ class GamepadControls {
     if (away || typing) {
       this.suppressedButtons = pressed.slice();
       this.controller.clearGamepadInput();
+      // in the map's search field the pad still has B (back to the map's cursor) and Menu (close the map)
+      if (typing && !away && !this.enabled && (closeMap || toggleMap)) {
+        target.blur?.();
+        if (toggleMap) this.callbacks.onCloseMap?.();
+      }
       return;
     }
 
@@ -253,14 +262,15 @@ class GamepadControls {
     }
     if (!this.enabled) {
       this.controller.clearGamepadInput();
-      // the map's cursor: the left stick moves it, the right pans, the triggers or the pad's up and down zoom, A goes there, X routes there, Y clears the route
+      // the map's cursor: the left stick moves it, the right pans, the triggers or the pad's up and down zoom, A goes there, X routes there, Y clears the route,
+      // View types in the search field
       for (let i = 0; i < BUTTON_COUNT; i++) if (i !== 0 && i !== 1 && i !== 2 && i !== 9) this.suppressedButtons[i] = pressed[i];
       if (closeMap) {
         this.callbacks.onCloseMap?.();
         return;
       }
       const zoom = buttonValue(pad, 7) - buttonValue(pad, 6) + Number(pressed[12]) - Number(pressed[13]);
-      this.callbacks.onMapInput?.({ move: stick(pad, 0), pan: stick(pad, 2), zoom, go, mark, clear }, dt);
+      this.callbacks.onMapInput?.({ move: stick(pad, 0), pan: stick(pad, 2), zoom, go, mark, clear, search: menu }, dt);
       return;
     }
     if (cycleMode) this.callbacks.onCycleMode?.(cycleMode);
@@ -275,7 +285,7 @@ class GamepadControls {
 
     const mode = this.controller.activeMode;
     const driving = mode === 'car' || mode === 'cyclist';
-    const movement = driving ? { x: steeringAxis(pad.axes?.[0]), y: 0 } : stick(pad, 0);
+    const movement = driving ? { x: steeringAxis(pad, pad.axes?.[0]), y: 0 } : stick(pad, 0);
     const look = stick(pad, 2);
     let drive = -movement.y;
     let vertical = 0;
