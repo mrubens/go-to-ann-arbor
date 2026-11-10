@@ -61,6 +61,19 @@ function createSchedule(data, network) {
     }
   }
 
+  // TheRide's feed takes its weekday service off on the third Thursday of November and runs it on Thanksgiving, the
+  // fourth, when the buses don't run: a day taken off on the third Thursday with nothing on the fourth is moved there.
+  // Nobody takes an ordinary Thursday off, so this only ever corrects that slip.
+  for (const ex of data.exceptions) {
+    const [id, d, type] = ex;
+    const day = +d.slice(6, 8);
+    if (type !== 2 || d.slice(4, 6) !== '11' || day < 15 || day > 21) continue;
+    if (new Date(Date.UTC(+d.slice(0, 4), 10, day)).getUTCDay() !== 4) continue;
+    const thanksgiving = `${d.slice(0, 6)}${day + 7}`;
+    if (data.exceptions.some((o) => o[0] === id && o[1] === thanksgiving)) continue;
+    ex[1] = thanksgiving;
+  }
+
   // Which services run on a date: by weekday between their dates, less the days taken off, plus days added
   const servicesCache = new Map();
   function servicesOn(date, weekday) {
@@ -83,7 +96,9 @@ function createSchedule(data, network) {
   };
 
   // A date outside the timetable's dates (before it starts, or once it has run out and the data wasn't built again)
-  // moved by whole weeks into them, so the buses keep the same weekday's schedule
+  // moved onto an ordinary day of the same weekday in it, so the buses keep that weekday's usual schedule. Not simply
+  // the nearest week: U-M's feed ends in its winter-break week (no Blue Buses on New Year's Day, a Friday), and every
+  // day in it has some exception, so "ordinary" is the service set that weekday has most often in the feed.
   const days = (date) => Date.UTC(+date.slice(0, 4), +date.slice(4, 6) - 1, +date.slice(6, 8)) / 864e5;
   const dateOf = (n) => {
     const d = new Date(n * 864e5);
@@ -91,20 +106,41 @@ function createSchedule(data, network) {
   };
   const feedStart = data.calendar.reduce((a, c) => (c[2] < a ? c[2] : a), '99999999');
   const feedEnd = data.calendar.reduce((a, c) => (c[3] > a ? c[3] : a), '00000000');
-  function inFeed(date) {
+  const typical = new Map(); // weekday -> { first, last } in-feed dates with that weekday's usual services
+  function typicalDays(weekday) {
+    if (typical.has(weekday)) return typical.get(weekday);
+    const a = days(feedStart), b = days(feedEnd);
+    const tally = new Map();
+    for (let n = a; n <= b; n++) {
+      if ((new Date(n * 864e5).getUTCDay() + 6) % 7 !== weekday) continue;
+      const date = dateOf(n);
+      const key = [...servicesOn(date, weekday)].sort().join(',');
+      const t = tally.get(key) || { count: 0, first: date, last: date };
+      t.count++;
+      t.last = date;
+      tally.set(key, t);
+    }
+    let best = null;
+    for (const t of tally.values()) if (!best || t.count > best.count) best = t;
+    typical.set(weekday, best);
+    return best;
+  }
+  function inFeed(date, weekday) {
     const n = days(date), a = days(feedStart), b = days(feedEnd);
-    if (n < a) return dateOf(n + Math.ceil((a - n) / 7) * 7);
-    if (n > b) return dateOf(n - Math.ceil((n - b) / 7) * 7);
-    return date;
+    if (n >= a && n <= b) return date;
+    const t = typicalDays(weekday);
+    if (t) return n < a ? t.first : t.last;
+    return dateOf(n < a ? n + Math.ceil((a - n) / 7) * 7 : n - Math.ceil((n - b) / 7) * 7);
   }
 
   // The trips on the road at `ms`, each with how far into its service day it is (a trip after midnight runs on the
   // day before's timetable, past 24:00)
   function activeTrips(ms) {
     const now = localTime(ms);
-    const date = inFeed(now.date);
+    const date = inFeed(now.date, now.weekday);
     const today = servicesOn(date, now.weekday);
-    const yesterday = servicesOn(inFeed(dayBefore(now.date)), (now.weekday + 6) % 7);
+    const before = (now.weekday + 6) % 7;
+    const yesterday = servicesOn(inFeed(dayBefore(now.date), before), before);
     const out = [];
     for (const t of data.trips) {
       const sec = now.sec - delayOf(t);

@@ -300,7 +300,7 @@ function smoothParameter(parameter, timeConstant = 0.07, epsilon = 0.0001, snapI
 }
 
 export function createMotorVoice(context, resources, kind, output) {
-  if (!['sedan', 'suv', 'moto', 'bus', 'helicopter', 'cyclist', 'siren'].includes(kind)) {
+  if (!['sedan', 'suv', 'moto', 'bus', 'helicopter', 'cyclist', 'electric', 'siren'].includes(kind)) {
     throw new RangeError(`Unknown motor voice: ${kind}`);
   }
   const nodes = [];
@@ -509,6 +509,35 @@ export function createMotorVoice(context, resources, kind, output) {
       chainRate(Math.max(0.01, speed / (2 * Math.PI * 0.35 * 3.2)) * doppler, now);
       chainFrequency((2500 + load * 600) * doppler, now);
       noiseRate((0.9 + Math.min(1, movement) * 0.2) * doppler, now);
+    };
+  } else if (kind === 'electric') {
+    // An electric car: its tires on the road and the wind past it, with a motor's faint whine over them that rises with
+    // its speed (one fixed reduction gear, so no revs to climb and no gear changes), a little louder pulling away
+    const road = loop();
+    const roadHighpass = filter('highpass', 120, 0.5);
+    const roadLowpass = filter('lowpass', 1400, 0.5);
+    const roadGain = gain();
+    road.connect(roadHighpass).connect(roadLowpass).connect(roadGain).connect(mix);
+    const whine = oscillator('sine', 300);
+    const whineFilter = filter('bandpass', 900, 2.5);
+    const whineGain = gain();
+    whine.connect(whineFilter).connect(whineGain).connect(mix);
+    const roadLevel = smoothParameter(roadGain.gain, 0.18);
+    const roadFrequency = smoothParameter(roadLowpass.frequency, 0.18, 1);
+    const noiseRate = smoothParameter(road.playbackRate, 0.12, 0.001);
+    const whinePitch = smoothParameter(whine.frequency, 0.08, 0.5, true);
+    const whineCenter = smoothParameter(whineFilter.frequency, 0.08, 1);
+    const whineLevel = smoothParameter(whineGain.gain, 0.1);
+    render = (speed, load, doppler, now) => {
+      const rolling = Math.min(1.35, speed / 28);
+      roadLevel(Math.pow(rolling, 1.25) * 0.11, now);
+      roadFrequency((900 + Math.min(1, rolling) * 1000) * doppler, now);
+      noiseRate(doppler * (0.96 + variation * 0.08), now);
+      // the motor turns about 9 times the wheels' speed: a few hundred hertz moving off, past 2 kHz on the highway
+      const hz = (240 + speed * 62) * (0.97 + variation * 0.06) * doppler;
+      whinePitch(Math.min(hz, context.sampleRate * 0.4), now);
+      whineCenter(Math.min(hz, context.sampleRate * 0.4), now);
+      whineLevel(Math.min(1, speed / 6) * (0.006 + load * 0.012), now);
     };
   } else {
     const siren = oscillator(resources.sirenWave, 1125);

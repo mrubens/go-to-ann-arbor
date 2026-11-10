@@ -190,8 +190,9 @@ const distantWindowLight = Fn(([grid, fw, probability, seed, lod]) => {
 
 /**
  * Occlusion-Aware Urban Canyon Sky Visibility (aoNode)
- * Models how Manhattan street canyons occlude overhead sky irradiance near the street floor (y = 0..65m),
- * while opening up in Central Park and on upper tower shafts.
+ * Lamp: Ann Arbor's streets are lined by two- and three-story buildings, open to the sky: only a mild contact
+ * darkening in the last few meters above the ground, where curbs, walls and parked cars hide part of the sky (the
+ * deep 68 m canyon Manhattan's towers made dimmed every street, sidewalk and tree here to a third of the sky light).
  */
 const canyonSkyAONode = Fn(() => {
   const wp = positionWorld;
@@ -203,10 +204,8 @@ const canyonSkyAONode = Fn(() => {
 
   // Lamp: heights above the ground under the point (terrain.js)
   const above = wp.y.sub(groundHeightNode(wp.xz));
-  const heightOpenness = smoothstep(0.0, 68.0, above);
   const streetCrevice = smoothstep(0.0, 7.5, above).mul(0.22).add(0.78);
-  const canyonAO = mix(float(0.44), float(1.0), heightOpenness).mul(streetCrevice);
-  return mix(canyonAO, float(1.0), inPark);
+  return mix(streetCrevice, float(1.0), inPark);
 });
 
 // Material caches to prevent duplicate WebGPU WGSL shader compilation across blocks & landmarks

@@ -106,28 +106,51 @@ function buildAnimals(group) {
   // --- trees, in cells -------------------------------------------------------------------------------------------
   // Kept up as the city's colliders change: only what's new since the last look is read (the list grows at its end,
   // and is cut back to an earlier length now and then before growing again), so a change costs a compare of the list
-  // and the new entries, not a rebuild of every tree's cell (that stalled frames by 100-170 ms on the Xbox)
-  const cells = new Map(), seen = [], known = new WeakSet(), infoOf = new WeakMap();
+  // and the new entries, not a rebuild of every tree's cell (that stalled frames by 100-170 ms on the Xbox). Trees whose
+  // colliders have gone (streamed out with their square of the town, trees.js) leave their cells too, so a tree planted
+  // again is known once, by its live collider, and the old ones' fields aren't held on to
+  const cells = new Map(), seen = [], known = new WeakSet(), infoOf = new WeakMap(), cellOf = new WeakMap();
   let treeCount = 0, treesAt = -10;
   const cellKey = (i, j) => i * 65536 + j;
+  const live = [];
   function gatherTrees(now, list) {
     if (!list || (seen.length && (list.length === seen.length && list[seen.length - 1] === seen[seen.length - 1] || now - treesAt < 3))) return;
     treesAt = now;
     let from = 0;
     const n = Math.min(seen.length, list.length);
     while (from < n && list[from] === seen[from]) from++;
+    // the trees past the common start, to see which of them are still there
+    const gone = new Set();
+    for (let i = from; i < seen.length; i++) { const k = seen[i]?.knock; if (k && known.has(k)) gone.add(k); }
     seen.length = list.length;
     for (let i = from; i < list.length; i++) {
       const c = list[i];
       seen[i] = c;
       const k = c?.knock;
-      if (!k || k.kind !== 'tree' || known.has(k)) continue;
+      if (!k || k.kind !== 'tree') continue;
+      if (known.has(k)) { gone.delete(k); continue; }
       known.add(k);
       const key = cellKey(Math.floor(k.x / CELL), Math.floor(k.z / CELL));
       let cell = cells.get(key);
       if (!cell) cells.set(key, (cell = []));
       cell.push(k);
+      cellOf.set(k, key);
       treeCount++;
+    }
+    if (!gone.size) return;
+    for (const k of gone) {
+      const key = cellOf.get(k), cell = cells.get(key);
+      const j = cell ? cell.indexOf(k) : -1;
+      if (j >= 0) { cell[j] = cell[cell.length - 1]; cell.pop(); if (!cell.length) cells.delete(key); }
+      known.delete(k);
+      cellOf.delete(k);
+      treeCount--;
+    }
+    // a squirrel on a tree that's gone takes to the same tree planted again, or is let go
+    for (const s of [...alive.values()]) {
+      if (!gone.has(s.tree)) continue;
+      const t = treesNear(s.tree.x, s.tree.z, 0.3, live)[0];
+      if (t) s.tree = t; else release(s);
     }
   }
   function treesNear(x, z, r, out) {

@@ -13,6 +13,7 @@ const REACH = 120, REFRESH = 10; // m: what's laid out, and how far the view mov
 const MAX_ROUND = 1400, MAX_CARS = 260;
 const BAND = 1.5; // m out from a building's wall
 const MAX_BAND_QUADS = 9000;
+const KEPT_BANDS = 4000; // buildings whose bands are kept made, the latest laid out
 
 // a blob's radius by what it's under
 const SIZE = { tree: 0, bench: 0.85, lamp: 0.35, trash: 0.45, hydrant: 0.32, sign: 0.25, signal: 0.35, chair: 0.45, table: 0.7 };
@@ -29,7 +30,9 @@ function bandMaterial() {
   return mat;
 }
 
-function createGroundShade(group, { colliders, peds }) {
+// `near(x, z, r)`, when given, lists the colliders around a point from a grid (controllers.js nearColliders: its list
+// is reused by the next call), rather than every collider in town being looked at each REFRESH m
+function createGroundShade(group, { colliders, peds, near = null }) {
   const plane = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   const roundMat = createContactShadowMaterial({ round: true });
   roundMat.polygonOffset = true; roundMat.polygonOffsetFactor = -2; roundMat.polygonOffsetUnits = -4;
@@ -44,8 +47,10 @@ function createGroundShade(group, { colliders, peds }) {
     const v = q * 4, i = q * 6;
     index[i] = v; index[i + 1] = v + 2; index[i + 2] = v + 1; index[i + 3] = v + 1; index[i + 4] = v + 2; index[i + 5] = v + 3;
   }
-  bandGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
-  bandGeo.setAttribute('shade', new THREE.BufferAttribute(shade, 1).setUsage(THREE.DynamicDrawUsage));
+  // Static usage on purpose: three.js re-uploads a DynamicDrawUsage attribute in every render pass of every frame
+  // (~0.6 MB here). layOut() uploads the quads in use when it lays them out, and only then
+  bandGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  bandGeo.setAttribute('shade', new THREE.BufferAttribute(shade, 1));
   bandGeo.setIndex(new THREE.BufferAttribute(index, 1));
   bandGeo.setDrawRange(0, 0);
   const band = new THREE.Mesh(bandGeo, bandMaterial());
@@ -56,7 +61,30 @@ function createGroundShade(group, { colliders, peds }) {
   const lift = (x, z) => groundHeight(x, z) + (blockAt(x, z) ? 0.185 : 0.02);
 
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-  let still = 0, cx = Infinity, cz = Infinity, c2x = Infinity, c2z = Infinity, seenLength = -1;
+  let still = 0, cx = Infinity, cz = Infinity, c2x = Infinity, c2z = Infinity, seenLength = -1, laid = false;
+  // a building's band quads (12 floats of corners each), made once: the walls and the ground by them don't move
+  const bands = new Map();
+  function bandOf(col) {
+    let made = bands.get(col);
+    if (made) return made;
+    const pts = col.polygon.outer, len = pts.length;
+    let area = 0;
+    for (let i = 0, j = len - 1; i < len; j = i++) area += pts[j].x * pts[i].z - pts[i].x * pts[j].z;
+    // (x, z) counterclockwise (area > 0): the right of each wall, (ez, -ex), is outside
+    const out = area > 0 ? 1 : -1;
+    const quads = [];
+    for (let i = 0, j = len - 1; i < len; j = i++) {
+      const a = pts[j], b = pts[i], ex = b.x - a.x, ez = b.z - a.z, l = Math.hypot(ex, ez);
+      if (l < 0.3) continue;
+      const nx = (ez / l) * out * BAND, nz = (-ex / l) * out * BAND;
+      const ya = lift(a.x + nx * 0.1, a.z + nz * 0.1), yb = lift(b.x + nx * 0.1, b.z + nz * 0.1);
+      quads.push(a.x, ya, a.z, b.x, yb, b.z, a.x + nx, ya, a.z + nz, b.x + nx, yb, b.z + nz);
+    }
+    made = Float32Array.from(quads);
+    if (bands.size >= KEPT_BANDS) bands.delete(bands.keys().next().value);
+    bands.set(col, made);
+    return made;
+  }
 
   function blob(mesh, i, x, y, z, w, l, yaw) {
     p.set(x, y, z); s.set(w, 1, l); q.setFromAxisAngle(up, yaw);
@@ -68,9 +96,7 @@ function createGroundShade(group, { colliders, peds }) {
     cx = x; cz = z; c2x = x2; c2z = z2; seenLength = colliders.length;
     let n = 0, c = 0, quads = 0;
     const r2 = REACH * REACH;
-    for (const col of colliders) {
-      const mx = (col.minX + col.maxX) / 2, mz = (col.minZ + col.maxZ) / 2;
-      if ((mx - x) ** 2 + (mz - z) ** 2 > r2 && !((mx - x2) ** 2 + (mz - z2) ** 2 <= r2)) continue;
+    const visit = (col) => {
       const k = col.knock;
       if (k && !k.down) {
         let rad = SIZE[k.kind];
@@ -80,32 +106,40 @@ function createGroundShade(group, { colliders, peds }) {
       } else if (col.parked && col.obb) {
         const o = col.obb;
         if (c < MAX_CARS) blob(cars, c++, o.cx, groundHeight(o.cx, o.cz) + 0.03, o.cz, o.hx * 2 + 0.3, o.hz * 2 + 0.3, Math.atan2(o.sn, o.cs));
-      } else if (col.polygon?.outer && col.maxX - col.minX < 300 && col.maxZ - col.minZ < 300) {
+      } else if (col.polygon?.outer && col.maxX - col.minX < 300 && col.maxZ - col.minZ < 300 && quads < MAX_BAND_QUADS) {
         // along the foot of the walls, outward
-        const pts = col.polygon.outer, len = pts.length;
-        let area = 0;
-        for (let i = 0, j = len - 1; i < len; j = i++) area += pts[j].x * pts[i].z - pts[i].x * pts[j].z;
-        const out = area > 0 ? -1 : 1;
-        for (let i = 0, j = len - 1; i < len && quads < MAX_BAND_QUADS; j = i++) {
-          const a = pts[j], b = pts[i], ex = b.x - a.x, ez = b.z - a.z, l = Math.hypot(ex, ez);
-          if (l < 0.3) continue;
-          const nx = (ez / l) * out * BAND, nz = (-ex / l) * out * BAND;
-          const v = quads * 4, o = v * 3;
-          const ya = lift(a.x + nx * 0.1, a.z + nz * 0.1), yb = lift(b.x + nx * 0.1, b.z + nz * 0.1);
-          pos[o] = a.x; pos[o + 1] = ya; pos[o + 2] = a.z;
-          pos[o + 3] = b.x; pos[o + 4] = yb; pos[o + 5] = b.z;
-          pos[o + 6] = a.x + nx; pos[o + 7] = ya; pos[o + 8] = a.z + nz;
-          pos[o + 9] = b.x + nx; pos[o + 10] = yb; pos[o + 11] = b.z + nz;
-          shade[v] = 1; shade[v + 1] = 1; shade[v + 2] = 0; shade[v + 3] = 0;
-          quads++;
-        }
+        const made = bandOf(col);
+        const fit = Math.min(made.length / 12, MAX_BAND_QUADS - quads);
+        pos.set(made.subarray(0, fit * 12), quads * 12);
+        for (let v = quads * 4; v < (quads + fit) * 4; v += 4) { shade[v] = 1; shade[v + 1] = 1; shade[v + 2] = 0; shade[v + 3] = 0; }
+        quads += fit;
       }
+    };
+    const within = (col, px, pz) => {
+      const mx = (col.minX + col.maxX) / 2, mz = (col.minZ + col.maxZ) / 2;
+      return (mx - px) ** 2 + (mz - pz) ** 2 <= r2;
+    };
+    if (near) {
+      for (const col of near(x, z, REACH)) if (within(col, x, z)) visit(col);
+      if (Number.isFinite(x2)) for (const col of near(x2, z2, REACH)) if (within(col, x2, z2) && !within(col, x, z)) visit(col);
+    } else {
+      for (const col of colliders) if (within(col, x, z) || within(col, x2, z2)) visit(col);
     }
     still = n;
+    laid = true;
     cars.count = c;
-    cars.instanceMatrix.needsUpdate = true;
-    bandGeo.attributes.position.needsUpdate = true;
-    bandGeo.attributes.shade.needsUpdate = true;
+    if (c) {
+      cars.instanceMatrix.clearUpdateRanges();
+      cars.instanceMatrix.addUpdateRange(0, c * 16);
+      cars.instanceMatrix.needsUpdate = true;
+    }
+    if (quads) {
+      for (const attr of [bandGeo.attributes.position, bandGeo.attributes.shade]) {
+        attr.clearUpdateRanges();
+        attr.addUpdateRange(0, quads * 4 * attr.itemSize);
+        attr.needsUpdate = true;
+      }
+    }
     bandGeo.setDrawRange(0, quads * 6);
     // which way round a band faces doesn't matter: drawn from both sides
     band.material.side = THREE.DoubleSide;
@@ -127,7 +161,14 @@ function createGroundShade(group, { colliders, peds }) {
       blob(round, n++, pd.x, lift(pd.x, pd.z), pd.z, 0.9, 0.9, 0);
     }
     round.count = n;
-    round.instanceMatrix.needsUpdate = true;
+    // uploaded: everything after a lay-out, else just the people (the still ones haven't moved)
+    const from = laid ? 0 : still;
+    if (n > from) {
+      round.instanceMatrix.clearUpdateRanges();
+      round.instanceMatrix.addUpdateRange(from * 16, (n - from) * 16);
+      round.instanceMatrix.needsUpdate = true;
+    }
+    laid = false;
   }
 
   return { group, update, dispose() { plane.dispose(); bandGeo.dispose(); round.material.dispose(); cars.material.dispose(); band.material.dispose(); } };

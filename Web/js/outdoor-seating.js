@@ -190,7 +190,7 @@ function createOutdoorSeating(group, data) {
       const rn = Math.max(1, Math.ceil((n * gap) / 2));
       for (let k = 0; k < rn; k++) {
         const u = (k - (rn - 1) / 2) * 2, x = wx + nx * (out + 1.05) + tx * u, z = wz + nz * (out + 1.05) + tz * u;
-        if (blockAt(x, z)) rails.push({ x, z, yaw: h + Math.PI / 2 });
+        if (blockAt(x, z)) rails.push({ x, z, yaw: h }); // along the wall (the panel's length is its local x)
       }
     }
   }
@@ -285,7 +285,12 @@ function createOutdoorSeating(group, data) {
       seats.push({ x, z, y: cg + 0.47, yaw, kind: 'chair', of: obstacles.length - 1 });
     }
   }
-  for (const r of rails) put(railing, r.x, floorAt(r.x, r.z), r.z, r.yaw);
+  // each railing panel is solid, and goes flying as a light table does when a car hits it (knockdowns.js has no kind
+  // of its own for it; tipped like a pole it would come to rest a lamp's height up)
+  for (const r of rails) {
+    const ri = put(railing, r.x, floorAt(r.x, r.z), r.z, r.yaw);
+    obstacles.push({ x: r.x, z: r.z, r: 0.7, kind: 'table', height: 0.92, parts: [railing, ri] });
+  }
   for (const m of [chairs, bistros, squares, picnics, poles, canopies, railing]) {
     m.instanceMatrix.needsUpdate = true;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;

@@ -131,7 +131,7 @@ function createScooters(group) {
       take(bikes.filter((b) => !b.is_disabled && Number.isFinite(b.lat)).map((b) => [b.lat, b.lon]), 'Spin now');
       return;
     }
-    if (!triedSample && !spots.length) {
+    if (!triedSample && !feed.length) {
       triedSample = true;
       try {
         take(JSON.parse(new TextDecoder().decode(await asset('data/scooters-sample.json'))).bikes, 'their spots when last seen');

@@ -4,6 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { asset, log } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
 import { LIFT } from './ground-lifts.js';
+import { splitByCell } from './merge-static.js';
 
 // Lamp: Ann Arbor's outdoor swimming pools where OpenStreetMap has them (data/pools.json, Assets/Tools/build-pools.py):
 // backyard and apartment pools, and the parks' and clubs' big ones with dark lane lines on their floors. Each is clear
@@ -509,6 +510,21 @@ function createPools(group, data) {
     const paintMat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.55 });
     inst(blockGeometry(), paintMat, blocks, 'Starting blocks');
     inst(chairGeometry(), paintMat, chairs, 'Lifeguard chairs');
+    // the pools stand all over town: each plain mesh cut into 300 m squares (merge-static.js splitByCell), so the
+    // squares out of view aren't drawn, rather than every pool whenever any is in view
+    const indexed = new Set();
+    for (const o of group.children) {
+      if (!o.isMesh || o.isInstancedMesh || !o.geometry.index) continue;
+      indexed.add(o.geometry);
+      o.geometry = o.geometry.toNonIndexed(); // (the water and its opening each their own copy of their one shape)
+    }
+    for (const g of indexed) g.dispose();
+    for (const o of [...group.children]) {
+      if (!o.isMesh || o.isInstancedMesh) continue;
+      const order = o.renderOrder;
+      // each square hidden beyond 500 m (scene-culling.js), as a pool is a small thing to see from farther off
+      for (const piece of splitByCell(o, 300)) { piece.renderOrder = order; piece.userData.cullDistance = 500; }
+    }
   }
   // the pool whose water is at (x, z), or null
   function at(x, z) {

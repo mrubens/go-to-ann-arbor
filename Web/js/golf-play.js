@@ -10,6 +10,7 @@
 import * as THREE from 'three/webgpu';
 import { attribute, float } from 'three/tsl';
 import { hot, log, random, rumble, sound } from '../lamp-game.js';
+import { setupSceneCulling } from './scene-culling.js';
 import { layOutHoles } from './golf.js';
 import { GOLF_HOLES } from './golf-holes.js';
 import { GOLF_COURSES } from './golf-courses.js';
@@ -19,31 +20,34 @@ import { groundHeight, waterLevel, riverDepth } from './terrain.js';
 // the courses' grass is drawn over the ground a little above its height (golf.js lays it on the city's lawn): the ball,
 // the markers and the aim sit on top of it
 const TURF = 0.205;
-const TEE_MARKS_V = 2; // raised when the tee markers and boards change, so the open game builds them again
+const TEE_MARKS_V = 3; // raised when the tee markers and boards change, so the open game builds them again
 const turf = (x, z) => groundHeight(x, z) + TURF;
 
 const YD = 1.0936;
 const BALL_R = 0.0214, CUP_R = 0.108;
-// carry in metres at full power, launch angle in degrees
+// carry in metres at full power, launch angle in degrees, and how far a full shot runs on after landing on a fairway
+// (a real one's roll-out: the flight here has no drag or spin, so the ball comes down far faster than a real one does,
+// and the run is set from these instead of from the speed it lands with)
 const CLUBS = [
-  { name: 'Driver', carry: 205, launch: 13, tee: true },
-  { name: '3 Wood', carry: 185, launch: 15 },
-  { name: '5 Iron', carry: 155, launch: 20 },
-  { name: '7 Iron', carry: 135, launch: 26 },
-  { name: '9 Iron', carry: 112, launch: 34 },
-  { name: 'Wedge', carry: 85, launch: 44 },
-  { name: 'Sand Wedge', carry: 55, launch: 52 },
-  { name: 'Chip', carry: 32, launch: 40 },
+  { name: 'Driver', carry: 205, launch: 13, run: 24, tee: true },
+  { name: '3 Wood', carry: 185, launch: 15, run: 16 },
+  { name: '5 Iron', carry: 155, launch: 20, run: 9 },
+  { name: '7 Iron', carry: 135, launch: 26, run: 6 },
+  { name: '9 Iron', carry: 112, launch: 34, run: 4 },
+  { name: 'Wedge', carry: 85, launch: 44, run: 2.5 },
+  { name: 'Sand Wedge', carry: 55, launch: 52, run: 1.5 },
+  { name: 'Chip', carry: 32, launch: 40, run: 3 },
   { name: 'Putter', carry: 24, launch: 0, putt: true }
 ];
 const PUTTER = CLUBS.length - 1, CHIP = CLUBS.length - 2, SAND = CLUBS.length - 3;
-// how a ball takes each surface: bounce, what's kept of its run on landing, and how hard it slows rolling (m/s²)
+// how a ball takes each surface: bounce, how much of a club's fairway run it gets on landing there, and how hard it
+// slows rolling (m/s²)
 const SURFACE = {
-  green: { bounce: 0.15, keep: 0.5, roll: 1.5, name: 'the green' },
-  fairway: { bounce: 0.32, keep: 0.62, roll: 1.9, name: 'the fairway' },
-  tee: { bounce: 0.3, keep: 0.6, roll: 2.0, name: 'the tee' },
-  rough: { bounce: 0.1, keep: 0.2, roll: 9, name: 'the rough' },
-  bunker: { bounce: 0, keep: 0, roll: 99, name: 'a bunker' }
+  green: { bounce: 0.15, run: 0.7, roll: 1.5, name: 'the green' },
+  fairway: { bounce: 0.32, run: 1, roll: 1.9, name: 'the fairway' },
+  tee: { bounce: 0.3, run: 1, roll: 2.0, name: 'the tee' },
+  rough: { bounce: 0.1, run: 0.2, roll: 9, name: 'the rough' },
+  bunker: { bounce: 0, run: 0, roll: 99, name: 'a bunker' }
 };
 const RESULT = { '-3': 'Albatross', '-2': 'Eagle', '-1': 'Birdie', 0: 'Par', 1: 'Bogey', 2: 'Double bogey', 3: 'Triple bogey' };
 
@@ -72,7 +76,7 @@ function distToLine(L, x, z) {
 // The holes and the surfaces they're played on, worked out once from the course data
 let COURSE = null;
 function course() {
-  if (COURSE?.v === 3) return COURSE;
+  if (COURSE?.v === 4) return COURSE;
   const golf = GEO.golf ? layOutHoles(GEO.golf) : { greens: [], tees: [], bunkers: [], fairways: [], pins: [] };
   const holes = [];
   // Huron Hills, as mapped: the tee 4 m along each hole's line, the pin as golf.js places it on the green
@@ -105,7 +109,7 @@ function course() {
     for (let i = 0; i < f.length; i += 2) { x0 = Math.min(x0, f[i]); x1 = Math.max(x1, f[i]); z0 = Math.min(z0, f[i + 1]); z1 = Math.max(z1, f[i + 1]); }
     return { f, x0, x1, z0, z1 };
   });
-  COURSE = { v: 3, holes, greens: ring(golf.greens), bunkers: ring(golf.bunkers), tees: ring(golf.tees), fairways: ring(golf.fairways) };
+  COURSE = { v: 4, holes, greens: ring(golf.greens), bunkers: ring(golf.bunkers), tees: ring(golf.tees), fairways: ring(golf.fairways) };
   log(`[golf] ${holes.length} holes to play: Huron Hills ${GOLF_HOLES.length}, ${Object.entries(sizes).map(([k, v]) => `${k.replace(/ (Golf|Country) .*/, '')} ${v}`).join(', ')}`);
   return COURSE;
 }
@@ -265,12 +269,16 @@ export class GolfPlay {
     markers.castShadow = signs.castShadow = true;
     for (const im of [markers, signs]) { im.computeBoundingSphere(); g.add(im); }
     g.add(this.teeFaces(holes));
+    // hidden once the player is well away from the course, as the town's small things are (scene-culling.js), rather
+    // than drawn whenever any of it is in view: cut into squares where a course's tees spread wide
+    for (const o of g.children) o.userData.cullDistance = 400;
+    setupSceneCulling(g, [g]);
     this.teeMarksV = TEE_MARKS_V;
     this.scene.add(g);
   }
 
-  // What each tee's board says, painted into one sheet: Huron Hills' holes by their number, par and length; the other
-  // courses' (whose numbers the map doesn't give) by par and length. All the boards' faces are one draw.
+  // What each tee's board says, painted into one sheet: the hole's number, its par (the course's scorecard) and its
+  // length as played. All the boards' faces are one draw.
   teeFaces(holes) {
     const n = holes.length, COLS = 10, CW = 204, CH = 136, rows = Math.ceil(n / COLS);
     const canvas = document.createElement('canvas');
@@ -324,6 +332,14 @@ export class GolfPlay {
     this.group.removeFromParent();
     this.group.traverse((o) => { o.geometry?.dispose(); });
     this.line.remove();
+    // the round goes with this copy (a live change's new one takes it up from the snapshot): its window listeners and
+    // the pin's pointer go too, or the old ones would keep catching presses and leave a pointer frozen on the screen
+    this.on = null;
+    this.listening?.abort();
+    this.listening = null;
+    this.mouseBound = this.escapeBound = false;
+    this.pinTag?.remove();
+    this.pinTag = null;
     if (this.cameraSystem.override === this.camHook) this.cameraSystem.override = null;
     const p = this.cm.entities.person;
     if (p.golf) p.golf = null;
@@ -570,7 +586,7 @@ export class GolfPlay {
     _v.set(px, turf(px, pz) + 2.6, pz).project(cam);
     const shown = o.phase !== 'holed' && _v.z < 1 && Math.abs(_v.x) < 1.1 && Math.abs(_v.y) < 1.1 && el;
     if (!shown) { t.style.display = 'none'; return; }
-    const r = el.getBoundingClientRect();
+    const r = this.view();
     t.style.display = 'flex';
     t.style.left = `${r.left + (_v.x + 1) / 2 * r.width}px`;
     t.style.top = `${r.top + (1 - _v.y) / 2 * r.height}px`;
@@ -607,57 +623,71 @@ export class GolfPlay {
   }
 
   // the mouse: press on the view while lined up, pull back behind the golfer like a slingshot, let go to hit
+  // The window's listeners, on one signal so dispose takes them all away (a live change makes a new GolfPlay, and the old
+  // one's would otherwise go on catching presses on the view)
   bindMouse() {
     this.mouseBound = true;
+    this.listening ??= new AbortController();
+    const opts = { capture: true, signal: this.listening.signal };
     const el = this.cameraSystem.domElement;
     const lined = () => this.on && this.on.phase === 'address' && !this.on.held;
     window.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || !lined() || (el && e.target !== el)) return;
       e.stopPropagation(); e.preventDefault();
-      const o = this.on, cp = this.cameraSystem.camera.position;
-      o.mouse = { id: e.pointerId, down: true, aim0: o.aim, d0: o.dist, reach: 0.7 * Math.hypot(cp.x - o.ball.x, cp.z - o.ball.z) };
+      const o = this.on;
+      o.mouse = { id: e.pointerId, down: true, aim0: o.aim, d0: o.dist, x0: e.clientX, y0: e.clientY };
       this.mouseAt(e);
-    }, true);
+    }, opts);
     window.addEventListener('pointermove', (e) => {
       const m = this.on?.mouse;
       if (!m || !m.down || e.pointerId !== m.id) return;
       e.stopPropagation();
       this.mouseAt(e);
-    }, true);
+    }, opts);
     const up = (e) => {
       const m = this.on?.mouse;
       if (!m || !m.down || e.pointerId !== m.id) return;
       e.stopPropagation();
       m.down = false;
-      if (!m.pulled) m.cancel = true;
+      // let go where it was pressed (never pulled, or brought back there): no shot
+      if (!m.pulled || !(m.px > 8)) m.cancel = true;
     };
-    window.addEventListener('pointerup', up, true);
-    window.addEventListener('pointercancel', up, true);
+    window.addEventListener('pointerup', up, opts);
+    window.addEventListener('pointercancel', up, opts);
   }
 
   bindEscape() {
     this.escapeBound = true;
+    this.listening ??= new AbortController();
     // Escape while pulling back puts the shot down: nothing is hit, and the aim goes back to where it was
     window.addEventListener('keydown', (e) => {
       const m = this.on?.mouse;
       if (e.code !== 'Escape' || !m || !m.down) return;
       e.stopImmediatePropagation(); e.preventDefault();
       m.down = false; m.cancel = true;
-    }, true);
+    }, { capture: true, signal: this.listening.signal });
   }
 
-  // where the pointer is on the ground at the ball's height
+  // player one's view on the screen: the whole canvas, or its left half in split screen
+  view() {
+    const r = this.cameraSystem.domElement.getBoundingClientRect();
+    return document.body.classList.contains('split') ? { left: r.left, top: r.top, width: r.width / 2, height: r.height } : r;
+  }
+
+  // where the pointer is on the ground at the ball's height, and how far it's been pulled from where it was pressed
   mouseAt(e) {
-    const o = this.on, m = o?.mouse, el = this.cameraSystem.domElement;
-    if (!m || !el) return;
-    const r = el.getBoundingClientRect(), cam = this.cameraSystem.camera;
+    const o = this.on, m = o?.mouse;
+    if (!m || !this.cameraSystem.domElement) return;
+    const r = this.view(), cam = this.cameraSystem.camera;
     _v.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1, 0.5).unproject(cam).sub(cam.position);
     if (_v.y >= -1e-4) return;
     const t = (o.ball.y - cam.position.y) / _v.y;
     m.gx = cam.position.x + _v.x * t; m.gz = cam.position.z + _v.z * t;
-    // how far the pointer is from the ball on the screen, as a share of the view's height: what sets the power
-    _v.set(o.ball.x, o.ball.y, o.ball.z).project(cam);
-    m.pull = Math.hypot(e.clientX - (r.left + (_v.x + 1) / 2 * r.width), e.clientY - (r.top + (1 - _v.y) / 2 * r.height)) / r.height;
+    // the slingshot's anchor: the first spot on the ground the press found
+    if (m.ax === undefined) { m.ax = m.gx; m.az = m.gz; m.x0 = e.clientX; m.y0 = e.clientY; }
+    // the pull on the screen, from the press, as a share of the view's height: what sets the power
+    m.px = Math.hypot(e.clientX - m.x0, e.clientY - m.y0);
+    m.pull = m.px / r.height;
   }
 
   aimShown(on) { this.dots.visible = false; this.mark.visible = false; (this.circle?.userData.v === 5 ? this.circle : this.makeTarget()).visible = on && !!this.on?.held; }
@@ -696,14 +726,15 @@ export class GolfPlay {
         o.dist = Math.max(o.min, Math.min(o.max, o.dist + fwd * dt * (o.putt ? 4 : Math.max(10, o.max * 0.4))));
         if (o.dist !== was) { o.club = this.clubFor(o.dist); moved = true; }
       }
-      // pulled back from the ball with the mouse, like a slingshot: the shot goes the other way, farther the more
-      // it's pulled on the screen (a quarter of the view's height from the ball is the longest shot)
+      // pulled back from where it was pressed, like a slingshot: the shot goes the other way, farther the more it's
+      // pulled on the screen (a quarter of the view's height is the longest shot). Until it's moved a few pixels it's
+      // only a press, and letting go then hits nothing
       const ms = o.mouse;
-      if (ms && ms.gx !== undefined) {
-        const px = b.x - ms.gx, pz = b.z - ms.gz, len = Math.hypot(px, pz);
-        if (len > 0.4) {
+      if (ms && ms.ax !== undefined && (ms.pulled || ms.px > 8)) {
+        const px = ms.ax - ms.gx, pz = ms.az - ms.gz, len = Math.hypot(px, pz);
+        if (len > 0.05) {
           const was = o.dist, wasAim = o.aim;
-          const frac = Math.max(0, Math.min(1, ((ms.pull ?? 0) - 0.03) / 0.22));
+          const frac = Math.max(0, Math.min(1, ((ms.pull ?? 0) - 0.01) / 0.22));
           o.dist = o.min + (o.max - o.min) * frac;
           o.aim = Math.atan2(pz, px);
           if (o.dist !== was) o.club = this.clubFor(o.dist);
@@ -751,6 +782,9 @@ export class GolfPlay {
       else if ((o.wait -= dt) <= 0) { this.next(); if (this.on !== o) return; }
     }
     this.line.classList.remove('swinging');
+    // the golf words under player one's view: the middle of its half in split screen, not on the divider
+    const mid = document.body.classList.contains('split') ? '25%' : '';
+    if (this.line.style.left !== mid) this.line.style.left = mid;
     // the ball, kept a few pixels across however far the camera is
     this.ball.position.set(b.x, b.y, b.z);
     const cd = this.cameraSystem.camera.position.distanceTo(this.ball.position);
@@ -777,6 +811,7 @@ export class GolfPlay {
     o.strokes++;
     o.phase = 'flight';
     o.rolled = 0;
+    o.landed = false;
     const t = o.target || { x: b.x + Math.cos(o.aim) * o.dist, z: b.z + Math.sin(o.aim) * o.dist };
     const dx = t.x - b.x, dz = t.z - b.z, d = Math.max(0.05, Math.hypot(dx, dz)), cx = dx / d, cz = dz / d;
     if (club.putt) {
@@ -822,8 +857,17 @@ export class GolfPlay {
         const surf = SURFACE[surfaceAt(b.x, b.z)];
         // straight in the cup on the fly, or close enough to drop off the bounce
         if (Math.hypot(b.x - h.pin[0], b.z - h.pin[1]) < CUP_R + 0.03 && Math.hypot(b.vx, b.vz) < 9) return this.holed();
-        b.vx *= surf.keep; b.vz *= surf.keep;
         b.vy = -b.vy * surf.bounce;
+        if (!o.landed) {
+          // the first landing takes most of the speed off, as a real ball's spin and the drag it has slowed by do: what's
+          // left carries it the club's run for this surface (less for a shorter swing), the hop and the roll together
+          o.landed = true;
+          const club = CLUBS[o.club], run = (club.run || 0) * surf.run * Math.max(0.3, Math.min(1, o.dist / club.carry));
+          let hop = 0, a = surf.roll;
+          for (let up = b.vy; up >= 1.2; up *= surf.bounce) hop += 2 * up / 9.8; // the time in the air, every hop
+          const v = run > 0 ? a * (Math.sqrt(hop * hop + 2 * run / a) - hop) : 0, sp = Math.hypot(b.vx, b.vz) || 1;
+          b.vx *= v / sp; b.vz *= v / sp;
+        }
         if (b.vy < 1.2) { b.vy = 0; o.rolling = true; }
       } else {
         const sp = Math.hypot(b.vx, b.vz);
@@ -962,15 +1006,22 @@ export class GolfPlay {
   snapshot() {
     const o = this.on;
     if (!o) return null;
-    return { hole: o.hole, strokes: o.strokes, card: o.card, played: o.played, ball: { x: o.ball.x, z: o.ball.z }, aim: o.aim, dist: o.dist };
+    // the holes by course and number, not by place in the list, which a change to the course data can reorder
+    const holes = course().holes, h = holes[o.hole];
+    return { course: h.course, ref: h.ref, playedRefs: o.played.map((i) => holes[i]?.ref), strokes: o.strokes, card: o.card,
+      ball: { x: o.ball.x, z: o.ball.z }, aim: o.aim, dist: o.dist };
   }
   restore(s) {
-    if (!s || !Number.isFinite(s.hole) || !course().holes[s.hole]) return;
-    this.start(s.hole);
+    if (!s) return;
+    const holes = course().holes;
+    const at = (ref) => holes.findIndex((h) => h.course === s.course && h.ref === ref);
+    const i = s.course !== undefined ? at(s.ref) : s.hole;
+    if (!Number.isFinite(i) || !holes[i]) return;
+    this.start(i);
     const o = this.on;
     o.strokes = s.strokes | 0;
     o.card = Array.isArray(s.card) ? s.card : [];
-    o.played = Array.isArray(s.played) ? s.played : [];
+    o.played = Array.isArray(s.playedRefs) ? s.playedRefs.map(at).filter((k) => k >= 0) : Array.isArray(s.played) ? s.played : [];
     if (Number.isFinite(s.ball?.x) && Number.isFinite(s.ball?.z)) { o.ball.x = s.ball.x; o.ball.z = s.ball.z; o.ball.y = turf(s.ball.x, s.ball.z) + BALL_R; }
     this.address();
     if (Number.isFinite(s.dist)) { o.dist = Math.max(o.min, Math.min(o.max, s.dist)); o.club = this.clubFor(o.dist); }

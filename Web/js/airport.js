@@ -52,6 +52,17 @@ function onAirfield(x, z) {
   return x > BOX.minX && x < BOX.maxX && z > BOX.minZ && z < BOX.maxZ && inRing(FENCE, x, z);
 }
 const AIRFIELD_CENTRE = { x: 160, z: 6110 };
+// the airport's buildings' outlines, and whether a footprint (points [across, along] from (x, z), turned by heading)
+// stands clear of them all
+const RINGS = AIRPORT.buildings.map((b) => pts(b.ring));
+function clearOfBuildings(x, z, heading, foot) {
+  const c = Math.cos(heading), s = Math.sin(heading);
+  return foot.every(([u, v]) => !RINGS.some((r) => inRing(r, x + u * c + v * s, z - u * s + v * c)));
+}
+// a parked plane's: its nose, tail and wingtips, a little out (heading +z is its nose)
+const PLANE_FOOT = [[0, 0], [-5.8, 1], [5.8, 1], [-3, 1], [3, 1], [0, 3.6], [0, -4.8], [0, -2.4], [-1.9, -3.8], [1.9, -3.8]];
+// an airstair truck's: its cab, flight and back corners (heading +z is its front)
+const STAIR_FOOT = [[0, 0], [-1.2, -5], [1.2, -5], [-1.2, 5.6], [1.2, 5.6], [-1.2, 0], [1.2, 0]];
 
 // a flat polygon in world x/z at height 0 (draped on the ground later)
 function flatShape(ring) {
@@ -618,6 +629,8 @@ function createAirport(group) {
     const s = { x: S[i], z: S[i + 1], heading: S[i + 2], root: buildStairTruck(stairGeos) };
     const m = moved?.[i / 3];
     if (m && m.every(Number.isFinite)) [s.x, s.z, s.heading] = m;
+    // a mapped spot that would put the truck into a hangar's wall is left empty (kept in the list for the saves)
+    else if (!clearOfBuildings(s.x, s.z, s.heading, STAIR_FOOT)) s.blocked = true;
     s.root.name = `AirStairs${i / 3 + 1}`;
     group.add(s.root);
     stairs.push(s);
@@ -628,7 +641,7 @@ function createAirport(group) {
     s.sn = Math.sin(s.heading); s.cs = Math.cos(s.heading);
     s.root.position.set(s.x, s.g, s.z);
     s.root.rotation.y = s.heading;
-    s.root.visible = !far && stairs.indexOf(s) !== heldStairs;
+    s.root.visible = !far && !s.blocked && stairs.indexOf(s) !== heldStairs;
     s.root.updateMatrixWorld(true); // the scene's world matrices are made once (main.js): a moved truck makes its own
   }
   const saveStairs = () => { save('airportStairs', stairs.map((s) => [s.x, s.z, s.heading])); save('airportStairsHeld', heldStairs); };
@@ -636,7 +649,7 @@ function createAirport(group) {
   function nearestStairs(x, z, reach) {
     let best = null;
     for (const [i, s] of stairs.entries()) {
-      if (i === heldStairs) continue;
+      if (i === heldStairs || s.blocked) continue;
       const dx = x - s.x, dz = z - s.z, t = dx * s.sn + dz * s.cs, w = dx * s.cs - dz * s.sn;
       const d = Math.hypot(Math.max(0, Math.abs(w) - 1.2), Math.max(0, t - 5.6, -5.0 - t));
       if (d < reach && (!best || d < best.d)) best = { i, d, x: s.x, z: s.z, yaw: s.heading };
@@ -656,16 +669,18 @@ function createAirport(group) {
     const s = stairs[heldStairs];
     if (!s) return;
     heldStairs = -1;
-    Object.assign(s, { x, z, heading });
+    Object.assign(s, { x, z, heading, blocked: false });
     setStairs(s);
     saveStairs();
   }
   // a reloaded game whose player was driving one: that one is theirs
   // (the one nearest where its truck is, when that's known), and one got back into after a reload is too
   function claimStairs(x, z) {
-    if (heldStairs >= 0 || !stairs.length) return;
-    let i = 0;
-    if (Number.isFinite(x)) stairs.forEach((s, k) => { if (Math.hypot(s.x - x, s.z - z) < Math.hypot(stairs[i].x - x, stairs[i].z - z)) i = k; });
+    const open = stairs.filter((s) => !s.blocked);
+    if (heldStairs >= 0 || !open.length) return;
+    let pick = open[0];
+    if (Number.isFinite(x)) for (const s of open) if (Math.hypot(s.x - x, s.z - z) < Math.hypot(pick.x - x, pick.z - z)) pick = s;
+    const i = stairs.indexOf(pick);
     heldStairs = i;
     setStairs(stairs[i]);
     saveStairs();
@@ -686,6 +701,7 @@ function createAirport(group) {
   const cone = (x, z) => cones.push(new THREE.ConeGeometry(0.18, 0.7, 8).translate(x, groundHeight(x, z) + PAVE + 0.35, z).toNonIndexed());
   const P = AIRPORT.planes || [];
   for (let i = 0; i < P.length; i += 3) {
+    if (!clearOfBuildings(P[i], P[i + 1], P[i + 2], PLANE_FOOT)) continue;
     const c = Math.cos(P[i + 2]), s = Math.sin(P[i + 2]);
     for (const w of [-6.2, 6.2]) cone(P[i] + w * c, P[i + 1] - w * s);
   }
@@ -700,7 +716,7 @@ function createAirport(group) {
   // the top of the airstairs at (x, z), or -Infinity off them
   function stairTop(x, z) {
     for (const [i, s] of stairs.entries()) {
-      if (i === heldStairs) continue;
+      if (i === heldStairs || s.blocked) continue;
       const dx = x - s.x, dz = z - s.z;
       if (dx * dx + dz * dz > 49) continue;
       const t = dx * s.sn + dz * s.cs, w = dx * s.cs - dz * s.sn;
@@ -718,35 +734,12 @@ function createAirport(group) {
   const H = AIRPORT.helis, craft = [];
   for (let i = 0; i < H.length; i += 3) craft.push({ kind: 'helicopter', x: H[i], z: H[i + 1], heading: H[i + 2] });
   for (let i = 0; i < P.length; i += 3) craft.push({ kind: 'plane', x: P[i], z: P[i + 1], heading: P[i + 2] });
+  // a mapped spot whose plane would stand in a hangar or put a wing through its wall is left empty (kept in the list,
+  // so the saved `taken` still names the same aircraft)
+  for (const c of craft) if (c.kind === 'plane' && !clearOfBuildings(c.x, c.z, c.heading, PLANE_FOOT)) c.blocked = true;
   // the one the player took last is theirs, so its spot stands empty (kept with the game's saves)
   let taken = -1;
   try { taken = load('airportTaken') ?? -1; } catch { taken = -1; }
-  for (const [i, c] of craft.entries()) {
-    c.root = new THREE.Group();
-    c.root.name = `ParkedAircraft${i + 1}`;
-    if (c.kind === 'plane') {
-      const plane = makePlane(planeGeos, paints[i % paints.length]);
-      plane.userData.prop.rotation.z = i * 0.7;
-      c.root.add(plane);
-    } else {
-      const b = new THREE.Mesh(body, mat);
-      const r = new THREE.Mesh(rotor, mat);
-      r.position.set(0, 2.66, -0.35);
-      r.rotation.y = 0.4 + i * 0.9; // blades left where they stopped
-      const t = new THREE.Mesh(tail, mat);
-      t.position.set(0.18, 2.02, -5.62);
-      b.castShadow = r.castShadow = true;
-      c.root.add(b, r, t);
-    }
-    group.add(c.root);
-    place(c);
-  }
-  function place(c) {
-    c.root.position.set(c.x, groundHeight(c.x, c.z) + PAVE + 0.25, c.z);
-    c.root.rotation.y = c.heading;
-    c.root.visible = !far && craft.indexOf(c) !== taken;
-    c.root.updateMatrixWorld(true);
-  }
 
   // more planes tied down in rows wherever an apron has room, clear of the hangars, the taxiways and what's parked
   // already, spread well apart
@@ -758,7 +751,6 @@ function createAirport(group) {
     for (let i = 2; i < l.length; i += 2) if (segDist(x, z, l[i - 2], l[i - 1], l[i], l[i + 1]) < r) return true;
     return false;
   });
-  const rings = AIRPORT.buildings.map((b) => pts(b.ring));
   const taken2 = [...craft.map((c) => [c.x, c.z]), ...stairs.map((t) => [t.x, t.z]), ...TRUCKS.map((t) => [t.x, t.z])];
   const rows = [];
   for (const a of AIRPORT.aprons) {
@@ -768,8 +760,8 @@ function createAirport(group) {
     for (let z = minZ + 12, row = 0; z < maxZ - 8; z += 30, row++) {
       for (let x = minX + 12; x < maxX - 8; x += 30) {
         const foot = [[0, 0], [-6, 0], [6, 0], [0, -4.8], [0, 3.6], [-6, 1], [6, 1]];
-        if (!foot.every(([u, v]) => inRing(ring, x + u, z + v) && !rings.some((r) => inRing(r, x + u, z + v)))) continue;
-        if (rings.some((r) => r.some((q) => Math.abs(q.x - x) < 9 && Math.abs(q.z - z) < 8))) continue;
+        if (!foot.every(([u, v]) => inRing(ring, x + u, z + v) && !RINGS.some((r) => inRing(r, x + u, z + v)))) continue;
+        if (RINGS.some((r) => r.some((q) => Math.abs(q.x - x) < 9 && Math.abs(q.z - z) < 8))) continue;
         if (nearTaxiway(x, z, 13) || taken2.some(([px, pz]) => Math.hypot(px - x, pz - z) < 30)) continue;
         rows.push({ x, z, heading: row % 2 ? 0 : Math.PI });
       }
@@ -777,17 +769,67 @@ function createAirport(group) {
   }
   const tied = rows.filter((_, i) => i % 2 === 0).slice(0, 9);
   // each one a parked plane like the others, so F takes it too
-  for (const t of tied) {
-    const c = { kind: 'plane', x: t.x, z: t.z, heading: t.heading, root: new THREE.Group() };
-    const i = craft.length;
-    craft.push(c);
-    c.root.name = `ParkedAircraft${i + 1}`;
-    const plane = makePlane(planeGeos, paints[(i * 3 + 1) % paints.length]);
-    plane.userData.prop.rotation.z = i * 1.1;
-    c.root.add(plane);
-    group.add(c.root);
-    place(c);
+  for (const t of tied) craft.push({ kind: 'plane', x: t.x, z: t.z, heading: t.heading, tied: true });
+
+  // The whole parked fleet is drawn as instances: one draw per part for every plane (each one's stripe its own paint)
+  // and one per part for the helicopters, rather than a handful of draws for each aircraft. A spot standing empty (the
+  // craft taken, or left out) is its instance shrunk to nothing.
+  const fleet = [];
+  const instanced = (geo, material, n, name, cast, receive) => {
+    const m = new THREE.InstancedMesh(geo, material, Math.max(1, n));
+    m.name = name;
+    m.castShadow = cast;
+    m.receiveShadow = receive;
+    group.add(m);
+    fleet.push(m);
+    return m;
+  };
+  const nPlanes = craft.filter((c) => c.kind === 'plane').length, nHelis = craft.length - nPlanes;
+  const fleetMats = planeMaterials(0xffffff); // the stripe white, tinted by each plane's paint (instanceColor)
+  const planeParts = ['white', 'glass', 'dark', 'stripe', 'red', 'green'].map((k) => ({ local: new THREE.Matrix4(),
+    mesh: instanced(planeGeos[k], fleetMats[k], nPlanes, `ParkedPlanes_${k}`, k === 'white' || k === 'dark' || k === 'stripe', k === 'white') }));
+  const propMesh = instanced(planeGeos.prop, fleetMats.prop, nPlanes, 'ParkedPlanes_prop', false, false);
+  const heliParts = [
+    { mesh: instanced(body, mat, nHelis, 'ParkedHelicopters_body', true, false), at: [0, 0, 0] },
+    { mesh: instanced(rotor, mat, nHelis, 'ParkedHelicopters_rotor', true, false), at: [0, 2.66, -0.35] },
+    { mesh: instanced(tail, mat, nHelis, 'ParkedHelicopters_tail', false, false), at: [0.18, 2.02, -5.62] }
+  ];
+  let nP = 0, nH = 0;
+  for (const [i, c] of craft.entries()) {
+    if (c.kind === 'plane') {
+      c.slot = nP++;
+      // (the mapped ones' paints in turn, the tied-down rows' in another order)
+      const paint = PAINTS[(c.tied ? i * 3 + 1 : i) % PAINTS.length];
+      planeParts.find((p) => p.mesh.name === 'ParkedPlanes_stripe').mesh.setColorAt(c.slot, new THREE.Color(paint));
+      // the propeller left where it stopped
+      c.parts = [...planeParts.map((p) => ({ mesh: p.mesh, local: p.local })),
+        { mesh: propMesh, local: new THREE.Matrix4().makeRotationZ(i * (c.tied ? 1.1 : 0.7)).setPosition(0, 1.38, 3.42) }];
+    } else {
+      c.slot = nH++;
+      c.parts = heliParts.map((p, k) => ({ mesh: p.mesh,
+        // blades left where they stopped
+        local: (k === 1 ? new THREE.Matrix4().makeRotationY(0.4 + i * 0.9) : new THREE.Matrix4()).setPosition(...p.at) }));
+    }
   }
+  const _root = new THREE.Matrix4(), _part = new THREE.Matrix4(), _q = new THREE.Quaternion(), _up = new THREE.Vector3(0, 1, 0);
+  for (const c of craft) place(c);
+  for (const m of fleet) {
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    m.computeBoundingSphere();
+  }
+  function place(c) {
+    const shown = !c.blocked && craft.indexOf(c) !== taken;
+    // a helicopter's skids and a plane's wheels on the apron (the plane's model stands 0.25 m over its wheels' feet; a
+    // helicopter's model as the player's rests, 0.25 + HELI_REST in controllers.js, its skids' undersides 2 cm up in it)
+    const y = groundHeight(c.x, c.z) + PAVE + (c.kind === 'plane' ? 0.25 : -0.02);
+    _root.compose(V(c.x, y, c.z), _q.setFromAxisAngle(_up, c.heading), shown ? V(1, 1, 1) : V(0, 0, 0));
+    for (const p of c.parts) {
+      p.mesh.setMatrixAt(c.slot, _part.multiplyMatrices(_root, p.local));
+      p.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+  const showFleet = () => { for (const m of fleet) m.visible = !far; };
+  showFleet();
 
   // the runway's edge lights every 60 m, a green bar of them across each threshold, and the taxiways' blue ones
   const posts = [], whiteLamps = [], greenLamps = [], blueLamps = [];
@@ -925,8 +967,10 @@ function createAirport(group) {
   // Lamp: on the Xbox the whole field isn't drawn from over a kilometre beyond its edge (device-tier.js), but for
   // airstairs the player left standing somewhere else
   let gone = false;
-  function update(dt, cam) {
-    const off = cam ? Math.hypot(cam.x - AIRFIELD_CENTRE.x, cam.z - AIRFIELD_CENTRE.z) : 0;
+  // `cam2`: the second player's camera in split screen, whose half shows the field when they're near it
+  function update(dt, cam, cam2 = null) {
+    const offOf = (c) => Math.hypot(c.x - AIRFIELD_CENTRE.x, c.z - AIRFIELD_CENTRE.z);
+    const off = cam ? Math.min(offOf(cam), cam2 ? offOf(cam2) : Infinity) : 0;
     const away = off > 1800;
     if (TIER.landmarkReach && (off > TIER.landmarkReach + 900) !== gone) {
       gone = !gone;
@@ -934,12 +978,12 @@ function createAirport(group) {
         if (stairs.some((s) => s.root === o)) continue;
         if (gone) { o.userData.shownNear = o.visible; o.visible = false; } else o.visible = o.userData.shownNear ?? true;
       }
-      if (!gone) { for (const c of craft) c.root.visible = !far && craft.indexOf(c) !== taken; if (circuit) circuit.plane.visible = !far; }
+      if (!gone) { showFleet(); if (circuit) circuit.plane.visible = !far; }
     }
     if (away !== far) {
       far = away;
-      for (const c of craft) c.root.visible = !far && craft.indexOf(c) !== taken;
-      for (const s of stairs) s.root.visible = !far && stairs.indexOf(s) !== heldStairs;
+      showFleet();
+      for (const s of stairs) s.root.visible = !far && !s.blocked && stairs.indexOf(s) !== heldStairs;
       if (circuit) circuit.plane.visible = !far;
     }
     if (far) return;
@@ -968,7 +1012,7 @@ function createAirport(group) {
   function nearest(x, z, reach, facing = () => 1) {
     let best = null, score = Infinity;
     for (const [i, c] of craft.entries()) {
-      if (i === taken) continue;
+      if (i === taken || c.blocked) continue;
       const d = Math.hypot(c.x - x, c.z - z);
       if (d >= reach) continue;
       const s = (d / reach) * facing(c.x, c.z);
@@ -978,10 +1022,12 @@ function createAirport(group) {
   }
   // take aircraft i: it becomes the player's and its spot stands empty; the one taken before is back in its own spot
   function take(i) {
+    if (!craft[i] || craft[i].blocked) return null;
     const before = craft[taken];
     taken = i;
     if (before) place(before);
     place(craft[i]);
+    for (const m of fleet) m.computeBoundingSphere();
     save('airportTaken', taken);
     save('playerCraft', craft[i].kind);
     const { x, z, heading, kind } = craft[i];
@@ -1001,6 +1047,9 @@ function createAirport(group) {
       h.planeModel.userData.version = PLANE_VERSION;
       h.tiltPivot.add(h.planeModel);
     }
+    // its wheels' feet where the helicopter's skids are (controllers.js HELI_REST: the skids 0.27 m over the tilt
+    // pivot; the plane's model stands 0.25 m over its wheels' feet), so it rolls on the pavement rather than through it
+    if (h.planeModel) h.planeModel.position.y = 0.27;
     for (const part of h.tiltPivot.children) part.visible = (part === h.planeModel) === (kind === 'plane');
     h.label = kind === 'plane' ? 'Airplane' : 'Helicopter';
     h.chaseDistance = kind === 'plane' ? 16 : 11.4;

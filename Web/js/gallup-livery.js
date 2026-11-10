@@ -11,6 +11,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { groundHeight, riverDepth, riverbedHeight, nearestWater, waterLevel } from './terrain.js';
 import { kayakGeometry, paddleGeometry } from './river-people.js';
+import { pierPush } from './river.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
 
 // the boathouse (OSM way 292066180) and its docks (ways 458993137-458993144), in metres east and south of Main & Liberty
@@ -297,11 +298,14 @@ function buildLivery(group) {
     setBoat(r.kind, r.slot, m);
   };
   rentals.forEach((_, i) => placeRental(i));
-  // somewhere out on the open water about the livery, clear of its docks
+  // somewhere out on the open water about the livery, clear of its docks and of the boats already out (riverDepth is
+  // how far into the water a point is, 0 to 1: well in, and open water 6 m to either side)
   const spawnSpot = () => {
-    for (let t = 0; t < 40; t++) {
+    for (let t = 0; t < 60; t++) {
       const a = rand() * Math.PI * 2, d = 25 + rand() * 160, px = water.x + Math.sin(a) * d, pz = water.z + Math.cos(a) * d;
-      if (riverDepth(px, pz) > 1.2 && riverDepth(px + 6, pz) > 0.8 && riverDepth(px - 6, pz) > 0.8) return [px, pz];
+      if (!(riverDepth(px, pz) > 0.95 && riverDepth(px + 6, pz) > 0.8 && riverDepth(px - 6, pz) > 0.8)) continue;
+      if (npcs.some((n) => Math.hypot(n.x - px, n.z - pz) < 8)) continue;
+      return [px, pz];
     }
     return [water.x, water.z];
   };
@@ -412,7 +416,9 @@ function buildLivery(group) {
   const SEATS = [new THREE.Vector3(0.32, 0.26, -0.22), new THREE.Vector3(-0.32, 0.26, -0.22)];
   const KAYAK_SEAT = new THREE.Vector3(0, 0.02, -0.14), PADDLE_AT = new THREE.Vector3(0, 0.58, 0.16);
   const local = new THREE.Matrix4(), held = new THREE.Matrix4(), spin = new THREE.Matrix4();
-  const open = (x, z) => riverDepth(x, z);
+  // (a bridge's pier standing in the water is no way through: river.js pierPush)
+  const pierOut = { x: 0, z: 0 };
+  const open = (x, z) => (pierPush(x, z, 1.2, pierOut) ? 0 : riverDepth(x, z));
   let shown = true;
 
   // Bumping: each boat is two circles along its keel (a pedal boat's broad, a kayak's narrow), each dock run a capsule

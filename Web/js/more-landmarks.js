@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { builder, groundOf } from './campus-landmarks.js';
+import { builder, groundOf, strips } from './campus-landmarks.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
 import { groundHeight } from './terrain.js';
@@ -106,28 +106,6 @@ const scaleRing = (ring, k) => {
   cx /= ring.length / 2; cz /= ring.length / 2;
   return ring.map((v, i) => (i % 2 ? cz + (v - cz) * k : cx + (v - cx) * k));
 };
-
-// colliders that follow a ring in strips across z, so they keep off the buildings beside it
-function strips(ring, maxY, step = 4) {
-  let z0 = Infinity, z1 = -Infinity;
-  for (let i = 1; i < ring.length; i += 2) { z0 = Math.min(z0, ring[i]); z1 = Math.max(z1, ring[i]); }
-  const n = ring.length / 2, out = [];
-  for (let z = z0; z < z1; z += step) {
-    const zb = Math.min(z1, z + step), zm = (z + zb) / 2, xs = [];
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      const az = ring[i * 2 + 1], bz = ring[j * 2 + 1];
-      if ((az <= zm) === (bz <= zm)) continue;
-      xs.push(ring[i * 2] + ((zm - az) / (bz - az)) * (ring[j * 2] - ring[i * 2]));
-    }
-    xs.sort((a, b) => a - b);
-    for (let k = 0; k + 1 < xs.length; k += 2) {
-      if (xs[k + 1] - xs[k] < 0.8) continue;
-      out.push({ minX: xs[k] + 0.3, maxX: xs[k + 1] - 0.3, minZ: z + 0.15, maxZ: zb - 0.15, maxY, keepsSurvey: true });
-    }
-  }
-  return out;
-}
 
 function tools(B) {
   // a box on a wall: u along it, d out from it

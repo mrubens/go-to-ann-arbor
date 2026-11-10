@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { positionWorld, floor, fract, sin, dot, vec2, mix, color } from 'three/tsl';
-import { drawOver } from './terrain.js';
+import { drawOver, groundHeight } from './terrain.js';
 
 // Ann Arbor's park playgrounds, where OpenStreetMap has them (GEO.playgrounds from build-annarbor.py): wood-chip
 // ground on the real outline, a play tower with a wide wave slide in the middle, and a swing set beside it where
@@ -11,7 +11,7 @@ import { drawOver } from './terrain.js';
 const GREEN = 0x2e6e45, RED = 0xc23b2c, BLUE = 0x2c5fae, YELLOW = 0xf2b705, DECK = 0x6b4a32, SEAT = 0x232323, CHAIN = 0x8a8a8a;
 
 function tinted(geo, hex) {
-  const c = new THREE.Color(hex).convertSRGBToLinear();
+  const c = new THREE.Color(hex); // already linear: three converts a hex color as it's set
   const g = geo.index ? geo.toNonIndexed() : geo;
   const n = g.attributes.position.count;
   const arr = new Float32Array(n * 3);
@@ -105,8 +105,8 @@ function instanced(geo, mat, matrices) {
 
 // `flatGeo(rings, y)` makes the chips' ground; adds everything to `group`
 function buildPlaygrounds(group, list, flatGeo, toRing, y) {
-  if (!list || !list.length) return { count: 0, top: () => -Infinity };
-  const chips = [], towers = [], swings = [], sites = [];
+  if (!list || !list.length) return { count: 0, top: () => -Infinity, colliders: [] };
+  const chips = [], towers = [], swings = [], sites = [], colliders = [];
   const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
   const place = (cx, cz, angle, along, across) => {
     const ax = Math.cos(angle), az = Math.sin(angle);
@@ -118,7 +118,15 @@ function buildPlaygrounds(group, list, flatGeo, toRing, y) {
     if (L < 6.5 || W < 4.5) continue;
     const along = L >= 14 && W >= 6.5 ? -L * 0.22 : 0;
     towers.push(place(cx, cz, angle, along, 0));
-    if (along) swings.push(place(cx, cz, angle, L * 0.27, 0));
+    if (along) {
+      swings.push(place(cx, cz, angle, L * 0.27, 0));
+      // the swing set's frame is solid: a box round its beam and A-frame legs, turned with it
+      const sx = cx + Math.cos(angle) * L * 0.27, sz = cz + Math.sin(angle) * L * 0.27, g = groundHeight(sx, sz);
+      const hx = 2.15, hz = 1.0, c = Math.cos(angle), s = Math.sin(angle);
+      const ex = Math.abs(c) * hx + Math.abs(s) * hz, ez = Math.abs(s) * hx + Math.abs(c) * hz;
+      colliders.push({ minX: sx - ex, maxX: sx + ex, minZ: sz - ez, maxZ: sz + ez, minY: g - 0.2, maxY: g + 2.5,
+        obb: { cx: sx, cz: sz, hx, hz, cs: c, sn: -s } });
+    }
     sites.push({ x: cx + Math.cos(angle) * along, z: cz + Math.sin(angle) * along, c: Math.cos(angle), s: Math.sin(angle) });
   }
   const chipGeo = mergeGeometries(chips, false);
@@ -146,7 +154,7 @@ function buildPlaygrounds(group, list, flatGeo, toRing, y) {
     }
     return -Infinity;
   };
-  return { count: towers.length, top };
+  return { count: towers.length, top, colliders };
 }
 
 export { buildPlaygrounds };

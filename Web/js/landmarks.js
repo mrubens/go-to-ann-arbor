@@ -6,7 +6,7 @@ import { buildMoreLandmarks } from './more-landmarks.js';
 import { buildDiagM } from './diag-m.js';
 import { buildGraffitiAlley } from './graffiti-alley.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
-import { STADIUM, N, radiiAt, FIELD_Y, WALL_TOP, SEAT_TOP, RIM_Y, WALL_Y, AISLE_IN, CONCOURSE } from './stadium-shape.js';
+import { STADIUM, N, radiiAt, setWallTops, FIELD_Y, WALL_TOP, SEAT_TOP, RIM_Y, WALL_Y, AISLE_IN, CONCOURSE } from './stadium-shape.js';
 import { mergeStatic, splitByCell } from './merge-static.js';
 import { TIER } from './device-tier.js';
 
@@ -25,7 +25,7 @@ function buildBigHouse(group, colliders) {
   const G = stadiumGround();
   const ROWS = 72, AISLE_EVERY = 6;
   const pos = [], col = [];
-  const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
+  const C = (hex) => new THREE.Color(hex); // already linear: three converts a hex color as it's set
   const bench = C(0xb9bdc2), riser = C(0x6d727a), aisle = C(0xd2cdc2), concrete = C(0xa6a39b), blue = C(0x00274c),
     maize = C(0xffcb05), brick = C(0x8a4d37), stone = C(0xcfc6b4), turfDark = C(0x2f6b2c);
   const quad = (a, b, c, d, color) => {
@@ -51,6 +51,8 @@ function buildBigHouse(group, colliders) {
     for (let d = -8; d <= 8; d++) sum += raw[(k + d + N) % N];
     wallTop[k] = Math.max(WALL_Y, sum / 17);
   }
+  // the parapet walked and driven on (carSurface) is this stone's top
+  setWallTops(wallTop);
   for (let k = 0; k < N; k++) {
     const k1 = k + 1, wy0 = wallTop[k], wy1 = wallTop[k1];
     const [i0, o0] = radiiAt((k / N) * Math.PI * 2), [i1, o1] = radiiAt((k1 / N) * Math.PI * 2);
@@ -104,8 +106,14 @@ function buildBigHouse(group, colliders) {
   const field = new THREE.Group();
   field.position.set(P.cx, G + FIELD_Y + 0.03, P.cz);
   field.rotation.y = Math.PI / 2 - P.angle; // the field's length (local z) along the pitch's long side
+  // one material per color, so the hundreds of stripes and marks merge into a few draws (mergeStatic, by material)
+  const flatMats = new Map();
+  const flatMat = (color) => {
+    if (!flatMats.has(color)) flatMats.set(color, new THREE.MeshStandardNodeMaterial({ color, roughness: 0.9 }));
+    return flatMats.get(color);
+  };
   const flat = (w, d, color, y = 0, x = 0, z = 0) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), new THREE.MeshStandardNodeMaterial({ color, roughness: 0.9 }));
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), flatMat(color));
     m.position.set(x, y, z);
     m.receiveShadow = true;
     field.add(m);
@@ -326,18 +334,34 @@ function buildBigHouse(group, colliders) {
     }
   }
 
-  // Keep the survey's pieces of the stadium out, and people, bikes and traffic outside its wall (a car may drive in over it)
+  // Keep people, bikes and traffic outside the wall (a car may drive in over it), on the wall's own outline so the
+  // ground beyond it and the survey's neighbors stay clear (keepsSurvey); it stands for the survey's blocks inside
+  // the wall (the bowl and the two side towers), which the block filter drops (`replaces`)
+  const outer = [];
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (let k = 0; k < N; k++) {
     const a = (k / N) * Math.PI * 2, r = radiiAt(a)[1];
-    minX = Math.min(minX, cx + Math.cos(a) * r); maxX = Math.max(maxX, cx + Math.cos(a) * r);
-    minZ = Math.min(minZ, cz + Math.sin(a) * r); maxZ = Math.max(maxZ, cz + Math.sin(a) * r);
+    const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+    outer.push({ x, z });
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
   }
-  colliders.push({ minX, maxX, minZ, maxZ, maxY: G + 45, stadium: true }); // the helicopter flies into the bowl
+  const inside = (x, z) => Math.hypot(x - cx, z - cz) < radiiAt(Math.atan2(z - cz, x - cx))[1];
+  const replaces = REAL_BUILDINGS.filter((b) => b.maxX > minX && b.minX < maxX && b.maxZ > minZ && b.minZ < maxZ
+    && inside(b.cx, b.cz));
   // the survey draws each end's video board as a thin block just outside the wall: the boards above stand for them
   for (const b of REAL_BUILDINGS) {
     if (b.maxZ - b.minZ > 6 || b.maxX - b.minX < 30 || b.maxX < minX || b.minX > maxX) continue;
-    if (b.maxZ > minZ - 10 && b.minZ < minZ + 4 || b.minZ < maxZ + 10 && b.maxZ > maxZ - 4) colliders.push({ replaces: b, minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, maxY: G + 30, keepsSurvey: true });
+    if (b.maxZ > minZ - 10 && b.minZ < minZ + 4 || b.minZ < maxZ + 10 && b.maxZ > maxZ - 4) replaces.push(b);
+  }
+  colliders.push({ minX, maxX, minZ, maxZ, maxY: G + 45, polygon: { outer, holes: [] }, stadium: true, keepsSurvey: true,
+    replaces }); // the helicopter flies into the bowl
+  // the video boards and their legs are solid where they're drawn (the helicopter and a car on the concourse meet them)
+  for (const s of [-1, 1]) {
+    const bz = cz + s * (radiiAt(s < 0 ? -Math.PI / 2 : Math.PI / 2)[1] - 2);
+    colliders.push({ minX: cx - 17.1, maxX: cx + 17.1, minZ: bz - 1.1, maxZ: bz + 1.1, minY: G + 16, maxY: G + 30, solid: true });
+    for (const lx of [-12, 12]) colliders.push({ minX: cx + lx - 0.8, maxX: cx + lx + 0.8, minZ: bz - 0.8, maxZ: bz + 0.8,
+      minY: G - 1, maxY: G + 16, solid: true });
   }
   // stood on the ground it was measured from: setOnTerrain leaves it be
   group.userData.terrain = 'set';

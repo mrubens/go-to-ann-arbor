@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { positionWorld, vec2, vec3, float, floor, fract, sin, dot, mix, smoothstep, abs, fwidth, min } from 'three/tsl';
 import { TOWN_BOUNDS, inTown } from './city-config.js';
 import { groundHeight, cityGround } from './terrain.js';
-import { coreTriangles, coreHeightAt } from './ground-core.js';
+import { coreTriangles, coreHeightAt, underDrops } from './ground-core.js';
 import { log } from '../lamp-game.js';
 import { TIER } from './device-tier.js';
 
@@ -69,6 +69,17 @@ function buildOutskirts(scene) {
       if (inTown(cx0 - 25, cz0 - 25) && inTown(cx0 + STEP + 25, cz0 - 25) && inTown(cx0 - 25, cz0 + STEP + 25) && inTown(cx0 + STEP + 25, cz0 + STEP + 25)) continue;
       const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1;
       idx.push(a, c, b, b, c, d);
+      // a cell reaching into the town: its corners in the town go down to under the lowest ground across the cell, so
+      // the country between them stays under the town's own ground (lawns, road ends) where the two overlap; corners
+      // out in the country keep their height, so nothing changes where only the country is drawn
+      let touches = false;
+      for (let u = 0; u <= STEP && !touches; u += STEP / 2) for (let v = 0; v <= STEP && !touches; v += STEP / 2) touches = inTown(cx0 + u, cz0 + v);
+      if (!touches) continue;
+      let low = Infinity;
+      for (let u = 0; u <= STEP; u += 10) for (let v = 0; v <= STEP; v += 10) low = Math.min(low, groundHeight(cx0 + u, cz0 + v));
+      for (const [k, x, z] of [[a, cx0, cz0], [b, cx0 + STEP, cz0], [c, cx0, cz0 + STEP], [d, cx0 + STEP, cz0 + STEP]]) {
+        if (inTown(x, z)) pos[k * 3 + 1] = Math.min(pos[k * 3 + 1], low - 0.3);
+      }
     }
   }
   const geo = new THREE.BufferGeometry();
@@ -143,17 +154,20 @@ function finishOutskirts(scene, group, pos, nx, nz, x0, x1, z0, z1, mat) {
 }
 
 // The city's mesh, coarsely cut, 0.9 m under it, over the city's bounds
-// how far the coarse ground is kept under the fine: on an Xbox the fine ground strays further (TIER.ground, terrain.js)
-const UNDER_DROP = TIER.ground ? 3 : 0.9;
+// how far the coarse ground is kept under the fine at least: on an Xbox the fine ground strays further (TIER.ground,
+// terrain.js); and where a coarse triangle rises over the fine ground (a dip or a bank it spans), its corners go down
+// by that much and a margin more, so it never shows through a street or a lawn
+const UNDER_DROP = TIER.ground ? 3 : 0.9, UNDER_MARGIN = 0.5;
 function undergroundOf({ core, under }, B, mat) {
-  const tri = coreTriangles(core, under), size = core.size;
+  const tri = coreTriangles(core, under), size = core.size, drops = underDrops(core, under);
   const index = new Map(), pos = [], idx = [];
   const vertex = (cx, cz) => {
     const k = cz * size + cx;
     let i = index.get(k);
     if (i === undefined) {
       index.set(k, (i = pos.length / 3));
-      pos.push(core.x0 + cx * core.step, coreHeightAt(core, k) - UNDER_DROP, core.z0 + cz * core.step);
+      const drop = Math.max(UNDER_DROP, (drops.get(k) || 0) + UNDER_MARGIN);
+      pos.push(core.x0 + cx * core.step, coreHeightAt(core, k) - drop, core.z0 + cz * core.step);
     }
     return i;
   };

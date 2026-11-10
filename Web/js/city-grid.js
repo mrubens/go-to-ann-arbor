@@ -1564,52 +1564,101 @@ function buildCityGrid(scene, yards = null) {
     }
     return false;
   };
+  // The ring is mitred where it can be: each edge's strip runs from the curb to the outline offset inward by the
+  // sidewalk's width, so the strips meet at the corners and stay inside the curb however sharp the corner. Where that
+  // inner outline crosses itself (a big park's ragged edge, a strip narrower than two sidewalks), each edge's strip is
+  // a rectangle instead, cut to the block's outline, so none reaches past the curb into the street. Each face is laid once,
+  // the way it's seen (up, or out over the curb), and carries no uv (the sidewalk's material doesn't read one).
   const ringSlab = (b) => {
     const ring = offsetPolygonInward(b.poly, 0.25);
     if (!ring || ring.length < 3) return false;
-    // its winding, so each edge's strip goes inward
+    const W = 5, y0 = 0.03, y1 = SW_TOP, n = ring.length;
+    let inner = offsetPolygonInward(ring, W);
+    if (inner && inner.some((p) => !pointInPolygonXZ(ring, p.x, p.z))) inner = null;
+    // its winding, so each edge's inward side is known
     let area = 0;
-    for (let i = 0; i < ring.length; i++) { const p = ring[i], q = ring[(i + 1) % ring.length]; area += p.x * q.z - q.x * p.z; }
-    const sgn = area > 0 ? 1 : -1, W = 5, y0 = 0.03, y1 = SW_TOP;
+    for (let i = 0; i < n; i++) { const p = ring[i], q = ring[(i + 1) % n]; area += p.x * q.z - q.x * p.z; }
+    const sgn = area > 0 ? 1 : -1;
+    // each edge's inward normal (null for one too short to have one)
+    const normals = ring.map((p, i) => {
+      const q = ring[(i + 1) % n], L = Math.hypot(q.x - p.x, q.z - p.z);
+      return L < 0.01 ? null : { x: -(q.z - p.z) / L * sgn, z: (q.x - p.x) / L * sgn };
+    });
     const pos = [];
-    const tri = (a, b2, c) => pos.push(...a, ...b2, ...c);
-    for (let i = 0; i < ring.length; i++) {
-      const p = ring[i], q = ring[(i + 1) % ring.length], r = ring[(i + 2) % ring.length];
-      const L = Math.hypot(q.x - p.x, q.z - p.z);
-      if (L < 0.01) continue;
-      const nx = -(q.z - p.z) / L * sgn * W, nz = (q.x - p.x) / L * sgn * W;
+    // a triangle facing (fx, fy, fz): turned round if it was wound the other way
+    const face = (a, b2, c, fx, fy, fz) => {
+      const ux = b2[0] - a[0], uy = b2[1] - a[1], uz = b2[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+      const d = (uy * vz - uz * vy) * fx + (uz * vx - ux * vz) * fy + (ux * vy - uy * vx) * fz;
+      if (d >= 0) pos.push(...a, ...b2, ...c); else pos.push(...a, ...c, ...b2);
+    };
+    // a flat convex piece of the top (a strip's rectangle, a corner's triangle), cut to the block: the block's outline
+    // clipped by each of the piece's sides, so whatever of it lies past the curb is left out
+    const top = (pts) => {
+      let a2 = 0;
+      for (let k = 0; k < pts.length; k++) { const u = pts[k], v = pts[(k + 1) % pts.length]; a2 += u.x * v.z - v.x * u.z; }
+      if (Math.abs(a2) < 1e-6) return;
+      const s2 = a2 > 0 ? 1 : -1;
+      let cut = b.poly; // (the curb itself: the ring inset from it can cross itself at a spike)
+      for (let k = 0; k < pts.length && cut.length >= 3; k++) {
+        const u = pts[k], v = pts[(k + 1) % pts.length], mx = -(v.z - u.z) * s2, mz = (v.x - u.x) * s2;
+        cut = clipPolygonHalfPlane(cut, mx, mz, mx * u.x + mz * u.z);
+      }
+      if (cut.length < 3) return;
+      // (where the curb bends back in and out across the piece, the clip joins the parts along the piece's sides:
+      // a triangle laid over such a join, outside the block, is left out)
+      const inside = (x, z) => pointInPolygonXZ(b.poly, x, z);
+      const tris = THREE.ShapeUtils.triangulateShape(cut.map((v) => new THREE.Vector2(v.x, v.z)), []);
+      for (const [a, b2, c] of tris) {
+        const A = cut[a], B = cut[b2], C = cut[c], mx = (A.x + B.x + C.x) / 3, mz = (A.z + B.z + C.z) / 3;
+        if (cut.length > 4 && ![A, B, C].every((v) => inside(v.x + (mx - v.x) * 0.02, v.z + (mz - v.z) * 0.02)) || !inside(mx, mz)) continue;
+        face([A.x, y1, A.z], [B.x, y1, B.z], [C.x, y1, C.z], 0, 1, 0);
+      }
+    };
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, p = ring[i], q = ring[j], N = normals[i];
+      if (!N) continue;
+      const nx = N.x, nz = N.z;
+      const pi = inner ? inner[i] : { x: p.x + nx * W, z: p.z + nz * W }, qi = inner ? inner[j] : { x: q.x + nx * W, z: q.z + nz * W };
       // no sidewalk along the riverbank: the lawn runs down to the water there
-      if (facesWater(p, q, nx / W, nz / W)) {
+      if (facesWater(p, q, nx, nz)) {
         // lawn instead, from the block's edge in to where the lawn starts
-        const ox = -nx / W * 0.6, oz = -nz / W * 0.6, g = LIFT.bank;
-        const a = [p.x + ox, g, p.z + oz], b2 = [q.x + ox, g, q.z + oz], c = [q.x + nx, g, q.z + nz], d = [p.x + nx, g, p.z + nz];
+        const ox = -nx * 0.6, oz = -nz * 0.6, g = LIFT.bank;
+        const a = [p.x + ox, g, p.z + oz], b2 = [q.x + ox, g, q.z + oz], c = [qi.x, g, qi.z], d = [pi.x, g, pi.z];
         bankLawn.push(...a, ...c, ...b2, ...a, ...d, ...c);
         continue;
       }
-      const A = [p.x, y1, p.z], B = [q.x, y1, q.z], C = [q.x + nx, y1, q.z + nz], D = [p.x + nx, y1, p.z + nz];
-      tri(A, C, B); tri(A, D, C); tri(A, B, C); tri(A, C, D);
-      // the slab's face above the curb
-      const a0 = [p.x, y0, p.z], b0 = [q.x, y0, q.z];
-      tri(a0, b0, B); tri(a0, B, A); tri(a0, B, b0); tri(a0, A, B);
-      // filling the corner to the next edge's strip
-      const L2 = Math.hypot(r.x - q.x, r.z - q.z);
-      if (L2 >= 0.01 && !facesWater(q, r, -(r.z - q.z) / L2 * sgn, (r.x - q.x) / L2 * sgn)) {
-        const E = [q.x - (r.z - q.z) / L2 * sgn * W, y1, q.z + (r.x - q.x) / L2 * sgn * W];
-        tri(B, C, E); tri(B, E, C);
+      if (inner) {
+        const A = [p.x, y1, p.z], B = [q.x, y1, q.z], C = [qi.x, y1, qi.z], D = [pi.x, y1, pi.z];
+        face(A, C, B, 0, 1, 0); face(A, D, C, 0, 1, 0);
+      } else {
+        top([p, q, qi, pi]);
+        // filling the corner to the next edge's strip (at an outward corner sharper than a right angle the two strips
+        // already overlap there)
+        const M = normals[j], r = ring[(j + 1) % n];
+        const outward = (r.x - q.x) * nx + (r.z - q.z) * nz > 0;
+        if (M && !(outward && M.x * nx + M.z * nz < 0) && !facesWater(q, r, M.x, M.z)) top([q, qi, { x: q.x + M.x * W, z: q.z + M.z * W }]);
       }
+      // the slab's face above the curb
+      const a0 = [p.x, y0, p.z], b0 = [q.x, y0, q.z], A = [p.x, y1, p.z], B = [q.x, y1, q.z];
+      face(a0, b0, B, -nx, 0, -nz); face(a0, B, A, -nx, 0, -nz);
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.computeVertexNormals();
-    const proto = slabGeos[0] || createExtrudedPolygonMesh(ring, y0, y1 - y0, sidewalkMat).geometry;
-    for (const name of Object.keys(proto.attributes)) {
-      if (name !== 'position' && name !== 'normal' && !geo.attributes[name]) {
-        const it = proto.attributes[name].itemSize;
-        geo.setAttribute(name, new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count * it), it));
-      }
-    }
     slabGeos.push(geo);
     return true;
+  };
+  // An extruded slab or curb without its bottom (it lies on the ground, never seen) or its uv (nothing reads it): an
+  // extrusion's first group is its two lids, the bottom's triangles first
+  const withoutBottom = (geo) => {
+    const lids = geo.groups[0]?.count || 0, from = lids / 2;
+    const out = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal']) {
+      const a = geo.attributes[name];
+      if (a) out.setAttribute(name, new THREE.BufferAttribute(a.array.slice(from * a.itemSize), a.itemSize));
+    }
+    geo.dispose();
+    return out;
   };
   for (const b of BLOCKS) {
     if (b.rect) {
@@ -1620,10 +1669,10 @@ function buildCityGrid(scene, yards = null) {
     } else {
       // curb (granite) ring under a sidewalk slab inset by 0.25 m, like the instanced pair below
       const curb = createExtrudedPolygonMesh(b.poly, 0.0, LIFT.curb, curbMat).geometry;
-      curbGeos.push(curb);
+      curbGeos.push(withoutBottom(curb));
       const inner = offsetPolygonInward(b.poly, 0.25);
       if (b.lawn && !b.median && b.area > 400 && ringSlab(b)) { /* only its sidewalk ring */ }
-      else if (inner) slabGeos.push(createExtrudedPolygonMesh(inner, 0.03, SW_TOP - 0.03, sidewalkMat).geometry);
+      else if (inner) slabGeos.push(withoutBottom(createExtrudedPolygonMesh(inner, 0.03, SW_TOP - 0.03, sidewalkMat).geometry));
       // rect cover for the consumers that work on rectangles: the lot rects grown back out to the curb
       for (const [x0, x1, z0, z1] of b.rects) {
         const r = { minX: x0 - 4.4, maxX: x1 + 4.4, minZ: z0 - 4.4, maxZ: z1 + 4.4 };
@@ -2003,8 +2052,8 @@ function buildCityGrid(scene, yards = null) {
   // Raised sidewalk blocks bound the roads (the planted malls down Park Ave, Broadway & co. are obstacles in the
   // roadway, handed over with the footprints)
   const sidewalks = roadSidewalks;
-  // Player colliders of the South Street Viaduct's columns, ramps and portal
-  const colliders = (fdrViaduct && fdrViaduct.colliders) || [];
+  // Player colliders of the South Street Viaduct's columns, ramps and portal, and the playgrounds' swing sets
+  const colliders = [...((fdrViaduct && fdrViaduct.colliders) || []), ...(playgrounds.colliders || [])];
   // Lamp: what the other parts read from this module, handed back with the grid, so a kept grid gives them back when
   // the module runs again in place (restoreCityGrid) instead of leaving them empty (the parks' and woods' trees)
   const shared = { bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes, pavedPlazaRects, sidewalkBlocks, fdrViaduct,

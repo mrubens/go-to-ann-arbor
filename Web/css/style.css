@@ -68,7 +68,9 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
-:focus-visible {
+:focus-visible,
+.pad-focus {
+  /* (.pad-focus: the button a controller is on, gamepad-controls.js: a focus a script gives isn't always drawn) */
   outline: 2px solid rgba(255, 255, 255, 0.85);
   outline-offset: 2px;
 }

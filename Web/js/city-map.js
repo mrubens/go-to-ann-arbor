@@ -725,7 +725,7 @@ class CityMapSystem {
           if (Math.hypot(dx, dy) > 5) this.dragMoved = true;
           this.viewCenterX = this.panStart.cx - dx / this.viewZoom;
           this.viewCenterZ = this.panStart.cz - dy / this.viewZoom;
-          this.renderFullMap();
+          this.queueFullMap();
           return;
         }
 
@@ -772,18 +772,22 @@ class CityMapSystem {
         this.renderFullMap();
       });
 
-      // Wheel zoom about the cursor (the place under it stays put)
+      // Wheel zoom about the cursor (the place under it stays put), by how far the wheel turned: a trackpad sends many
+      // small steps and its glide after, a mouse one big step a notch (about 1.18x, as it always was). A sideways
+      // swipe doesn't zoom
       this.fullCanvas.addEventListener('wheel', (e) => {
         e.preventDefault();
+        if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
         const rect = this.fullCanvas.getBoundingClientRect();
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
         const before = this.screenToWorld(mx, my, rect.width, rect.height);
-        const factor = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+        const px = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? rect.height : 1);
+        const factor = Math.exp(-Math.max(-110, Math.min(110, px)) * 0.0015);
         this.viewZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.viewZoom * factor));
         this.viewCenterX = before.x - (mx - rect.width * 0.5) / this.viewZoom;
         this.viewCenterZ = before.z - (my - rect.height * 0.5) / this.viewZoom;
-        this.renderFullMap();
+        this.queueFullMap();
       }, { passive: false });
     }
   }
@@ -855,14 +859,15 @@ class CityMapSystem {
   }
 
   // The controller on the full map: the left stick moves a cursor (pushing the map along at its edges), the right
-  // stick pans, the triggers or the pad's up and down zoom about the cursor, A teleports there and X sets the GPS route there
-  gamepad({ move, pan, zoom, go, mark }, dt) {
+  // stick pans, the triggers or the pad's up and down zoom about the cursor, A teleports there, X sets the GPS route
+  // there and Y clears it
+  gamepad({ move, pan, zoom, go, mark, clear }, dt) {
     if (!this.isFullMapOpen || !this.fullCanvas) return;
     dt = Math.max(0, Math.min(0.1, dt || 0));
     const { w, h } = this.fullSize();
     const c = this.cursor;
     if (!c.on) {
-      if (!(Math.hypot(move.x, move.y) > 0.05 || Math.hypot(pan.x, pan.y) > 0.05 || Math.abs(zoom) > 0.05 || go || mark)) return;
+      if (!(Math.hypot(move.x, move.y) > 0.05 || Math.hypot(pan.x, pan.y) > 0.05 || Math.abs(zoom) > 0.05 || go || mark || clear)) return;
       c.x = w * 0.5;
       c.y = h * 0.5;
       this.showCursor(true);
@@ -902,6 +907,9 @@ class CityMapSystem {
       const wPos = this.clampToTown(this.screenToWorld(c.x, c.y, w, h));
       this.waypoint = { x: wPos.x, z: wPos.z, name: getLocationLabel(wPos.x, wPos.z) };
       changed = true;
+    } else if (clear && this.waypoint) {
+      this.waypoint = null;
+      changed = true;
     }
     if (go) {
       const there = this.overviewHit(c.x, c.y);
@@ -914,7 +922,7 @@ class CityMapSystem {
         return;
       }
     }
-    if (changed) this.renderFullMap();
+    if (changed) this.queueFullMap();
     const at = this.screenToWorld(c.x, c.y, w, h);
     this.cursorPlace = getLocationLabel(at.x, at.z);
     this.drawCursorHint();
@@ -940,8 +948,10 @@ class CityMapSystem {
     const el = this.elHoverInfo;
     if (!el || !this.cursor.on) return;
     const place = this.cursorPlace || '';
-    if (!force && el.dataset.place === place) return;
-    el.dataset.place = place;
+    // (written again when the route is set or cleared, as Y's part comes and goes with it)
+    const key = `${place}|${this.waypoint ? 1 : 0}`;
+    if (!force && el.dataset.place === key) return;
+    el.dataset.place = key;
     el.replaceChildren(place);
     const part = (what, text) => {
       const g = glyph(what);
@@ -950,6 +960,7 @@ class CityMapSystem {
     };
     part(BUTTON.A, 'teleport here');
     part(BUTTON.X, 'set route');
+    if (this.waypoint) part(BUTTON.Y, 'clear route');
     part(STICK.RIGHT, 'pan');
     const zoomIn = glyph(TRIGGER.RT), zoomOut = glyph(TRIGGER.LT);
     if (zoomIn && zoomOut) el.append(' · ', zoomOut, ' ', zoomIn, ' zoom');
@@ -1413,7 +1424,15 @@ class CityMapSystem {
   // =========================================================================
   // 2. FULL NEW YORK CITY INTERACTIVE STREET MAP MODAL ([M])
   // =========================================================================
+  // A change to the view from input: drawn by the next frame (update), which draws the map anyway, rather than once
+  // more for each event (several can land in one frame); drawn here if no frame comes
+  queueFullMap() {
+    if (this.fullQueued) return;
+    this.fullQueued = setTimeout(() => this.renderFullMap(), 100);
+  }
+
   renderFullMap() {
+    if (this.fullQueued) { clearTimeout(this.fullQueued); this.fullQueued = 0; }
     this.clearRouteBtn?.classList.toggle('hidden', !this.waypoint);
     if (!this.fullCtx || !this.fullCanvas || !this.isFullMapOpen) return;
     const ctx = this.fullCtx;
@@ -1432,10 +1451,25 @@ class CityMapSystem {
 
     // Ground layers, names & landmark pins: re-rendered only when the view, the search or the buildings change
     const fp = footprintLayers(this.allBlocks);
-    const key = `${v.cx}|${v.cz}|${v.s}|${this.fullCanvas.width}|${this.fullCanvas.height}|${this.searchHighlight}|${fp ? fp.version : 0}`;
+    const rest = `${this.fullCanvas.width}|${this.fullCanvas.height}|${this.searchHighlight}|${fp ? fp.version : 0}`;
+    const key = `${v.cx}|${v.cz}|${v.s}|${rest}`;
     if (!this.fullStatic) this.fullStatic = document.createElement('canvas');
-    if (key !== this.fullStaticKey) {
+    // While the view is being panned or zoomed, the layers already drawn are moved and scaled to it (they're a
+    // picture), and drawn afresh once it rests: drawing every footprint, block and path again for each step held the
+    // map to a few frames a second
+    const now = performance.now();
+    if (key !== this.fullViewKey) {
+      this.fullViewKey = key;
+      this.fullMovedAt = now;
+    }
+    const was = this.fullStaticView;
+    const k = was ? v.s / was.s : 1;
+    const shiftX = was ? (was.cx - v.cx) * v.s * dpr : 0, shiftY = was ? (was.cz - v.cz) * v.s * dpr : 0;
+    const glide = key !== this.fullStaticKey && was && was.rest === rest && now - this.fullMovedAt < 120 &&
+      k > 0.5 && k < 2 && Math.abs(shiftX) < this.fullCanvas.width * 0.5 && Math.abs(shiftY) < this.fullCanvas.height * 0.5;
+    if (key !== this.fullStaticKey && !glide) {
       this.fullStaticKey = key;
+      this.fullStaticView = { cx: v.cx, cz: v.cz, s: v.s, rest };
       const sc = this.fullStatic;
       if (sc.width !== this.fullCanvas.width || sc.height !== this.fullCanvas.height) {
         sc.width = this.fullCanvas.width;
@@ -1443,10 +1477,22 @@ class CityMapSystem {
       }
       this.renderFullMapStatic(sc.getContext('2d'), v);
     }
+    if (glide) {
+      // drawn afresh shortly after the last step, even where no frame comes to do it
+      clearTimeout(this.fullSettle);
+      this.fullSettle = setTimeout(() => this.renderFullMap(), 150);
+    }
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (glide) {
+      const W = this.fullCanvas.width, H = this.fullCanvas.height;
+      ctx.fillStyle = MAP.water;
+      ctx.fillRect(0, 0, W, H);
+      ctx.setTransform(k, 0, 0, k, W * 0.5 * (1 - k) + shiftX, H * 0.5 * (1 - k) + shiftY);
+    }
     ctx.drawImage(this.fullStatic, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     v.screen(ctx);
     const toX = (wx) => v.toX(wx);
     const toY = (wz) => v.toY(wz);

@@ -8,6 +8,7 @@ import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { riverFlow, riverDepth, waterLevel } from './terrain.js';
 import { chuteNear, CASCADE_ENTRY } from './cascades.js';
+import { pierPush } from './river.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
 
 const STEP = 3; // metres between the points of the way down
@@ -22,10 +23,13 @@ function traceWay() {
   const pts = [];
   let x = CASCADE_ENTRY.x, z = CASCADE_ENTRY.z, tx = CASCADE_ENTRY.tx, tz = CASCADE_ENTRY.tz;
   const flow = { x: 0, z: 0 };
+  const pierOut = { x: 0, z: 0 };
   const room = (nx, nz, side) => {
     let w = 0;
     for (let o = 1.5; o <= 24; o += 1.5) {
-      if (riverDepth(x + nx * o * side, z + nz * o * side) < 0.6) break;
+      // (a bridge's pier is no more open water than the bank: river.js pierPush)
+      const px = x + nx * o * side, pz = z + nz * o * side;
+      if (riverDepth(px, pz) < 0.6 || pierPush(px, pz, 1.2, pierOut)) break;
       w = o;
     }
     return w;
@@ -179,7 +183,8 @@ function buildRiverPeople(group) {
     return pull;
   }
 
-  function update(dt, elapsed, focus) {
+  // `focus2`: the second player's view in split screen, near which they're drawn and posed too
+  function update(dt, elapsed, focus, focus2 = null) {
     if (dt <= 0) return;
     time = elapsed;
     crowd.begin();
@@ -188,7 +193,8 @@ function buildRiverPeople(group) {
       // on through the chutes a little quicker, and back in at the top at the end of the run
       p.s += p.speed * (1 + 0.9 * pull) * dt;
       if (p.s > Math.min(length, RUN) - 4) { p.s = rand() * 12; p.at = 0; p.heading = null; }
-      const fx = p.x - focus.x, fz = p.z - focus.z, far = Math.hypot(fx, fz);
+      const fx = p.x - focus.x, fz = p.z - focus.z;
+      const far = focus2 ? Math.min(Math.hypot(fx, fz), Math.hypot(p.x - focus2.x, p.z - focus2.z)) : Math.hypot(fx, fz);
       if (far > DRAWN) {
         if (p.kayak) { hulls.setMatrixAt(p.slot, none); cockpits.setMatrixAt(p.slot, none); paddles.setMatrixAt(p.slot, none); }
         else tubes.setMatrixAt(p.slot, none);

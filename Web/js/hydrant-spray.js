@@ -128,6 +128,8 @@ function createHydrantSpray(scene) {
         d.vy = (wild ? 7 + random() * 4 : 12 + random() * 2.6) * Math.sqrt(pr);
         d.r = 0.006 + random() * 0.012;
         d.age = 0; d.life = 4; d.splash = false;
+        // the ground it falls back to: the hydrant's own (flat enough over the few metres a drop goes), looked up once
+        d.floor = gy.g + 0.04;
       }
       // spray hanging where the column breaks up
       gy.mistCarry += dt * 28 * pr;
@@ -154,7 +156,7 @@ function createHydrantSpray(scene) {
       d.vx = (d.vx - WIND_X) * drag + WIND_X; d.vz = (d.vz - WIND_Z) * drag + WIND_Z;
       d.vy *= drag;
       d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
-      const floor = groundHeight(d.x, d.z) + 0.04;
+      const floor = d.floor;
       if (d.y < floor) {
         // a landing drop throws up a little splash, once
         if (!d.splash && d.vy < -3 && random() < 0.5) {

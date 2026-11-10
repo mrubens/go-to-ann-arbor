@@ -154,7 +154,9 @@ const BLOCKS = GEO.blocks.map(([flat, rects, park, parkName, isRect, frames, law
     minX, maxX, minZ, maxZ,
     cx: a ? cx / (6 * a) : (minX + maxX) / 2,
     cz: a ? cz / (6 * a) : (minZ + maxZ) / 2,
-    median: /Malls?$/.test(parkName) || Math.min(maxX - minX, maxZ - minZ) < 9
+    // only the narrow islands down the middle of a street: a park named "... Mall" here is a full campus block
+    // (Ingalls Mall, with Burton Tower, Hill Auditorium and the League), not a planted median
+    median: Math.min(maxX - minX, maxZ - minZ) < 9
   };
 });
 // Spatial index of the blocks (64 m cells)
@@ -351,9 +353,17 @@ function buildingNameAt(x, z) {
 
 /**
  * The street, crossing or place at any world (x, z): a landmark close by, else the named building you're beside with
- * its street, else the nearest two named roads
+ * its street, else the nearest two named roads. `prefer`: the id of a landmark just teleported to (main.js), named while
+ * the player is still at its viewpoint: a viewpoint framing a landmark from across the way can stand nearer another
+ * landmark's middle than its own (Burton Tower's beside the League, the League's by Burton Tower, the Union's across
+ * State St by the Museum of Art)
  */
-function getLocationLabel(x, z) {
+function getLocationLabel(x, z, prefer = null) {
+  const chosen = prefer && LANDMARKS.find((l) => l.id === prefer && !l.art);
+  if (chosen && Math.hypot(x - chosen.x, z - chosen.z) < 200) {
+    const near = nearestRoads(x, z, 120);
+    return `${chosen.name}${near.length ? ` · ${near[0].road.name}` : ''}`;
+  }
   // a mural or sculpture you're right beside names the place before the big landmark it's at
   // (a champion tree, much bigger, from 40 m)
   let art = null, artD = Infinity;
@@ -366,12 +376,17 @@ function getLocationLabel(x, z) {
     const near = nearestRoads(x, z, 120);
     return `${art.short}${near.length ? ` · ${near[0].road.name}` : ''}`;
   }
+  // the nearest landmark within 90 m, not the first listed: Burton Tower, Hill Auditorium and the League stand closer
+  // together than that
+  let mark = null, markD = 90;
   for (const l of LANDMARKS) {
     if (l.art) continue;
-    if (Math.hypot(x - l.x, z - l.z) < 90) {
-      const near = nearestRoads(x, z, 120);
-      return `${l.name}${near.length ? ` · ${near[0].road.name}` : ''}`;
-    }
+    const d = Math.hypot(x - l.x, z - l.z);
+    if (d < markD) { mark = l; markD = d; }
+  }
+  if (mark) {
+    const near = nearestRoads(x, z, 120);
+    return `${mark.name}${near.length ? ` · ${near[0].road.name}` : ''}`;
   }
   const building = buildingNameAt(x, z);
   if (building) {

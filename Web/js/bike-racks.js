@@ -14,6 +14,7 @@ import { MOTO_SPECS, buildMotoGeometry, createMotoMaterial } from './motorcycles
 
 const REACH = 220;
 const SHOWN = 240;
+const NEAR = 45;
 const STAND_GAP = 0.85, DOCK_GAP = 1.0;
 const FLEET = 0x3d5a80; // the docks' e-bikes, plain muted blue
 const BIKE_PAINTS = MOTO_SPECS.bicycle.paints;
@@ -124,19 +125,22 @@ function createBikeRacks(group, data) {
     group.add(kiosk);
   }
 
-  // the bikes near the camera, bicycles and e-bikes, each its own paint
-  const bikeMesh = (kind) => {
-    const g = buildMotoGeometry(MOTO_SPECS[kind], true);
+  // the bikes near the camera, bicycles and e-bikes, each its own paint: in full detail and casting shadows within
+  // NEAR, plainer and shadowless beyond (a few hundred full bikes by the Diag were millions of triangles a pass)
+  const bikeMesh = (kind, detail) => {
+    const g = buildMotoGeometry(MOTO_SPECS[kind], detail);
     g.setAttribute('paintColor', new THREE.InstancedBufferAttribute(new Float32Array(SHOWN * 3), 3));
     g.setAttribute('carState', new THREE.InstancedBufferAttribute(new Float32Array(SHOWN * 4), 4));
     const m = new THREE.InstancedMesh(g, createMotoMaterial(), SHOWN);
     m.count = 0;
+    m.visible = false;
     m.frustumCulled = false;
-    m.castShadow = true;
+    m.castShadow = detail;
     group.add(m);
     return m;
   };
-  const meshes = { bicycle: bikeMesh('bicycle'), ebike: bikeMesh('ebike') };
+  const meshes = { bicycle: [bikeMesh('bicycle', true), bikeMesh('bicycle', false)], ebike: [bikeMesh('ebike', true), bikeMesh('ebike', false)] };
+  const camAt = { x: 0, z: 0 };
   const paint = new THREE.Color();
   const taken = new Set();
   let regather = 0;
@@ -145,12 +149,13 @@ function createBikeRacks(group, data) {
 
   const fq = new THREE.Quaternion(), fq2 = new THREE.Quaternion(), fax = new THREE.Vector3();
   function draw() {
-    const n = { bicycle: 0, ebike: 0 };
+    const n = { bicycle: [0, 0], ebike: [0, 0] };
     shownSlots.length = 0;
     for (const rack of near) {
       for (const s of rack.slots) {
         if (taken.has(s)) continue;
-        const m = meshes[s.kind], i = n[s.kind];
+        const far = (s.x - camAt.x) ** 2 + (s.z - camAt.z) ** 2 > NEAR * NEAR ? 1 : 0;
+        const m = meshes[s.kind][far], i = n[s.kind][far];
         if (i >= SHOWN) continue;
         if (s.fly) m4.compose(pos.set(s.x, s.fly.y, s.z), s.fly.q, one);
         else {
@@ -161,30 +166,36 @@ function createBikeRacks(group, data) {
         m.setMatrixAt(i, m4);
         paint.setHex(s.hex);
         m.geometry.attributes.paintColor.setXYZ(i, paint.r, paint.g, paint.b);
-        n[s.kind] = i + 1;
+        n[s.kind][far] = i + 1;
         shownSlots.push(s);
       }
     }
     for (const kind of Object.keys(meshes)) {
-      const m = meshes[kind];
-      m.count = n[kind];
-      m.instanceMatrix.needsUpdate = true;
-      m.geometry.attributes.paintColor.needsUpdate = true;
+      meshes[kind].forEach((m, far) => {
+        m.count = n[kind][far];
+        m.visible = m.count > 0;
+        m.instanceMatrix.needsUpdate = true;
+        m.geometry.attributes.paintColor.needsUpdate = true;
+      });
     }
   }
 
   // the player's car or bike running into parked bikes: each one it meets goes flying ahead of it, tumbling
   const flying = new Set();
+  // where the player took a bike from its rack: the bikes locked beside it aren't struck until they've ridden clear
+  let tookAt = null;
   const bodyOf = (ent, mode) => mode === 'car' ? (ent.bike ? [0.45, 1.15] : [1.0, 2.35]) : mode === 'cyclist' ? [0.35, 0.9] : null;
   function strike(ent, mode) {
     const body = ent && bodyOf(ent, mode), sp = ent?.speed || 0;
     if (!body || Math.abs(sp) < 2.2) return;
     const px = ent.position.x, pz = ent.position.z, sn = Math.sin(ent.heading), cs = Math.cos(ent.heading);
+    if (tookAt && Math.hypot(px - tookAt.x, pz - tookAt.z) > 4) tookAt = null;
     let hits = 0;
     for (const rack of near) {
       if (Math.abs(rack.x - px) > 30 || Math.abs(rack.z - pz) > 30) continue;
       for (const s of rack.slots) {
         if (taken.has(s) || s.fly) continue;
+        if (tookAt && Math.hypot(s.x - tookAt.x, s.z - tookAt.z) < 2.5) continue;
         const g = groundHeight(s.x, s.z);
         if (Math.abs(ent.position.y - g) > 2) continue;
         const dx = s.x - px, dz = s.z - pz, lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
@@ -253,6 +264,7 @@ function createBikeRacks(group, data) {
     regather -= dt;
     if (regather > 0 || !cam) return;
     regather = 0.5;
+    camAt.x = cam.x; camAt.z = cam.z;
     near.length = 0;
     for (const rack of racks) if (Math.abs(rack.x - cam.x) < REACH && Math.abs(rack.z - cam.z) < REACH) near.push(rack);
     near.sort((a, b) => Math.hypot(a.x - cam.x, a.z - cam.z) - Math.hypot(b.x - cam.x, b.z - cam.z));
@@ -274,6 +286,7 @@ function createBikeRacks(group, data) {
   // borrow it: gone from its stand, and its look for the player's ride
   function take(slot) {
     taken.add(slot);
+    tookAt = { x: slot.x, z: slot.z };
     draw();
     return { kind: slot.kind, hex: slot.hex, style: 0 };
   }

@@ -1,5 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { groundHeight } from './terrain.js';
+import { REAL_BUILDINGS } from './building-geodata.js';
+import { polygonContains } from './building-collision.js';
 
 // Lamp: three of campus's landmarks modelled by hand in place of the survey's plain blocks, on their real outlines
 // (city-geodata.js's landmarks):
@@ -265,7 +267,13 @@ function hillAuditorium(B, site) {
   B.box(fx1, hx1, g - 2, Y(12), hz0 - 0.2, hz0 + 6, BRICK_HILL);
   B.box(hx0 - 0.2, fx0, Y(12), Y(12.7), hz0 - 0.4, hz0 + 6, LIMESTONE);
   B.box(fx1, hx1 + 0.2, Y(12), Y(12.7), hz0 - 0.4, hz0 + 6, LIMESTONE);
-  return { minX: hx0 - 0.2, maxX: hx1 + 0.2, minZ: fz - 1.5, maxZ: hz1 + 0.2, maxY: Y(22) };
+  // the hall (with the wings along its front) and the lobby front with its steps, each its own box, so the walks in
+  // front of the wings stay open; the survey's block is dropped (`replaces`) and its neighbors kept
+  const keep = { keepsSurvey: true };
+  return [
+    { minX: hx0 - 0.2, maxX: hx1 + 0.2, minZ: hz0 - 0.4, maxZ: hz1 + 0.2, maxY: Y(22), ...keep, replaces: surveyInside(site.ring) },
+    { minX: fx0 - 0.5, maxX: fx1 + 0.5, minZ: fz - 1.5, maxZ: fz1, maxY: Y(18.6), ...keep }
+  ];
 }
 
 // Lamp: a kit for walls in detail, where u runs along a wall, y up, and d out from its face. A wall (E) is its start
@@ -645,13 +653,78 @@ function michiganUnion(B, site) {
     for (const o of [-0.6, 0, 0.6]) K.oct(cx, cz + o, 0.17, Y(24.45), Y(25.1), [0.62, 0.36, 0.27]);
   }
 
-  // the box the colliders take: the outline's own extent
-  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-  for (let i = 0; i < ring.length; i += 2) {
-    minX = Math.min(minX, ring[i]); maxX = Math.max(maxX, ring[i]);
-    minZ = Math.min(minZ, ring[i + 1]); maxZ = Math.max(maxZ, ring[i + 1]);
+  // The colliders follow the outline in strips (the plaza round it stays open), the roof at the battlements and the
+  // tower to its top. The survey's blocks inside it are what the model stands for, but its main block runs on south
+  // past the outline as a wing the model doesn't draw: that block is cut back to the wing (`reshapes`), and the rest
+  // are dropped (`replaces`).
+  const out = strips(ring, Y(20.5));
+  out.push({ minX: T.x0, maxX: 604.5, minZ: T.z0, maxZ: T.z1, maxY: Y(37), keepsSurvey: true });
+  let ringMaxZ = -Infinity;
+  for (let i = 1; i < ring.length; i += 2) ringMaxZ = Math.max(ringMaxZ, ring[i]);
+  const blocks = surveyInside(ring);
+  const wingOf = (b) => {
+    const far = b.polygons[0].outer.filter((p) => p.z > ringMaxZ + 2);
+    if (b.polygons.length !== 1 || far.length < 3) return null;
+    const x0 = Math.min(...far.map((p) => p.x)), x1 = Math.max(...far.map((p) => p.x));
+    let r = clipRing(b.polygons[0].outer, (p) => p.z >= ringMaxZ, (a, c) => ({ x: a.x + (c.x - a.x) * (ringMaxZ - a.z) / (c.z - a.z), z: ringMaxZ }));
+    for (const [x, keep] of [[x1, (p) => p.x <= x1], [x0, (p) => p.x >= x0]]) {
+      r = clipRing(r, keep, (a, c) => ({ x, z: a.z + (c.z - a.z) * (x - a.x) / (c.x - a.x) }));
+    }
+    if (r.length < 3) return null;
+    const xs = r.map((p) => p.x), zs = r.map((p) => p.z);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minZ = Math.min(...zs), maxZ = Math.max(...zs);
+    return { ...b, polygons: [{ outer: r, holes: [] }], minX, maxX, minZ, maxZ, cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2 };
+  };
+  const replaced = [];
+  let reshape = null;
+  for (const b of blocks) {
+    const wing = !reshape && wingOf(b);
+    if (wing) reshape = { from: b, to: wing };
+    else replaced.push(b);
   }
-  return { minX: minX - 0.3, maxX: maxX + 0.3, minZ: minZ - 0.3, maxZ: maxZ + 0.3, maxY: Y(37) };
+  out[0].replaces = replaced;
+  if (reshape) out[0].reshapes = reshape;
+  return out;
+}
+
+// colliders that follow a ring in strips across z, so they keep off the buildings beside it
+function strips(ring, maxY, step = 4) {
+  let z0 = Infinity, z1 = -Infinity;
+  for (let i = 1; i < ring.length; i += 2) { z0 = Math.min(z0, ring[i]); z1 = Math.max(z1, ring[i]); }
+  const n = ring.length / 2, out = [];
+  for (let z = z0; z < z1; z += step) {
+    const zb = Math.min(z1, z + step), zm = (z + zb) / 2, xs = [];
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const az = ring[i * 2 + 1], bz = ring[j * 2 + 1];
+      if ((az <= zm) === (bz <= zm)) continue;
+      xs.push(ring[i * 2] + ((zm - az) / (bz - az)) * (ring[j * 2] - ring[i * 2]));
+    }
+    xs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      if (xs[k + 1] - xs[k] < 0.8) continue;
+      out.push({ minX: xs[k] + 0.3, maxX: xs[k + 1] - 0.3, minZ: z + 0.15, maxZ: zb - 0.15, maxY, keepsSurvey: true });
+    }
+  }
+  return out;
+}
+
+// The survey's blocks a model stands for: those whose middle is inside its outline ([x, z, ...])
+function surveyInside(ring) {
+  const outer = [];
+  for (let i = 0; i < ring.length; i += 2) outer.push({ x: ring[i], z: ring[i + 1] });
+  const poly = { outer, holes: [] };
+  return REAL_BUILDINGS.filter((b) => polygonContains(poly, b.cx, b.cz));
+}
+
+// A ring of {x, z} cut to one side of a line: `inside(p)` keeps a point, `cross(a, b)` is where an edge leaves or enters
+function clipRing(ring, inside, cross) {
+  const out = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[(i + ring.length - 1) % ring.length], b = ring[i];
+    if (inside(b)) { if (!inside(a)) out.push(cross(a, b)); out.push(b); } else if (inside(a)) out.push(cross(a, b));
+  }
+  return out;
 }
 
 const MODELS = [
@@ -666,7 +739,7 @@ function buildCampusLandmarks(group, colliders, sites) {
   for (const [name, make] of MODELS) {
     const site = sites[name];
     if (!site || !site.ring) continue;
-    colliders.push(make(B, site));
+    colliders.push(...[].concat(make(B, site)));
     built.push(name);
   }
   const mesh = (m, mat) => {
@@ -688,4 +761,4 @@ function buildCampusLandmarks(group, colliders, sites) {
   return built;
 }
 
-export { buildCampusLandmarks, builder, groundOf };
+export { buildCampusLandmarks, builder, groundOf, strips };

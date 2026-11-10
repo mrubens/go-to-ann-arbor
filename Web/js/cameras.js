@@ -1,12 +1,21 @@
 import * as THREE from 'three/webgpu';
 import { TIER } from './device-tier.js';
-import { groundHeight, stadiumGround, waterLevel, riverDepth } from './terrain.js';
+import { groundHeight, riverbedHeight, stadiumGround, waterLevel, riverDepth } from './terrain.js';
 import { hot, log } from '../lamp-game.js';
 
 // Lamp: the camera systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so a
 // changed preset is put on the camera in use at once (the end of this file).
 const live = hot(import.meta);
 const systems = (live.data.systems ??= new Set());
+
+// Under a street or railway bridge's deck: the ground's height there is the deck's (terrain.js groundHeight), which a
+// camera following someone well below it (more than UNDER_DECK, on the water or the river's bed) mustn't stand on; it
+// stays DECK_DEPTH under the deck's top, below its girders
+const UNDER_DECK = 1.5, DECK_DEPTH = 1.3;
+const floorUnder = (x, z, y) => {
+  const g = groundHeight(x, z);
+  return g > y + UNDER_DECK ? Math.min(g, riverbedHeight(x, z)) : g;
+};
 
 // Lamp: scenic views placed at street level, which stand on the ground where they are
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
@@ -348,6 +357,33 @@ class CameraSystem {
     this.camera.updateProjectionMatrix();
   }
 
+  // The follow camera drawn in toward the player along the line from their head until no building is in the way
+  // (controllers.js solidAt), at once, and let back out slowly once the way is clear; not for the helicopter, which flies
+  // over them, nor inside a parking structure, which keeps its own camera between its decks
+  pullClear(entity, dt) {
+    const cm = this.controllerManager;
+    let clear = 1;
+    const parking = cm.parking;
+    if (cm.solidAt && entity.type !== 'helicopter' && !(parking && parking.inside(entity.position.x, entity.position.z))) {
+      const hx = entity.position.x, hy = entity.position.y + 1.2, hz = entity.position.z;
+      const dx = this.currentPos.x - hx, dy = this.currentPos.y - hy, dz = this.currentPos.z - hz;
+      // a sample every meter or so, and the camera's own spot last
+      const n = Math.max(3, Math.min(10, Math.ceil(Math.hypot(dx, dz))));
+      for (let i = 1; i <= n; i++) {
+        const t = i / n;
+        if (cm.solidAt(hx + dx * t, hy + dy * t, hz + dz * t)) { clear = Math.max(0.12, (i - 1) / n - 0.05); break; }
+      }
+    }
+    this.wallPull = clear < (this.wallPull ?? 1) ? clear : (this.wallPull ?? 1) + (clear - (this.wallPull ?? 1)) * (1 - Math.exp(-dt * 2.5));
+    if (this.wallPull >= 0.999) return;
+    const hy = entity.position.y + 1.2, k = this.wallPull;
+    this.currentPos.set(
+      entity.position.x + (this.currentPos.x - entity.position.x) * k,
+      hy + (this.currentPos.y - hy) * k,
+      entity.position.z + (this.currentPos.z - entity.position.z) * k
+    );
+  }
+
   update(dt, elapsed) {
     const entity = this.controllerManager.getActiveEntity();
     const desiredPos = this._desiredPos;
@@ -386,7 +422,7 @@ class CameraSystem {
 
         desiredPos.set(
           entity.position.x - Math.sin(totalYaw) * horizDist,
-          Math.max(groundHeight(entity.position.x - Math.sin(totalYaw) * horizDist, entity.position.z - Math.cos(totalYaw) * horizDist) + 0.65, entity.position.y + height),
+          Math.max(floorUnder(entity.position.x - Math.sin(totalYaw) * horizDist, entity.position.z - Math.cos(totalYaw) * horizDist, entity.position.y) + 0.65, entity.position.y + height),
           entity.position.z - Math.cos(totalYaw) * horizDist
         );
 
@@ -406,7 +442,7 @@ class CameraSystem {
 
         desiredPos.set(
           entity.position.x - Math.sin(entity.heading) * backDist + Math.cos(entity.heading) * sideOffset,
-          Math.max(groundHeight(entity.position.x, entity.position.z) + 0.55, lowY),
+          Math.max(floorUnder(entity.position.x, entity.position.z, entity.position.y) + 0.55, lowY),
           entity.position.z - Math.cos(entity.heading) * backDist - Math.sin(entity.heading) * sideOffset
         );
         desiredLook.set(
@@ -552,7 +588,21 @@ class CameraSystem {
       this.followLookOffset.lerp(desiredLook.sub(entity.position), k);
       this.currentPos.set(entity.position.x, this.followBaseY, entity.position.z).add(this.followOffset);
       this.currentLookAt.set(entity.position.x, this.followBaseY, entity.position.z).add(this.followLookOffset);
-      this.currentPos.y = Math.max(groundHeight(this.currentPos.x, this.currentPos.z) + 0.55, this.currentPos.y);
+      this.currentPos.y = Math.max(floorUnder(this.currentPos.x, this.currentPos.z, entity.position.y) + 0.55, this.currentPos.y);
+      // under a street or railway bridge with the player (the kayak, a swimmer, a car on the river's bed): kept under its
+      // deck rather than lifted up through it
+      {
+        const deck = groundHeight(this.currentPos.x, this.currentPos.z), under = riverbedHeight(this.currentPos.x, this.currentPos.z);
+        // (a deck: the ground there is well over the bed under it, which only a bridge's is; not a hill behind them)
+        if (deck > entity.position.y + UNDER_DECK && deck > under + 1) {
+          const bed = under + 0.4;
+          this.currentPos.y = Math.max(bed, Math.min(this.currentPos.y, deck - DECK_DEPTH));
+          this.currentLookAt.y = Math.min(this.currentLookAt.y, deck - DECK_DEPTH);
+        }
+      }
+      // not into a building behind the player (their back to a wall, a car backed up to a storefront): drawn in along
+      // the line from them until it's clear, at once, and eased back out once there's room again
+      this.pullClear(entity, dt);
       // inside a parking structure: kept between the deck the player is on and the one over them, wherever the
       // camera is, so it never looks down through a deck from the floor above or up from the one below
       const parking = this.controllerManager.parking;
@@ -568,7 +618,7 @@ class CameraSystem {
       // a car or bike driven into the river: once its roof is under, the camera goes under with it
       const level = entity.type === 'kayak' || entity.type === 'helicopter' ? null : waterLevel(entity.position.x, entity.position.z);
       if (level != null && riverDepth(entity.position.x, entity.position.z) > 0.2 && entity.position.y + 1.3 < level) {
-        const bed = groundHeight(this.currentPos.x, this.currentPos.z) + 0.4;
+        const bed = floorUnder(this.currentPos.x, this.currentPos.z, entity.position.y) + 0.4;
         this.currentPos.y = Math.max(bed, Math.min(this.currentPos.y, level - 0.4));
         this.currentLookAt.y = Math.min(this.currentLookAt.y, level - 0.5);
       }

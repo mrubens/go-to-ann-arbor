@@ -64,6 +64,23 @@
   <link rel="modulepreload" href="./js/audio-acoustics.js" />
   <link rel="modulepreload" href="./js/audio-system.js" />
   <link rel="modulepreload" href="./js/main.js" />
+  <script>
+    // A script or the city's data that didn't come, or a browser too old for them, stops the game before its code
+    // runs (main.js says it has): the loading screen says so rather than sweeping on
+    (() => {
+      const failed = (e) => {
+        if (window.cityCodeLoaded) return;
+        if (e.type === 'error' && e.target && e.target !== window && e.target.tagName !== 'SCRIPT') return;
+        console.error(e.error || e.reason || e.message || e);
+        const status = document.getElementById('loading-status');
+        if (status) status.textContent = 'The city couldn\'t load. Close Go To Ann Arbor and open it again.';
+        const track = document.querySelector('#loading-overlay .loader-track');
+        if (track) track.style.visibility = 'hidden';
+      };
+      addEventListener('error', failed, true);
+      addEventListener('unhandledrejection', failed);
+    })();
+  </script>
   <script type="module" src="./js/main.js"></script>
   <link rel="stylesheet" href="./css/style.css?v=20261031-titlebar" />
 </head>

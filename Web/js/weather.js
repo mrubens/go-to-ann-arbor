@@ -9,27 +9,45 @@ import { Fn, float, floor, hash, instanceIndex, normalize, positionLocal, sin, u
 const STATION = 'KARB';
 const FAIR = { kind: 'fair', amount: 0, text: 'Fair', tempF: null, wind: [0, 0], live: false };
 
-// The observation's words and cloud layers, as one of: fair, partly, cloudy, overcast, fog, rain, storm, snow
+// The observation's words and cloud layers, as one of: fair, partly, cloudy, overcast, haze, fog, rain, storm, snow
 function classify(props) {
   const text = (props.textDescription || '').toLowerCase();
+  // "Showers in Vicinity" and the like are falling somewhere near the airport, not on it: they keep the clouds, but
+  // nothing falls on the player for them
+  const parts = text.split(/,|;| and /);
+  const nearby = parts.filter((s) => /in vicinity/.test(s)).join(' ');
+  const here = parts.filter((s) => !/in vicinity/.test(s)).join(' ');
   const layers = (props.cloudLayers || []).map((l) => l.amount);
-  const heavy = /heavy/.test(text) ? 1 : /light|drizzle|flurr/.test(text) ? 0.35 : 0.65;
+  const heavy = /heavy/.test(here) ? 1 : /light|drizzle|flurr/.test(here) ? 0.35 : 0.65;
   let kind = 'fair';
   if (layers.includes('OVC')) kind = 'overcast';
   else if (layers.includes('BKN')) kind = 'cloudy';
   else if (layers.includes('SCT') || layers.includes('FEW')) kind = 'partly';
-  if (/overcast/.test(text)) kind = 'overcast';
-  else if (/mostly cloudy|cloudy/.test(text)) kind = 'cloudy';
-  else if (/partly|mostly clear|mostly sunny/.test(text)) kind = 'partly';
-  if (/fog|mist|haze|smoke/.test(text)) kind = 'fog';
-  if (/rain|drizzle|shower/.test(text)) kind = 'rain';
-  if (/thunder|storm/.test(text)) kind = 'storm';
-  if (/snow|flurr|sleet|ice pellets|freezing/.test(text)) kind = 'snow';
+  // "Partly Cloudy" holds the word "cloudy", so it's read first
+  if (/overcast/.test(here)) kind = 'overcast';
+  else if (/partly|mostly clear|mostly sunny/.test(here)) kind = 'partly';
+  else if (/cloudy/.test(here)) kind = 'cloudy';
+  if (/rain|shower|thunder|storm|snow/.test(nearby) && (kind === 'fair' || kind === 'partly')) kind = 'cloudy';
+  // haze, smoke and a thin mist dim the distance a little; fog closes it in. The observation's own visibility
+  // (meters) tells a mist of several miles from a real fog
+  const seen = props.visibility && props.visibility.value;
+  if (/haze|smoke|dust/.test(here)) kind = 'haze';
+  if (/fog|mist/.test(here)) kind = Number.isFinite(seen) && seen >= 3000 ? 'haze' : 'fog';
+  // freezing rain and drizzle fall as rain; freezing fog is fog
+  if (/rain|drizzle|shower/.test(here)) kind = 'rain';
+  if (/thunder|storm/.test(here)) kind = 'storm';
+  if (/snow|flurr|sleet|ice pellets/.test(here)) kind = 'snow';
   const amount = kind === 'rain' || kind === 'snow' || kind === 'storm' ? heavy : 0;
   return { kind, amount };
 }
 
-async function fetchWeather() {
+// The last reading the service gave, kept through a failed request: a single error or a moment offline shouldn't
+// stop the rain or clear the sky. It's dropped once it's an hour old
+let lastLive = null, lastLiveAt = 0;
+const KEEP_MS = 60 * 60 * 1000;
+const RETRY_MS = 60 * 1000;
+
+async function askOnce() {
   try {
     // A browser sends its own User-Agent, which the service accepts from a page; nothing of the player's goes with it
     const res = await fetch(`https://api.weather.gov/stations/${STATION}/observations/latest`, {
@@ -38,7 +56,7 @@ async function fetchWeather() {
       // morning's 28°F at noon
       cache: 'no-store'
     });
-    if (!res.ok) return FAIR;
+    if (!res.ok) return null;
     const props = (await res.json()).properties || {};
     const { kind, amount } = classify(props);
     const c = props.temperature && props.temperature.value;
@@ -52,8 +70,23 @@ async function fetchWeather() {
       tempF: Number.isFinite(c) ? Math.round(c * 9 / 5 + 32) : null
     };
   } catch {
-    return FAIR;
+    return null;
   }
+}
+
+// A failed request is tried again a minute later, twice, before the answer falls back to the last reading (or a fair
+// day); the caller's weather stays as it was meanwhile
+async function fetchWeather() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+    const w = await askOnce();
+    if (w) {
+      lastLive = w;
+      lastLiveAt = Date.now();
+      return w;
+    }
+  }
+  return lastLive && Date.now() - lastLiveAt < KEEP_MS ? lastLive : FAIR;
 }
 
 // How each kind of weather changes a time-of-day preset: clouds, the sun's strength, haze and wet roads
@@ -62,6 +95,7 @@ const LOOKS = {
   partly: { cover: 0.5, density: 0.42, sun: 0.92, fog: 1.1, wet: 0 },
   cloudy: { cover: 0.72, density: 0.6, sun: 0.6, fog: 1.4, wet: 0 },
   overcast: { cover: 0.95, density: 0.85, sun: 0.28, fog: 2.0, wet: 0.1 },
+  haze: { cover: 0, density: 0, sun: 0.78, fog: 2.6, wet: 0 },
   fog: { cover: 0.9, density: 0.8, sun: 0.3, fog: 9.0, wet: 0.25 },
   rain: { cover: 0.97, density: 0.9, sun: 0.22, fog: 3.2, wet: 0.85 },
   storm: { cover: 1.0, density: 1.0, sun: 0.14, fog: 4.0, wet: 1.0 },

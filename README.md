@@ -48,13 +48,14 @@ It's a web page with no build step: serve `Web/` with any static web server and 
 - Uses [Historic Districts](https://ckan.a2gov.org/dataset/historic-districts) by City of Ann Arbor, None
 - Uses [Huron River at Ann Arbor gauge (04174500), live flow](https://waterdata.usgs.gov/monitoring-location/04174500/) by U.S. Geological Survey, LicenseRef-US-Government-Public-Domain
 - Uses [Amtrak GTFS timetable (Wolverine stops at Ann Arbor)](https://content.amtrak.com/content/gtfs/GTFS.zip) by Amtrak (National Railroad Passenger Corporation), None
-- Uses Huron River PFAS surface water sampling by Michigan EGLE (MPART)
+- Uses Huron River PFAS surface water sampling by Michigan EGLE (MPART), None
 - Uses [TheRide GTFS-realtime vehicle positions](https://rt.theride.org/gtfsrt/vehicles) by Ann Arbor Area Transportation Authority (TheRide)
 - Uses [University of Michigan Blue Buses GTFS timetable](https://webapps.fo.umich.edu/transit_uploads/google_transit.zip) by University of Michigan Logistics, Transportation & Parking
-- Uses Downtown Street Closures by City of Ann Arbor
+- Uses Downtown Street Closures by City of Ann Arbor, None
 - Uses [MiDrive construction and closures](https://mdotjboss.state.mi.us/MiDrive/map) by Michigan Department of Transportation
 - Uses [OpenSky Network live aircraft states](https://opensky-network.org) by The OpenSky Network
 - Uses [Ann Arbor scooter locations (GBFS)](https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs) by Bird Rides (Spin), LicenseRef-Bird-GBFS-Data-License
+- Uses [Snow depth (Open-Meteo)](https://open-meteo.com) by Open-Meteo.com, CC-BY-4.0
 
 Map data is ODbL-1.0: it stays under that license, credited, in this remix.
 
@@ -99,6 +100,10 @@ Historic Districts is used under its own terms (None).
 Huron River at Ann Arbor gauge (04174500), live flow is used under its own terms (LicenseRef-US-Government-Public-Domain).
 
 Amtrak GTFS timetable (Wolverine stops at Ann Arbor) is used under its own terms (None).
+
+Huron River PFAS surface water sampling is used under its own terms (None).
+
+Downtown Street Closures is used under its own terms (None).
 
 Ann Arbor scooter locations (GBFS) is used under its own terms (LicenseRef-Bird-GBFS-Data-License).
 

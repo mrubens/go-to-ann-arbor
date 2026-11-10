@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { uv, positionWorld, cameraPosition, fract, abs, min, float, smoothstep, mix, step, vec3 } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { asset, log } from '../lamp-game.js';
-import { setOnTerrain } from './terrain.js';
+import { setOnTerrain, groundHeight } from './terrain.js';
 import { LIFT } from './ground-lifts.js';
 
 // Lamp: the town's baseball and softball diamonds (data/ball-diamonds.json, Assets/Tools/build-ball-diamonds.py, from
@@ -229,9 +229,24 @@ function createBallDiamonds(group, data) {
   inst(frameGeometry(2.4, 1.2), steel, placed.low, Y, 200);
   inst(benchGeometry(), alum, placed.benches, Y, 200);
 
+  // the chain link, its frames and the benches are solid: a thin turned box for each fence panel (the helicopter
+  // passes over them), and one round each bench
+  const colliders = [];
+  const solid = (list, hx, hz, h, thin) => {
+    for (const [x, z, yaw] of list) {
+      const c = Math.cos(yaw), s = Math.sin(yaw), g = groundHeight(x, z);
+      const ex = Math.abs(c) * hx + Math.abs(s) * hz, ez = Math.abs(s) * hx + Math.abs(c) * hz;
+      colliders.push({ minX: x - ex, maxX: x + ex, minZ: z - ez, maxZ: z + ez, minY: g - 0.2, maxY: g + h,
+        obb: { cx: x, cz: z, hx, hz, cs: c, sn: s }, ...(thin ? { thin: true } : {}) });
+    }
+  };
+  solid(placed.tall, 1.2, 0.08, 3.6, true);
+  solid(placed.low, 1.2, 0.08, 1.2, true);
+  solid(placed.benches, 2.25, 0.3, 0.9, false);
+
   const lifted = setOnTerrain(group);
   log(`[ball diamonds] ${D.length / 6} diamonds, ${placed.tall.length + placed.low.length} fence panels, ${placed.benches.length} benches, ${pos.length / 9} ground triangles`);
-  return Promise.resolve(lifted).then(() => ({ seats, count: D.length / 6 }));
+  return Promise.resolve(lifted).then(() => ({ seats, colliders, count: D.length / 6 }));
 }
 
 async function buildBallDiamonds(group) {

@@ -1133,6 +1133,24 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
     if (kind === 1) continue;
     if (best) { best.control = kind === 2 ? 'yield' : 'stop'; mapped++; }
   }
+  // Where the map's signs stand on the road step 9 made the main one (group 0) and another road has none, the signs
+  // decide: the unsigned road (the widest, of several) takes group 0, the right of way, and the signed one gives way
+  for (const n of junctions) {
+    if (n.signal || n.allStop) continue;
+    const signed = new Set(), widest = new Map();
+    for (const e of n.in) {
+      if (e.control) signed.add(e.axisIndex);
+      const best = widest.get(e.axisIndex);
+      if (!best || e.half > best.half) widest.set(e.axisIndex, e);
+    }
+    if (!signed.has(0)) continue;
+    let main = null;
+    for (const [g, e] of widest) if (!signed.has(g) && (!main || e.half > main.half)) main = e;
+    if (!main) continue;
+    const g = main.axisIndex;
+    for (const a of n.arms) a.group = a.group === 0 ? g : a.group === g ? 0 : a.group;
+    for (const e of n.in) e.axisIndex = e.inArm.group;
+  }
   let inferred = 0;
   for (const n of junctions) {
     if (n.signal) continue;
@@ -1143,6 +1161,9 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
     const mainCls = Math.min(...n.in.map((e) => e.cls ?? 4));
     for (const e of n.in) {
       if (e.control || e.axisIndex === 0) continue;
+      // no sign where a road merges into another within 20° (a freeway on-ramp: traffic.js has it give way there)
+      const arm = e.inArm;
+      if (arm.lead !== arm || n.arms.some((a) => a !== arm && a.lead === arm) || ((e.cls ?? 4) === 5 && mainCls === 0)) continue;
       if ((e.cls ?? 4) >= 4 && mainCls <= 3) { e.control = 'stop'; inferred++; }
     }
   }
@@ -1150,6 +1171,8 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
 
   for (const e of edges) {
     e.opposite = e.to.in.find((o) => o !== e && o.axisIndex === e.axisIndex && o.dx * e.dx + o.dz * e.dz < -0.7) || null;
+    // the same block the other way (opposite is the oncoming approach at e's far end, the next block on)
+    e.reverse = e.to.out.find((o) => o.to === e.from) || null;
   }
 
   // Lane-to-lane curves are built on first use and cached

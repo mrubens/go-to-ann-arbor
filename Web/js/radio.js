@@ -38,6 +38,12 @@ class CarRadio {
     if (window.__radioAudio) { window.__radioAudio.pause(); window.__radioAudio.removeAttribute('src'); window.__radioAudio.load(); }
     this.audio = null;
     this.retry = 0;
+    this.lost = false;
+    // hidden or minimized, the frame stops, and with it the check below that turns the station off: it's stopped here
+    // (the next frame shown starts it again). The listener left by the code before this one goes first
+    if (window.__radioHidden) document.removeEventListener('visibilitychange', window.__radioHidden);
+    window.__radioHidden = () => { if (document.hidden) this.stop(); };
+    document.addEventListener('visibilitychange', window.__radioHidden);
     document.getElementById('radio-prev')?.addEventListener('click', () => this.tune(-1));
     document.getElementById('radio-next')?.addEventListener('click', () => this.tune(1));
     document.getElementById('radio-current')?.addEventListener('click', () => this.tune(1));
@@ -102,6 +108,8 @@ class CarRadio {
     if (want !== this.playing) {
       this.playing = want;
       this.title = '';
+      this.lost = false;
+      this.retry = 5;
       const native = this.native;
       if (native) {
         if (want === OFF) native.call('radioStop').catch(() => {});
@@ -112,7 +120,22 @@ class CarRadio {
     }
     // in a browser, a stream that dropped or wouldn't start tries again every few seconds
     if (!this.native && this.playing !== OFF && this.audio && (this.audio.error || this.audio.ended || this.failed)) {
+      // (no signal only for a stream that failed, not one waiting for a click on the page)
+      if (!this.lost && (this.audio.error || this.audio.ended)) { this.lost = true; this.draw(); }
       if ((this.retry -= dt) <= 0) { this.retry = 5; this.webPlay(this.playing); }
+    }
+    // in the app, likewise: one that failed or ended (the network gone, the Mac asleep, the station refusing) is
+    // started again every few seconds, and the dial says there's no signal meanwhile. The app tells its player's state
+    // (radioState: playing, waiting or failed); an app without the call keeps the stream as it is
+    if (this.native && this.playing !== OFF && (this.retry -= dt) <= 0) {
+      this.retry = 5;
+      const asked = this.playing;
+      this.native.call('radioState').then((state) => {
+        if (asked !== this.playing) return;
+        const lost = state === 'failed';
+        if (lost !== this.lost) { this.lost = lost; this.draw(); }
+        if (lost) this.native?.call('radioPlay', { url: STATIONS[asked].url, volume: VOLUME }).catch(() => {});
+      }).catch(() => {});
     }
     // the song on now, asked every few seconds while a station plays
     this.titleAt -= dt;
@@ -131,7 +154,7 @@ class CarRadio {
     if (!a) {
       a = this.audio = window.__radioAudio || (window.__radioAudio = new Audio());
       a.preload = 'none';
-      a.addEventListener('playing', () => { this.failed = false; });
+      a.addEventListener('playing', () => { this.failed = false; if (this.lost) { this.lost = false; this.draw(); } });
     }
     if (want === OFF) { a.pause(); a.removeAttribute('src'); a.load(); this.failed = false; return; }
     a.src = STATIONS[want].url;
@@ -161,7 +184,7 @@ class CarRadio {
     const s = STATIONS[this.station];
     const phones = this.carKey === 'phones';
     this.nameEl.textContent = s ? `${s.dial} ${s.call}` : phones ? 'Earbuds off' : 'Radio off';
-    this.subEl.textContent = !s ? 'Ann Arbor stations' : this.title || s.about;
+    this.subEl.textContent = !s ? 'Ann Arbor stations' : this.lost ? 'No signal' : this.title || s.about;
     this.el.classList.toggle('is-phones', phones);
     const icon = this.el.querySelector('#radio-current use');
     icon?.setAttribute('href', phones ? '#i-earbuds' : '#i-radio');

@@ -1401,7 +1401,7 @@ function streamHouses(records, addresses, { radius, x, z, farCut = 1 }) {
   const near = (px, pz) => [...cells.keys()].filter((k) => !built.has(k) && distance(k, px, pz) < radius)
     .sort((a, b) => distance(a, px, pz) - distance(b, px, pz));
   for (const k of near(x, z)) build(k);
-  let frames = 0;
+  let lastBuilt = -Infinity;
   // (a second player's place, in split screen, keeps and fills the houses around them too)
   const update = (px, pz, px2 = NaN, pz2 = NaN) => {
     const two = Number.isFinite(px2) && Number.isFinite(pz2);
@@ -1415,8 +1415,13 @@ function streamHouses(records, addresses, { radius, x, z, farCut = 1 }) {
       }
       for (const m of made.children) if (m.userData.cullDistance) m.visible = d < m.userData.cullDistance * farCut;
     }
-    // Lamp: on the Xbox a square every few frames rather than every frame, so arriving doesn't stack them up
-    if (TIER.spreadLoads && (++frames % 4)) return;
+    // Lamp: on the Xbox a square every few frames (about 4 at 60 fps) rather than every frame, so arriving doesn't stack
+    // them up; timed, since the Xbox calls this only every few frames itself (main.js)
+    if (TIER.spreadLoads) {
+      const now = performance.now();
+      if (now - lastBuilt < 64) return;
+      lastBuilt = now;
+    }
     const next = near(px, pz)[0] ?? (two ? near(px2, pz2)[0] : undefined);
     if (next !== undefined) build(next);
   };

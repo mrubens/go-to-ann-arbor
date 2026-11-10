@@ -7,7 +7,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "a5e36322b78a034eba0ac1117c16bd35036965e2",
+      "commit" : "337e35cd2e4808db26b904ddc0090db4767469c2",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"
@@ -168,6 +168,7 @@
     },
     {
       "author" : "Michigan EGLE (MPART)",
+      "license" : "None",
       "name" : "Huron River PFAS surface water sampling"
     },
     {
@@ -182,6 +183,7 @@
     },
     {
       "author" : "City of Ann Arbor",
+      "license" : "None",
       "name" : "Downtown Street Closures"
     },
     {
@@ -199,6 +201,12 @@
       "license" : "LicenseRef-Bird-GBFS-Data-License",
       "name" : "Ann Arbor scooter locations (GBFS)",
       "url" : "https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs"
+    },
+    {
+      "author" : "Open-Meteo.com",
+      "license" : "CC-BY-4.0",
+      "name" : "Snow depth (Open-Meteo)",
+      "url" : "https://open-meteo.com"
     }
   ]
 }

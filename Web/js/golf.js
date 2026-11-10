@@ -112,16 +112,8 @@ function addMerged(group, geos, mat, name) {
 // open grass build-annarbor.py fills in): OpenStreetMap's line for each of the 18 (golf-holes.js), from its tee to its
 // green, laid out here as a tee box, a mown fairway strip along the line (on all but the short par 3s), a green at
 // its end with its pin and a bunker or two. The course's open grass within reach of them becomes rough (park lawn).
-// A course with neither greens nor mapped holes gets a hole laid out along each fairway's length instead, one every
-// 300 m or so. Flat [x, z, ...] rings, as GEO.golf's.
+// Flat [x, z, ...] rings, as GEO.golf's.
 const hash01 = (a, b) => { const v = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453; return v - Math.floor(v); };
-function inRing(f, x, z) {
-  let c = false;
-  for (let i = 0, j = f.length - 2; i < f.length; j = i, i += 2) {
-    if ((f[i + 1] > z) !== (f[j + 1] > z) && x < ((f[j] - f[i]) * (z - f[i + 1])) / (f[j + 1] - f[i + 1]) + f[i]) c = !c;
-  }
-  return c;
-}
 const ellipse = (cx, cz, rx, rz, a, n = 18) => {
   const out = [], c = Math.cos(a), s = Math.sin(a);
   for (let k = 0; k < n; k++) {
@@ -190,47 +182,10 @@ function mappedHoles(golf, holes) {
     bunkers: [...golf.bunkers, ...bunkers], pins: [...golf.pins, ...pins] };
 }
 
+// The courses as they're drawn and played: the map's own greens, tees, bunkers and fairways, with Huron Hills' holes
+// laid along their mapped lines. A fairway with no mapped green or tee near it stays a fairway: no hole is made up for it
 function layOutHoles(golf) {
-  golf = mappedHoles(golf, GOLF_HOLES);
-  const centre = (f) => { let x = 0, z = 0; for (let i = 0; i < f.length; i += 2) { x += f[i]; z += f[i + 1]; } return [x / (f.length / 2), z / (f.length / 2)]; };
-  const marks = [...golf.greens, ...golf.tees].map((r) => centre(r[0]));
-  const greens = [], tees = [], bunkers = [], pins = [];
-  for (const rings of golf.fairways) {
-    const f = rings[0];
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (let i = 0; i < f.length; i += 2) { minX = Math.min(minX, f[i]); maxX = Math.max(maxX, f[i]); minZ = Math.min(minZ, f[i + 1]); maxZ = Math.max(maxZ, f[i + 1]); }
-    if (marks.some(([x, z]) => x > minX - 40 && x < maxX + 40 && z > minZ - 40 && z < maxZ + 40)) continue;
-    const pts = [];
-    for (let i = 0; i < f.length; i += 2) pts.push({ x: f[i], z: f[i + 1] });
-    const a = mowAngle(pts), dx = Math.cos(a), dz = Math.sin(a), [cx, cz] = centre(f);
-    let t0 = Infinity, t1 = -Infinity;
-    for (const p of pts) { const t = (p.x - cx) * dx + (p.z - cz) * dz; t0 = Math.min(t0, t); t1 = Math.max(t1, t); }
-    const len = t1 - t0;
-    if (len < 90) continue;
-    const holes = Math.max(1, Math.round(len / 300)), step = len / holes;
-    // a point on the axis at t, moved toward the middle until it's on the fairway
-    const onIt = (t, back) => {
-      for (let k = 0; k < 12; k++, t += back) {
-        const x = cx + dx * t, z = cz + dz * t;
-        if (inRing(f, x, z)) return [x, z];
-      }
-      return null;
-    };
-    for (let h = 0; h < holes; h++) {
-      const flip = h % 2 ? -1 : 1, s0 = t0 + h * step, s1 = s0 + step;
-      const tee = onIt(flip > 0 ? s0 + 14 : s1 - 14, flip * 4), green = onIt(flip > 0 ? s1 - 20 : s0 + 20, -flip * 4);
-      if (!tee || !green) continue;
-      const r = hash01(green[0], green[1]);
-      tees.push([ellipse(tee[0], tee[1], 9, 5, a, 8)]);
-      greens.push([ellipse(green[0], green[1], 12 + r * 4, 9 + r * 3, a + (r - 0.5) * 0.8)]);
-      pins.push(green[0] + (r - 0.5) * 4, green[1] + (hash01(green[1], green[0]) - 0.5) * 4);
-      for (let k = 0; k < 1 + (r < 0.6 ? 1 : 0); k++) {
-        const b = a + Math.PI / 2 + (k ? Math.PI : 0) + (r - 0.5) * 1.2, d = 15 + r * 3;
-        bunkers.push([ellipse(green[0] + Math.cos(b) * d, green[1] + Math.sin(b) * d, 4.5 + r * 1.5, 2.6, b + Math.PI / 2, 12)]);
-      }
-    }
-  }
-  return { ...golf, greens: [...golf.greens, ...greens], tees: [...golf.tees, ...tees], bunkers: [...golf.bunkers, ...bunkers], pins: [...golf.pins, ...pins] };
+  return mappedHoles(golf, GOLF_HOLES);
 }
 
 function buildGolf(group, golf, flatGeo, toRing, y) {

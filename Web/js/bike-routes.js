@@ -341,11 +341,26 @@ function buildBikeRoutes(group, network) {
       if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
       q.setFromAxisAngle(axis.normalize(), ang - wob);
       v.set(posts[k * 3], posts[k * 3 + 1], posts[k * 3 + 2]);
-      postMesh.setMatrixAt(k, m4.compose(v, q, sc));
+      place(postMesh, k, m4.compose(v, q, sc));
       if (!t) bent.delete(k);
     }
     q.identity();
-    postMesh.instanceMatrix.needsUpdate = true;
+  }
+  // Sets post i where it's drawn: the scene's culling moves a big instanced mesh's copies into chunks of their own
+  // (scene-culling.js `movedTo`), and its shadow's stand-in (`shadowCopy`), as knockdowns.js does for a felled pole
+  function place(mesh, i, matrix) {
+    const moved = mesh.userData.movedTo?.[i];
+    if (moved) place(moved[0], moved[1], matrix);
+    else {
+      mesh.setMatrixAt(i, matrix);
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+    const shadow = mesh.userData.shadowCopy?.[i];
+    const proxy = shadow?.[0].mesh;
+    if (proxy) {
+      proxy.setMatrixAt(shadow[1], matrix);
+      proxy.instanceMatrix.needsUpdate = true;
+    }
   }
 
   return {

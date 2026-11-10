@@ -1629,7 +1629,7 @@ function carPlateTexture() {
 
 /**
  * Creates the TSL material for lofted vehicles.
- * Instanced traffic reads the per-instance `paintColor` (vec3) and `carState` (vec4: brake, left (+x) & right (-x)
+ * Instanced traffic reads the per-instance `paintColor` (vec3) and `carState` (vec4: brake (-1: parked, lamps off), left (+x) & right (-x)
  * turn signal, style/livery code from `carStyleCode` where 1 = NYPD) attributes; with a fixed `fixedColorHex` (the
  * player's taxi, or fixed wheels) the state is the `material.userData.carState` uniform instead, with its fourth
  * component controlling reverse lights.
@@ -1640,11 +1640,14 @@ function carPlateTexture() {
 // compiles once. With a `slot` (a player's car: controllers.js) there's one material per kind for that player, its paint
 // set again each time they take another car of that kind, so getting into a car whose kind has been driven (or made
 // ready in advance: main.js) builds and compiles nothing.
-function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false, slot = null } = {}) {
+// A fixed car's `style` (carStyleCode: livery, finish, trim, wheels, plate) is a uniform beside its paint, so a car
+// taken from traffic or a parking spot keeps its markings, roof, finish and plate without another shader.
+function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, style = 0 } = {}) {
   const cacheKey = slot !== null && fixedColorHex !== null ? `${spec.name}_slot${slot}` : `${spec.name}_${fixedColorHex ?? 'instanced'}`;
   if (_carMaterialCache.has(cacheKey)) {
     const made = _carMaterialCache.get(cacheKey);
     if (fixedColorHex !== null) made.userData.paint?.value.setHex(fixedColorHex);
+    if (made.userData.style) made.userData.style.value = style || 0;
     return made;
   }
 
@@ -1655,9 +1658,10 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false, s
   const state = fixed ? stateUniform : attribute('carState', 'vec4');
   const paintUniform = fixed ? uniform(new THREE.Color(fixedColorHex)) : null;
   const paint = fixed ? paintUniform : attribute('paintColor', 'vec3');
+  const styleUniform = fixed ? uniform(style || 0) : null;
 
   // Decode per-instance style code (livery 0..7, metallic 0..1, trim 0..3, wheel 0..3) in the vertex stage
-  const wCode = fixed ? float(0.0) : state.w;
+  const wCode = fixed ? styleUniform : state.w;
   const vStyle = varying(
     vertexStage(
       vec4(
@@ -1755,10 +1759,10 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false, s
   const maxEdgeW = (a, b, wa, wb) => mix(wa, wb, step(a, b));
   const minEdgeW = (a, b, wa, wb) => mix(wa, wb, step(b, a));
 
-  const isPolice = fixed ? float(0.0) : isLivery(1.0);
-  const isBoro = fixed ? float(0.0) : isLivery(2.0);
-  const isTLC = fixed ? float(0.0) : isLivery(3.0);
-  const isTwoTone = fixed ? float(0.0) : max(isLivery(4.0), step(abs(trimCode.sub(3.0)), 0.25));
+  const isPolice = isLivery(1.0);
+  const isBoro = isLivery(2.0);
+  const isTLC = isLivery(3.0);
+  const isTwoTone = max(isLivery(4.0), step(abs(trimCode.sub(3.0)), 0.25));
   const isBlackout = step(abs(trimCode.sub(2.0)), 0.25);
   const hasChrome = max(float(spec.chrome ? 1.0 : 0.0), step(abs(trimCode.sub(1.0)), 0.25)).mul(one.sub(isBlackout));
 
@@ -2140,54 +2144,58 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { parked = false, s
   });
 
   // ---- Emissive (evaluated only on front/rear lamp zones, taxi sign, or braking rear window) -----------------------
-  const brake = state.x;
+  // A parked car writes -1 into its state's first value: engine off, every lamp dark. It shares traffic's material (one
+  // shader per kind), so the switch is per car rather than a separate parked material.
+  const brake = max(state.x, 0.0);
+  const engineOn = state.x.greaterThan(-0.5);
   const blink = max(state.y.mul(step(0.0, p.x)), state.z.mul(step(p.x, 0.0)));
   const nightHeadlamp = smoothstep(0.60, 1.15, cityUniforms.uInteriorGlow);
 
   const emissiveFn = Fn(() => {
     const emit = vec3(0.0).toVar();
-    If(isBody.greaterThan(0.5), () => {
-      If(p.z.greaterThan(frontZone).and(n.z.greaterThan(0.02)), () => {
-        const { turnFront, headlightLens, drl } = headlightMasks();
-        const headlamps = color(0xfff8ec)
-          .mul(headlightLens.mul(nightHeadlamp.mul(1.35).add(1.45)).add(drl.mul(nightHeadlamp.mul(0.75).add(1.65))))
-          .mul(one.sub(max(turnFront, drl).mul(blink)));
-        const turn = color(0xff9812).mul(max(turnFront, drl.mul(0.75)).mul(blink).mul(2.4));
-        emit.assign(headlamps.add(turn));
-      }).ElseIf(p.z.lessThan(rearZone).and(n.z.lessThan(-0.02)), () => {
-        const { tailLens, turnRearSection, reverseRearSection, ledBar: ledBarMask } = taillightMasks();
-        const turnRear = turnRearSection.mul(tailLens);
-        const redArea = tailLens.mul(one.sub(max(turnRearSection, reverseRearSection)));
-        const ledBar = ledBarMask.mul(redArea);
-        const redLens = max(redArea.mul(0.58), ledBar);
-        const tail = color(0xff0c16).mul(redLens.mul(brake.mul(2.3).add(nightHeadlamp.mul(0.55)).add(0.24)));
-        const turn = color(0xff9812).mul(turnRear.mul(blink).mul(2.4));
-        let rearEmit = tail.add(turn);
-        if (fixed) rearEmit = rearEmit.add(color(0xf0f6ff).mul(tailLens).mul(reverseRearSection).mul(state.w).mul(1.8));
-        emit.assign(rearEmit);
+    If(engineOn, () => {
+      If(isBody.greaterThan(0.5), () => {
+        If(p.z.greaterThan(frontZone).and(n.z.greaterThan(0.02)), () => {
+          const { turnFront, headlightLens, drl } = headlightMasks();
+          const headlamps = color(0xfff8ec)
+            .mul(headlightLens.mul(nightHeadlamp.mul(1.35).add(1.45)).add(drl.mul(nightHeadlamp.mul(0.75).add(1.65))))
+            .mul(one.sub(max(turnFront, drl).mul(blink)));
+          const turn = color(0xff9812).mul(max(turnFront, drl.mul(0.75)).mul(blink).mul(2.4));
+          emit.assign(headlamps.add(turn));
+        }).ElseIf(p.z.lessThan(rearZone).and(n.z.lessThan(-0.02)), () => {
+          const { tailLens, turnRearSection, reverseRearSection, ledBar: ledBarMask } = taillightMasks();
+          const turnRear = turnRearSection.mul(tailLens);
+          const redArea = tailLens.mul(one.sub(max(turnRearSection, reverseRearSection)));
+          const ledBar = ledBarMask.mul(redArea);
+          const redLens = max(redArea.mul(0.58), ledBar);
+          const tail = color(0xff0c16).mul(redLens.mul(brake.mul(2.3).add(nightHeadlamp.mul(0.55)).add(0.24)));
+          const turn = color(0xff9812).mul(turnRear.mul(blink).mul(2.4));
+          let rearEmit = tail.add(turn);
+          if (fixed) rearEmit = rearEmit.add(color(0xf0f6ff).mul(tailLens).mul(reverseRearSection).mul(state.w).mul(1.8));
+          emit.assign(rearEmit);
+        });
+      }).ElseIf(isSign.greaterThan(0.5), () => {
+        const signFace = smoothstep(0.55, 0.75, abs(n.z));
+        const signGlyph = signGlyphMask();
+        emit.assign(color(0xffe28a).mul(signFace.mul(one.sub(signGlyph.mul(0.9))).mul(1.65)));
+      }).ElseIf(isWindow.mul(brake).greaterThan(0.5), () => {
+        const chmsl = spec.noRearGlass ? float(0.0) : chmslMask(() => {
+          const rear = polygonEdge(ax, p.z, rearGlassPlanes, 0.085, fwX, fwZ);
+          return cov(rear.d, rear.w);
+        });
+        emit.assign(color(0xff0c16).mul(chmsl.mul(2.3)));
       });
-    }).ElseIf(isSign.greaterThan(0.5), () => {
-      const signFace = smoothstep(0.55, 0.75, abs(n.z));
-      const signGlyph = signGlyphMask();
-      emit.assign(color(0xffe28a).mul(signFace.mul(one.sub(signGlyph.mul(0.9))).mul(1.65)));
-    }).ElseIf(isWindow.mul(brake).greaterThan(0.5), () => {
-      const chmsl = spec.noRearGlass ? float(0.0) : chmslMask(() => {
-        const rear = polygonEdge(ax, p.z, rearGlassPlanes, 0.085, fwX, fwZ);
-        return cov(rear.d, rear.w);
-      });
-      emit.assign(color(0xff0c16).mul(chmsl.mul(2.3)));
     });
     return emit;
   });
 
   const mat = new THREE.MeshStandardNodeMaterial();
   mat.envMapIntensity = 1.35;
-  if (fixed) { mat.userData.carState = stateUniform; mat.userData.paint = paintUniform; }
+  if (fixed) { mat.userData.carState = stateUniform; mat.userData.paint = paintUniform; mat.userData.style = styleUniform; }
   mat.colorNode = colorFn();
   mat.roughnessNode = roughFn();
   mat.metalnessNode = metalFn();
-  // a parked car's lamps are off: glass, never lit
-  if (!parked) mat.emissiveNode = emissiveFn();
+  mat.emissiveNode = emissiveFn();
 
   _carMaterialCache.set(cacheKey, mat);
   return mat;

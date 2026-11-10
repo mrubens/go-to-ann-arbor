@@ -28,12 +28,16 @@ enum Native {
         LampNative.on("feed") { args in
             guard let text = args["url"] as? String, let url = URL(string: text), url.scheme == "https",
                   let host = url.host, feedHosts.contains(host) else { throw LampNative.Failure("not a feed") }
-            var request = URLRequest(url: url, timeoutInterval: 20)
+            // MDOT's list is asked for as the city opens, and the page waits only a few seconds for it: given up on
+            // sooner than the others, and not handed on whole should its server send far more than a list
+            let mdot = host == "mdotjboss.state.mi.us"
+            var request = URLRequest(url: url, timeoutInterval: mdot ? 8 : 20)
             request.setValue("GoToAnnArbor/1.0", forHTTPHeaderField: "User-Agent")
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 throw LampNative.Failure("status \((response as? HTTPURLResponse)?.statusCode ?? 0)")
             }
+            if mdot && data.count > 8 << 20 { throw LampNative.Failure("too big") }
             return data.base64EncodedString()
         }
         /// Recording mode: a video of the drive, sent from the page a second at a time and written into
@@ -92,6 +96,11 @@ enum Native {
         LampNative.on("radioNow") { _ in
             Radio.title
         }
+        /// How the stream is doing: "playing", "waiting" (starting, or filling up again) or "failed" (it couldn't start,
+        /// or stopped: the network gone, the Mac asleep, the station refusing); the page starts a failed one again
+        LampNative.on("radioState") { _ in
+            Radio.state
+        }
         /// How much memory this device has, in gigabytes: the page builds less of the city on one with 16 GB or less
         LampNative.on("memory") { _ in
             Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
@@ -133,6 +142,18 @@ enum Native {
         player.automaticallyWaitsToMinimizeStalling = true
         player.play()
         self.player = player
+    }
+
+    static var state: String {
+        guard let player else { return "waiting" }
+        if player.status == .failed || player.currentItem?.status == .failed || player.currentItem == nil { return "failed" }
+        switch player.timeControlStatus {
+        case .playing: return "playing"
+        case .waitingToPlayAtSpecifiedRate: return "waiting"
+        // (asked to play, so stopped on its own: a live stream that ended or dropped)
+        case .paused: return "failed"
+        @unknown default: return "waiting"
+        }
     }
 
     static func stop() {

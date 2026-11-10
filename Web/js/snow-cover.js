@@ -1,4 +1,4 @@
-import { Fn, vec2, vec3, float, mix, smoothstep, fract, sin, dot, floor, positionWorld, normalWorldGeometry, materialColor } from 'three/tsl';
+import { Fn, vec2, vec3, float, mix, smoothstep, fract, sin, dot, floor, positionWorld, normalWorldGeometry, materialColor, vertexColor } from 'three/tsl';
 import { log } from '../lamp-game.js';
 import { cityUniforms } from './tsl-materials.js';
 
@@ -28,18 +28,24 @@ const snowAt = Fn(([share]) => {
   return smoothstep(edge.sub(0.12), edge.add(0.04), patch).mul(up).mul(smoothstep(0.0, 0.05, cover));
 });
 
-// Every lit material under root gets the snow over its own color (not where each copy or vertex brings its own color,
-// which three.js multiplies in after it: parked cars, the river banks)
+// Every lit material under root gets the snow over its own color (not where each copy brings its own color, which
+// three.js multiplies in after it: parked cars). A vertex-colored material (house and survey roofs, the river banks)
+// takes its vertex color into the mix itself and stops three.js multiplying it in again after, so its roofs whiten
+// too; a mesh without the colors reads them as white
 function dressForSnow(root) {
   let n = 0;
   root.traverse((o) => {
-    if (!o.isMesh || o.instanceColor || o.geometry?.attributes?.color) return;
+    if (!o.isMesh || o.instanceColor) return;
     for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
-      if (!mat?.isMeshStandardNodeMaterial || mat.transparent || mat.vertexColors || mat.alphaTest > 0 || mat.alphaTestNode || mat.userData.snowDressed) continue;
+      if (!mat?.isMeshStandardNodeMaterial || mat.transparent || mat.alphaTest > 0 || mat.alphaTestNode || mat.userData.snowDressed) continue;
       const share = mat.userData.snow ?? 1;
       if (share <= 0) continue;
       mat.userData.snowDressed = true;
-      const base = mat.colorNode ? vec3(mat.colorNode) : materialColor.rgb;
+      let base = mat.colorNode ? vec3(mat.colorNode) : materialColor.rgb;
+      if (mat.vertexColors) {
+        base = base.mul(vertexColor().rgb);
+        mat.vertexColors = false;
+      }
       mat.colorNode = mix(base, SNOW, snowAt(float(share)));
       mat.needsUpdate = true;
       n++;
