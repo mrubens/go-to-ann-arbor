@@ -216,22 +216,50 @@ const CASCADE_WAVES = DROPS.map((p) => {
 });
 
 // The current through the channel at (x, z), into `out` (m/s, downstream), and how rough the water is there (0-1);
-// false off the channel. Steady through the pools, fast in each chute and the tongue below it.
+// false off the channel. Steady through the pools (still brisker than the Huron's own lazy half a metre a second), and
+// punching through each chute and the tongue below it at five or so (the pool funnelling in to it), with the hole just under the drop pushing back
+// where the water pours over the rocks beside the chute. Also into `out`: the nearest drop (drop, its index; ds, how
+// far past it along the channel; chute, how lined up on its chute, 0-1; lat, how far right of the chute's middle),
+// for the kayak's lurch at each.
 function cascadeCurrent(x, z, out) {
   if (!inBox(x, z)) return false;
   const h = locate(x, z), w = weightOf(h);
   if (w <= 0) return false;
-  let fast = 0, rough = 0;
-  for (const p of DROPS) {
-    const ds = h.s - p.s, lat = Math.abs(h.d - p.gap);
+  let fast = 0, rough = 0, hole = 0, near = -1, nearDs = Infinity, nearChute = 0, nearLat = 0, funnel = 0;
+  for (let i = 0; i < DROPS.length; i++) {
+    const p = DROPS[i], ds = h.s - p.s, lat = Math.abs(h.d - p.gap);
     if (ds < -6 || ds > 12) continue;
     const chute = smooth(5, 1.5, lat);
     fast = Math.max(fast, chute * smooth(-6, -0.5, ds) * smooth(8, 2, ds));
-    rough = Math.max(rough, smooth(-0.5, 0.8, ds) * smooth(10, 3, ds) * (0.5 + 0.5 * chute));
+    rough = Math.max(rough, smooth(-0.5, 0.8, ds) * smooth(10, 3, ds) * (0.55 + 0.45 * chute));
+    hole = Math.max(hole, smooth(0.3, 0.9, ds) * smooth(2.8, 1.6, ds) * (1 - 0.7 * chute));
+    if (Math.abs(ds) < Math.abs(nearDs)) { near = i; nearDs = ds; nearChute = chute; nearLat = h.d - p.gap; }
+    // the pool's water funnelling into the chute's V on its way to the drop
+    const f = Math.max(-1.2, Math.min(1.2, (p.gap - h.d) * 0.4)) * smooth(-14, -3, ds) * smooth(0.5, -0.5, ds);
+    if (Math.abs(f) > Math.abs(funnel)) funnel = f;
   }
-  const speed = (1.1 + 3.4 * fast) * w;
-  out.x = h.tx * speed; out.z = h.tz * speed; out.rough = rough * w; out.weight = w;
+  const speed = (1.0 + 4.2 * fast) * (1 - 0.6 * hole) * w;
+  out.x = h.tx * speed - h.tz * funnel * w; out.z = h.tz * speed + h.tx * funnel * w; out.rough = rough * w; out.weight = w;
+  out.drop = near; out.ds = nearDs; out.chute = nearChute; out.lat = nearLat; out.tx = h.tx; out.tz = h.tz;
   return true;
+}
+
+// The standing waves of each chute's tongue at (x, z), as the water's shader draws them (rapidsField in
+// tsl-materials.js: about 1.8 m apart, a little surge in time): how far the surface stands over the water's level there
+const WAVE_K = 2 * Math.PI / 1.8, WAVE_A = 0.22;
+function cascadeWaveLift(x, z, time) {
+  if (!(x > 250 && x < 650 && z > -1260 && z < -1040)) return 0;
+  let lift = 0;
+  for (const w of CASCADE_WAVES) {
+    const dx = x - w.x, dz = z - w.z, ds = dx * w.tx + dz * w.tz, lat = -dx * w.tz + dz * w.tx;
+    if (ds < -1.4 || ds > 13 || Math.abs(lat + w.gap) > w.half) continue;
+    const inside = (1 - smooth(w.half - 1.5, w.half, Math.abs(lat + w.gap))) * smooth(-1.4, -0.5, ds) * (1 - smooth(7, 13, ds));
+    const chute = 1 - smooth(1.2, 4.0, Math.abs(lat));
+    const after = smooth(0.2, 1.2, ds) * Math.exp(-Math.max(0, ds - 1) * 0.2);
+    const A = chute * after * WAVE_A * (Math.cos(lat * 2.4) * 0.25 + 0.75) * inside;
+    lift += A * Math.cos(ds * WAVE_K + Math.sin(time * 1.3) * 0.35);
+  }
+  return lift;
 }
 
 // Whether (x, z) is on a weir's rocks (the chute is open)
@@ -314,4 +342,4 @@ function buildCascades(group, waterLevel) {
   return { rocks: places.length, wall: wall.length };
 }
 
-export { buildCascades, carveCascades, inCascades, pondDraw, chuteNear, CASCADE_ENTRY, CASCADE_START, CASCADE_FOOT, cascadeGaps, cascadeLevel, cascadeDepth, cascadeCurrent, nearDrop, onWeirRocks, DROPS as CASCADE_DROPS, CASCADE_WAVES };
+export { buildCascades, carveCascades, inCascades, pondDraw, chuteNear, CASCADE_ENTRY, CASCADE_START, CASCADE_FOOT, cascadeGaps, cascadeLevel, cascadeDepth, cascadeCurrent, cascadeWaveLift, nearDrop, onWeirRocks, DROPS as CASCADE_DROPS, CASCADE_WAVES };

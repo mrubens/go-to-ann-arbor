@@ -33,7 +33,7 @@ export function createSeats({ benches = [], seats = [], bleachers = [], boxOf = 
       const c = cells.get(key(cx, cz));
       if (!c) continue;
       for (const s of c) {
-        if (s.box?.knock?.down) continue;
+        if (s.box?.knock?.down || s.taken) continue;
         if (y != null && s.y != null && Math.abs(s.y - 0.47 - y) > 1.1) continue;
         const d = Math.hypot(s.x - x, s.z - z);
         if (d >= reach) continue;
@@ -44,5 +44,19 @@ export function createSeats({ benches = [], seats = [], bleachers = [], boxOf = 
     return best;
   }
 
-  return { nearest, count: list.length };
+  // every seat within `reach` of (x, z), into `out` (pedestrian-system.js seats the town's people from these; one
+  // sitting there marks it `taken`, so the player isn't offered it)
+  function within(x, z, reach, out) {
+    out.length = 0;
+    const c0x = Math.floor((x - reach) / CELL), c1x = Math.floor((x + reach) / CELL);
+    const c0z = Math.floor((z - reach) / CELL), c1z = Math.floor((z + reach) / CELL);
+    const r2 = reach * reach;
+    for (let cx = c0x; cx <= c1x; cx++) for (let cz = c0z; cz <= c1z; cz++) {
+      const c = cells.get(key(cx, cz));
+      if (c) for (const s of c) if ((s.x - x) ** 2 + (s.z - z) ** 2 < r2) out.push(s);
+    }
+    return out;
+  }
+
+  return { nearest, within, count: list.length };
 }

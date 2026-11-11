@@ -4,12 +4,14 @@
 // tees and bunkers, the rough everywhere else on the course), runs down the ground's slope and drops in the cup when it
 // reaches it slowly enough. Water and out of bounds cost a stroke and are played again from where the shot was hit.
 // After each hole the player goes on to the next number on that course (round to 1 after the last), and the round
-// ends with the score once every hole there is played.
+// ends with the score once every hole there is played (and, for a full round, the best one there). The round in play
+// is saved at each tee and each stop of the ball (`golfRound`), so closing the app keeps it: the next start takes it up
+// with the player at the ball (`resume`, main.js). Best rounds by course are `golfBest`.
 // Holes: Huron Hills' from golf-holes.js, every other course's from golf-courses.js (OpenStreetMap's numbered holes,
 // each tee to its green as mapped), the tee and pin snapped to the mapped tee box and green nearest each end.
 import * as THREE from 'three/webgpu';
 import { attribute, float } from 'three/tsl';
-import { hot, log, random, rumble, sound } from '../lamp-game.js';
+import { hot, log, random, rumble, sound, save, load } from '../lamp-game.js';
 import { setupSceneCulling } from './scene-culling.js';
 import { layOutHoles } from './golf.js';
 import { GOLF_HOLES } from './golf-holes.js';
@@ -382,6 +384,7 @@ export class GolfPlay {
       if (p.rig) p.rig.placed = false;
     }
     this.on = null;
+    this.keep();
     this.group.visible = false;
     this.line.classList.remove('show');
     if (this.cameraSystem.override === this.camHook) { this.cameraSystem.override = null; this.cameraSystem.followEntity = null; }
@@ -404,7 +407,26 @@ export class GolfPlay {
     o.ball.y = turf(h.tee[0], h.tee[1]) + BALL_R;
     o.ball.vx = o.ball.vy = o.ball.vz = 0;
     this.address();
-    this.notice(`Hole ${this.holeNumber()} · Par ${h.par} · ${Math.round(lineLength(h.line) * YD)} yards`, first ? 3 : 2.6);
+    // the round's last hole says so, so its end comes as no surprise
+    const left = course().holes.filter((x, k) => x.course === h.course && k !== i && !o.played.includes(k)).length;
+    this.notice(`Hole ${this.holeNumber()} · Par ${h.par} · ${Math.round(lineLength(h.line) * YD)} yards${left || first ? '' : ' · last hole'}`, first ? 3 : 2.6);
+    this.keep();
+  }
+
+  // the round as it stands, kept for the next time the app opens (cleared when it ends)
+  keep() { save('golfRound', this.on ? this.snapshot() : null); }
+  // the round saved when the app was last closed, taken up again with the player back at its ball (a round that was
+  // stopped, or left by teleporting or getting into something, was cleared then, so one still saved was in play)
+  resume() {
+    if (this.on) return;
+    const s = load('golfRound');
+    if (!s || this.cm.activeMode !== 'person' || !Number.isFinite(s.ball?.x) || !Number.isFinite(s.ball?.z)) return;
+    // taken there as a teleport is (its last steps and its fall reset), then stood at the ball
+    this.cm.teleportActiveTo(s.ball.x, s.ball.z, this.cm.entities.person.heading);
+    this.restore(s);
+    if (!this.on) return;
+    this.notice(`Round goes on · Hole ${this.holeNumber()}${this.on.card.length ? ` · ${this.total()}` : ''}`, 3);
+    log(`[golf] took up the saved round: hole ${this.holeNumber()}, ${this.on.card.length} played`);
   }
 
   // the ball at rest: the player steps up to it with the club for the distance and lie, aimed down the hole
@@ -906,6 +928,7 @@ export class GolfPlay {
     log(`[golf] at rest on ${lie}, ${yd} yd from the pin`);
     // a hole that's got away: picked up at five over par, counted as one more, and on to the next
     if (o.strokes >= h.par + 5) this.pickUp();
+    else this.keep();
   }
 
   pickUp() {
@@ -933,6 +956,7 @@ export class GolfPlay {
     o.wait = 1.6;
     o.again = true;
     this.notice(`${words} · one stroke penalty`, 2.4);
+    this.keep();
     log(`[golf] ${words.toLowerCase()}: a stroke and the shot again`);
   }
 
@@ -972,7 +996,14 @@ export class GolfPlay {
     let n = -1;
     for (let k = 1; k < same.length && n < 0; k++) { const i = same[(at + k) % same.length]; if (!o.played.includes(i)) n = i; }
     if (n < 0 || o.played.includes(n)) {
-      return this.quit(`Round over · ${this.total()}`);
+      // a full round on the course is set against the best one there
+      let best = '';
+      if (o.card.length >= same.length) {
+        const s = o.card.reduce((t, c) => t + c.strokes, 0), all = load('golfBest') || {}, was = all[h.course];
+        if (!Number.isFinite(was) || s < was) { all[h.course] = s; save('golfBest', all); if (Number.isFinite(was)) best = ' · a new best'; }
+        else best = ` · best ${was}`;
+      }
+      return this.quit(`Round over · ${this.total()}${best}`);
     }
     o.phi = 0;
     this.beginHole(n, false);
@@ -1033,6 +1064,7 @@ export class GolfPlay {
     this.place();
     this.drawAim();
     this.say();
+    this.keep();
   }
 }
 

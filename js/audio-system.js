@@ -2,7 +2,11 @@ import { createSynthResources, createMotorVoice, setControlRate } from './audio-
 import { createEventResources, playEvent, createWindVoice } from './audio-events.js';
 import { CityAudioSources } from './audio-sources.js';
 import { CityAcoustics } from './audio-acoustics.js';
+import { playRailHorn, createBellVoice } from './rail-sounds.js';
+import { createRideVoice, ringBell } from './audio-ride.js';
 import { TIER, XBOX } from './device-tier.js';
+// Lamp: Burton Tower's bells, self-contained (burton-bells.js)
+import { BELL_REACH, playBells, BurtonBells } from './burton-bells.js';
 
 // the Xbox, a phone and a slower computer: fewer voices, and plain stereo panning in place of HRTF convolution
 const SMALL_DEVICE = XBOX || TIER.name === 'phone' || TIER.name === 'slow';
@@ -359,6 +363,7 @@ class CityAudioSystem {
       params.load = source.load;
       params.verticalSpeed = source.verticalSpeed;
       params.seed = source.seed;
+      params.cabin = Boolean(source.cabin);
       params.doppler = clamp(343 / (343 + radial), 0.85, 1.18);
       slot.voice.update(params, now);
       slot.distance = distance;
@@ -390,7 +395,7 @@ class CityAudioSystem {
     const ref0 = crash ? 4 + severity * 8 : kind === 'trainhorn' ? 60 : kind === 'horn' ? 8 : kind === 'talk' || kind === 'shout' ? 2 : 1.8;
     const range0 = crash ? 50 + severity * 110 : kind === 'trainhorn' ? 1200 : kind === 'horn' ? 140 : kind === 'talk' ? 30 : kind === 'shout' ? 55 : kind === 'footstep' ? 22 : 35;
     // the animals (animals.js): a hawk is heard across the Arb, a goose across the pond, a squirrel only near
-    const animal = ANIMAL_REACH[kind] || STEEL_REACH[kind];
+    const animal = ANIMAL_REACH[kind] || STEEL_REACH[kind] || BELL_REACH[kind];
     const ref = animal ? animal[0] : ref0, range = animal ? animal[1] : range0;
     if (Math.hypot(source.x - this.listener.x, source.y - this.listener.y, source.z - this.listener.z) > range) return false;
     if (crash || options.priority) {
@@ -411,7 +416,7 @@ class CityAudioSystem {
         this.removeEvent(weakest);
       }
       if (this.events.length >= this.limits.events) {
-        let background = this.events.findIndex(event => event.kind !== 'crash' && event.kind !== 'horn');
+        let background = this.events.findIndex(event => event.kind !== 'crash' && event.kind !== 'horn' && event.kind !== 'bells');
         // A struck driver's reaction must still play when the ambience or a pile-up fills the pool.
         if (background < 0 && options.priority) background = 0;
         if (background < 0) return false;
@@ -424,7 +429,8 @@ class CityAudioSystem {
     // Do not fade away the first few milliseconds of an event (a heel strike, a latch's click, a crash): nothing is
     // sounding through the new emitter yet, so its spatial gain and filtering can be ready at onset without a click.
     emitter.update(source, this.listener, now, range, true, true);
-    const voice = playEvent(this.context, this.resources, kind, emitter.input, { seed: source.seed, ...options });
+    const voice = kind === 'bells' ? playBells(this.context, emitter.input, { seed: source.seed, ...options })
+      : playEvent(this.context, this.resources, kind, emitter.input, { seed: source.seed, ...options });
     this.events.push({ kind, voice, emitter, id: source.id, range, severity, position: { ...source }, follow: kind === 'talk' || kind === 'shout' || kind === 'horn' });
     return true;
   }
@@ -471,10 +477,61 @@ class CityAudioSystem {
     return true;
   }
 
-  // A train's horn where it is (railways.js)
-  trainHorn(at) {
-    if (!this.ready || !this.enabled || this.context?.state !== 'running' || document.hidden) return;
-    this.emit('trainhorn', { id: 'train', x: at.x, y: at.y + 4, z: at.z, seed: 7 }, { intensity: 1, priority: true });
+  // --- The railroad (rail-sounds.js, cued by railways.js) ---------------------------------------------------------
+  // A train's horn at its lead locomotive: `at` is the train's own horn position, which it keeps up to date, so the
+  // sound rides along with the train; `kind` 'crossing' (long, long, short, long, the last held `hold` seconds),
+  // 'long' or 'start' (two short). One of the events' voices, heard to 1200 m, taking a background event's place
+  // when they're all in use.
+  trainHorn(at, hold = 0, kind = 'crossing') {
+    if (!this.ready || !this.enabled || !this.haveListener || this.context?.state !== 'running' || document.hidden) return false;
+    const range = 1200;
+    if (Math.hypot(at.x - this.listener.x, at.y - this.listener.y, at.z - this.listener.z) > range) return false;
+    const now = this.context.currentTime;
+    for (let i = this.events.length - 1; i >= 0; i--) if (now >= this.events[i].voice.endTime) this.removeEvent(i);
+    if (this.events.length >= this.limits.events) {
+      const background = this.events.findIndex(event => event.kind !== 'crash' && event.kind !== 'trainhorn');
+      if (background < 0) return false;
+      this.removeEvent(background);
+    }
+    const emitter = new SpatialEmitter(this.context, this.mix, this.reflections, this.acoustics, 60, 4);
+    emitter.update(at, this.listener, now, range, true, true);
+    const voice = playRailHorn(this.context, emitter.input, kind, hold);
+    // (position: the train's live point, which the events' update reads at its 10 Hz)
+    this.events.push({ kind: 'trainhorn', voice, emitter, id: at, range, severity: 0, position: at, follow: false });
+    return true;
+  }
+
+  // The crossing bells: one voice, at the nearest crossing whose lamps are flashing (railways.js crossings, `on`)
+  // within 150 m of the listener; silent when there's none, the sound is off or the page is hidden
+  crossingBells(crossings) {
+    if (!this.ready || !this.context || !crossings?.length) return;
+    const now = this.context.currentTime;
+    if (now < (this.bellNext ?? 0)) return;
+    this.bellNext = now + 0.1;
+    const live = this.enabled && this.haveListener && this.context.state === 'running' && !document.hidden;
+    let best = null, bd = 150;
+    if (live) {
+      for (const c of crossings) {
+        if (!c.on) continue;
+        const d = Math.hypot(c.x - this.listener.x, c.z - this.listener.z);
+        if (d < bd) { bd = d; best = c; }
+      }
+    }
+    const b = this.bell;
+    if (!best) {
+      if (b?.at) { b.voice.set(0, now); b.at = null; console.log('[rail] bell stops'); }
+      return;
+    }
+    if (!this.bell) {
+      const emitter = new SpatialEmitter(this.context, this.mix, this.reflections, this.acoustics, 6, 3.2);
+      this.bell = { emitter, voice: createBellVoice(this.context, emitter.input), at: null, position: { x: 0, y: 0, z: 0, seed: 0.5 } };
+    }
+    const bell = this.bell, p = bell.position, fresh = !bell.at;
+    if (bell.at !== best) console.log(`[rail] bell rings at the crossing (${best.x.toFixed(0)}, ${best.z.toFixed(0)}), ${bd.toFixed(0)} m away`);
+    p.x = best.x; p.z = best.z; p.y = best.y;
+    bell.emitter.update(p, this.listener, now, 150, fresh, fresh);
+    bell.at = best;
+    bell.voice.set(0.5, now);
   }
 
   // One sound where the player is: a paddle's splash or a car door (main.js)
@@ -484,8 +541,16 @@ class CityAudioSystem {
   }
 
   honk(entity) {
-    if (!this.ready || !this.enabled || this.context?.state !== 'running' || entity?.type !== 'car') return;
+    if (!this.ready || !this.enabled || this.context?.state !== 'running') return;
     const now = this.context.currentTime;
+    // on the bicycle (the player's own, or a bicycle or scooter taken from the bike lane): its bell (audio-ride.js)
+    if (entity?.type === 'cyclist' || (entity?.type === 'car' && entity.quiet)) {
+      if (now - (this.lastBell ?? -Infinity) < 0.45) return;
+      this.lastBell = now;
+      ringBell(this.context, this.mix, now);
+      return;
+    }
+    if (entity?.type !== 'car') return;
     if (now - this.lastHorn < 0.8) return;
     if (this.emit('horn', { id: entity, ...entity.position, heading: entity.heading, seed: 4 }, { intensity: 0.7, priority: true })) this.lastHorn = now;
   }
@@ -525,6 +590,24 @@ class CityAudioSystem {
     smooth(v.gain.gain,on > 0.02 ? 0.55 * Math.min(1, on * 1.4) * (0.35 + 0.65 * loud) : 0, now, on > 0.02 ? 0.05 : 0.12);
     smooth(v.squeal.frequency, 850 + Math.min(speed, 35) * 28 + on * 250, now, 0.08);
     smooth(v.body.frequency, 1800 + Math.min(speed, 35) * 40, now, 0.08);
+  }
+
+  // The road under the player's own wheels and the bicycle's gear changes (audio-ride.js): brick's drumming, gravel's
+  // crunch, a boardwalk's planks, a wet road's hiss (from `surface` and `roadWet`, controllers.js feelRoad), and a
+  // derailleur's click at each of the bicycle's shifts (`shifts`, updateCyclist). Made the first time there's any to hear
+  ride(entity, mode) {
+    if (!this.ready || !this.context) return;
+    const now = this.context.currentTime;
+    const on = this.enabled && this.context.state === 'running' && !document.hidden;
+    const rolling = on && entity && (mode === 'car' || mode === 'cyclist') && !entity.airborne && !entity.machine;
+    const surface = rolling ? entity.surface || 0 : 0, wet = rolling ? entity.roadWet || 0 : 0;
+    if (!this.rideVoice && (surface || wet > 0)) this.rideVoice = createRideVoice(this.context, this.resources.noise, this.mix);
+    this.rideVoice?.update(surface, rolling ? Math.abs(entity.speed) : 0, wet, mode === 'cyclist' || Boolean(entity?.bike), now);
+    const shifts = mode === 'cyclist' ? entity.shifts || 0 : null;
+    if (shifts !== null && this.lastShifts != null && shifts !== this.lastShifts && on) {
+      (this.rideVoice ??= createRideVoice(this.context, this.resources.noise, this.mix)).click(now);
+    }
+    this.lastShifts = shifts;
   }
 
   // The roar of water from broken hydrants (hydrant-spray.js): one voice each where it gushes, at its pressure
@@ -680,6 +763,8 @@ class CityAudioSystem {
         event.emitter.update(event.position, this.listener, now, event.range);
       }
     }
+    // the quarter hours from Burton Tower (burton-bells.js)
+    (this.bells ??= new BurtonBells()).update(this);
     this.updatePool(this.motors, sources.motors, this.limits.motors, now, dt);
     this.updatePool(this.sirens, sources.sirens, this.limits.sirens, now, dt, true);
     for (const source of sources.people) {
@@ -742,7 +827,7 @@ class CityAudioSystem {
         }
       }
     }
-    Object.assign(this.windParams, { speed: Math.min(sources.motion, 50), altitude: position.y, traffic: sources.traffic, night: night ? 1 : 0, enclosure });
+    Object.assign(this.windParams, { speed: Math.min(sources.motion, 50), altitude: position.y, traffic: sources.traffic * (this.muffle ?? 1), night: night ? 1 : 0, enclosure });
     this.wind.update(this.windParams, now);
   }
 

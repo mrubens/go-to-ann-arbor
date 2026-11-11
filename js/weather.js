@@ -8,7 +8,25 @@ import { cityUniforms } from './tsl-materials.js';
 // around the camera. Offline, or when the service doesn't answer, it's a fair day.
 
 const STATION = 'KARB';
-const FAIR = { kind: 'fair', amount: 0, text: 'Fair', tempF: null, wind: [0, 0], live: false };
+const FAIR = { kind: 'fair', amount: 0, thunder: null, text: 'Fair', tempF: null, wind: [0, 0], live: false };
+
+// A debug switch, for trying the weather's looks and sounds: the page opened with ?weather=storm (or rain, snow, fog,
+// thunder for a storm in the vicinity, or wind for a dry gale), or TRY set here, gives that weather in place of the
+// real one. Empty: the real weather
+const TRY = '';
+const TRIED = {
+  storm: { kind: 'storm', amount: 1, thunder: 'here', text: 'Thunderstorm, Heavy Rain', tempF: 74, wind: [6, 4] },
+  rain: { kind: 'rain', amount: 0.65, thunder: null, text: 'Rain', tempF: 52, wind: [2, 1] },
+  snow: { kind: 'snow', amount: 0.65, thunder: null, text: 'Snow', tempF: 28, wind: [3, 1] },
+  fog: { kind: 'fog', amount: 0, thunder: null, text: 'Fog', tempF: 45, wind: [0.3, 0] },
+  thunder: { kind: 'cloudy', amount: 0, thunder: 'near', text: 'Mostly Cloudy, Thunderstorm in Vicinity', tempF: 80, wind: [3, -2] },
+  wind: { kind: 'partly', amount: 0, thunder: null, text: 'Partly Cloudy and Windy', tempF: 48, wind: [11, 5] }
+};
+const tried = () => {
+  let name = TRY;
+  try { name = new URLSearchParams(location.search).get('weather') || TRY; } catch { /* no page address */ }
+  return TRIED[name] ? { ...TRIED[name], live: true, tried: true } : null;
+};
 
 // The observation's words and cloud layers, as one of: fair, partly, cloudy, overcast, haze, fog, rain, storm, snow
 function classify(props) {
@@ -39,7 +57,10 @@ function classify(props) {
   if (/thunder|storm/.test(here)) kind = 'storm';
   if (/snow|flurr|sleet|ice pellets/.test(here)) kind = 'snow';
   const amount = kind === 'rain' || kind === 'snow' || kind === 'storm' ? heavy : 0;
-  return { kind, amount };
+  // thunder over the airport, or 'Thunderstorm in Vicinity': a storm somewhere near, heard and seen far off, its rain not
+  // falling here (outdoors.js)
+  const thunder = /thunder|storm/.test(here) ? 'here' : /thunder|storm/.test(nearby) ? 'near' : null;
+  return { kind, amount, thunder };
 }
 
 // The last reading the service gave, kept through a failed request: a single error or a moment offline shouldn't
@@ -60,14 +81,14 @@ async function askOnce() {
     });
     if (!res.ok) return null;
     const props = (await res.json()).properties || {};
-    const { kind, amount } = classify(props);
+    const { kind, amount, thunder } = classify(props);
     const c = props.temperature && props.temperature.value;
     const speed = ((props.windSpeed && props.windSpeed.value) || 0) / 3.6; // km/h to m/s
     const from = ((props.windDirection && props.windDirection.value) || 0) * Math.PI / 180;
     // blowing toward: x east, z south
     const wind = [-Math.sin(from) * speed, Math.cos(from) * speed];
     return {
-      kind, amount, wind, live: true,
+      kind, amount, thunder, wind, live: true,
       text: props.textDescription || 'Fair',
       tempF: Number.isFinite(c) ? Math.round(c * 9 / 5 + 32) : null
     };
@@ -79,6 +100,8 @@ async function askOnce() {
 // A failed request is tried again a minute later, twice, before the answer falls back to the last reading (or a fair
 // day); the caller's weather stays as it was meanwhile
 async function fetchWeather() {
+  const trying = tried();
+  if (trying) return trying;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt) await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
     const w = await askOnce();

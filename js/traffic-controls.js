@@ -4,6 +4,7 @@ import { groundHeight } from './terrain.js';
 import { attribute, color, float, floor, mix, step, abs, texture, uniform, uv, vec2 } from 'three/tsl';
 import { signalPhase, nearestRoads } from './city-config.js';
 import { log } from '../lamp-game.js';
+import { corridorsOf } from './safety-corridors.js';
 
 // Lamp: Ann Arbor's traffic lights and stop & yield signs, where the road network put them (road-network.js, from
 // OpenStreetMap): at a signalised intersection, a mast arm on the far right corner of every approach with a head over
@@ -115,6 +116,25 @@ function limitFace(mph) {
     ctx.font = '800 136px Inter, Arial, sans-serif';
     ctx.fillText(String(mph), 128, 228);
   };
+}
+
+// Lamp: TRAFFIC SAFETY CORRIDOR, the city's plain wording, black on white, 24 x 30 in like the limit signs
+function corridorFace(ctx) {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, 256, 320);
+  ctx.strokeStyle = '#111214';
+  ctx.lineWidth = 9;
+  ctx.beginPath();
+  ctx.roundRect(12, 12, 232, 296, 18);
+  ctx.stroke();
+  ctx.fillStyle = '#111214';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '800 50px Inter, Arial, sans-serif';
+  ctx.fillText('TRAFFIC', 128, 96);
+  ctx.fillText('SAFETY', 128, 162);
+  ctx.font = '800 44px Inter, Arial, sans-serif';
+  ctx.fillText('CORRIDOR', 128, 228);
 }
 
 // The lamps of a head, top to bottom, each lit through its part of the cycle traffic obeys (city-config.js's
@@ -284,6 +304,36 @@ function buildTrafficControls(group, network) {
     const gap = cls <= 2 ? 800 : 550;
     for (let s = 20; s < e.len - 15; s += 60) limitPost(e, s, postedMph(e), gap);
   }
+  // Lamp: a TRAFFIC SAFETY CORRIDOR sign on the right where each of the three corridors begins, both ways in
+  // (safety-corridors.js)
+  let corridorSigns = 0;
+  for (const c of corridorsOf(network)) {
+    for (const end of [c.a, c.b]) {
+      const other = end === c.a ? c.b : c.a;
+      // the corridor's first road in from this end (heading toward the other end), and a spot at its curb
+      let e = null, best = 250;
+      for (const f of c.edges) {
+        const d = Math.hypot(f.sx - end.x, f.sz - end.z);
+        if (d < best && f.dx * (other.x - end.x) + f.dz * (other.z - end.z) > 0) { best = d; e = f; }
+      }
+      let spot = null;
+      for (let s = Math.min(30, e ? e.len * 0.5 : 0); e && !spot && s < e.len; s += 15) spot = curbside(e, s, e.half + 0.7);
+      // (out where nothing marks the road's edge, no curb nor block, just past the roadway's own edge)
+      if (!spot && e) spot = at(e, Math.min(30, e.len * 0.5), e.half + 1.4);
+      if (!spot) { log(`[safety corridor] no sign at ${c.name}'s end (${Math.round(end.x)}, ${Math.round(end.z)}): ${e ? `${e.street} ${Math.round(e.len)} m, no curb` : `no road in (nearest ${Math.round(Math.min(...c.edges.map((f) => Math.hypot(f.sx - end.x, f.sz - end.z))))} m)`}`); continue; }
+      const [px, pz] = spot;
+      const g = groundHeight(px, pz);
+      dummy.rotation.set(0, faceYaw(e), 0);
+      dummy.position.set(px, g + 1.2, pz);
+      dummy.scale.set(0.05, 2.4, 0.05);
+      obstacles.push(standing = { x: px, z: pz, r: 0.1, kind: 'sign', height: 2.4, parts: [] });
+      put('post');
+      dummy.position.set(px, g + 2.0, pz);
+      dummy.scale.set(0.61, 0.76, 1);
+      sign('corridor', 'limitBack');
+      corridorSigns++;
+    }
+  }
   standing = null;
 
   for (const e of network.edges) {
@@ -380,6 +430,7 @@ function buildTrafficControls(group, network) {
     plaqueBack: [fill(plaqueShape), 256],
     oneWay: [oneWayFace(false), 86, true], oneWayBack: [oneWayFace(true), 86, true],
     limitBack: [(ctx) => { ctx.fillStyle = BACK; ctx.fillRect(0, 0, 256, 320); }, 320, true],
+    corridor: [corridorFace, 320, true],
     ...Object.fromEntries([...limits.keys()].map((mph) => ['limit' + mph, [limitFace(mph), 320, true]]))
   };
   const rows = Math.max(1, Math.ceil(tiles.size / COLS));
@@ -445,7 +496,7 @@ function buildTrafficControls(group, network) {
   }
   group.userData.terrain = 'set'; // each was stood on the ground as it was placed
   log(`[traffic controls] ${lights} signal heads, ${signs} stop & yield signs, ${oneWaySigns} one-way signs, `
-    + `${[...limits.values()].reduce((a, b) => a + b, 0)} speed limit signs (${[...limits].sort((a, b) => a[0] - b[0]).map(([m, n]) => `${n} at ${m}`).join(', ')})`);
+    + `${[...limits.values()].reduce((a, b) => a + b, 0)} speed limit signs, ${corridorSigns} safety corridor signs (${[...limits].sort((a, b) => a[0] - b[0]).map(([m, n]) => `${n} at ${m}`).join(', ')})`);
   const [onMain, onCross] = kinds.lamps[1].userData.on;
   const lit = (u, phase) => u.value.set(phase === 'red' ? 1 : 0, phase === 'amber' ? 1 : 0, phase === 'green' ? 1 : 0);
   const update = (time) => {

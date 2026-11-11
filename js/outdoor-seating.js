@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { asset, log } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
 import { blockAt, TOWN_BOUNDS } from './city-config.js';
+import { onStreetLife, patiosOpen } from './street-life.js';
 
 // Lamp: outdoor seating (data/outdoor-seating.json, Assets/Tools/build-outdoor-seating.py, from OpenStreetMap): the
 // patios mapped as their own areas, set with tables in rows along their long side, and a row of tables on the sidewalk
@@ -14,6 +15,10 @@ import { blockAt, TOWN_BOUNDS } from './city-config.js';
 // Every kind is one instanced mesh (the umbrellas' canopies in their own colors), chunked and dropped past a couple of
 // hundred metres by the scene culling. A car knocks them about (`obstacles`, knockdowns.js): chairs and tables fly, an
 // umbrella's table tips over with it. `seats` lists where someone sits: each chair and each side of a picnic bench.
+//
+// They're out only in season and opening hours (street-life.js patiosOpen: April through October, 7 a.m. to 11 p.m.):
+// otherwise the furniture's put away, not drawn, not in the way and not to be sat on (`bindColliders` hands over each
+// obstacle's collider from main.js, so it can be lifted out of the way and put back).
 
 const CANOPIES = [0x1f3a5f, 0x7a1f24, 0xe8e2d4, 0x2f5136, 0x2a2a2a, 0xc9b48a];
 const hash = (a, b) => { const v = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453; return v - Math.floor(v); };
@@ -298,8 +303,34 @@ function createOutdoorSeating(group, data) {
     if (!m.count) m.visible = false;
   }
 
+  // put away out of season and overnight: the materials not drawn (one switch for every chunk the culling made of
+  // them), each collider lifted out of reach and its knock marked down (seats.js and ground-shade.js pass over it)
+  let boxOf = null, out = true;
+  const stowed = new Set();
+  const apply = () => {
+    for (const m of [metal, wood, canopyMat]) m.visible = out;
+    if (!boxOf) return;
+    for (const o of obstacles) {
+      const b = boxOf(o);
+      if (!b) continue;
+      if (!out && !stowed.has(b) && !b.knock?.down) {
+        stowed.add(b); b.stowedY = b.maxY; b.maxY = -1e6; if (b.knock) b.knock.down = true;
+      } else if (out && stowed.has(b)) {
+        stowed.delete(b); b.maxY = b.stowedY; if (b.knock) b.knock.down = false;
+      }
+    }
+  };
+  onStreetLife((life) => {
+    const now = patiosOpen(life);
+    if (now === out) return;
+    out = now;
+    log(`[outdoor seating] ${out ? 'set out' : 'put away'} (${life.month}/${life.day}, ${Math.floor(life.hour)}:00)`);
+    apply();
+  });
+  const bindColliders = (fn) => { boxOf = fn; apply(); };
+
   log(`[outdoor seating] ${sets.length} tables (${nBistro} cafe, ${nSquare} restaurant, ${nPicnic} picnic), ${nChairs} chairs, ${nUmb} umbrellas, ${rails.length} railing panels`);
-  return { obstacles, seats, count: sets.length };
+  return { obstacles, seats, count: sets.length, bindColliders, isOut: () => out };
 }
 
 async function buildOutdoorSeating(group) {

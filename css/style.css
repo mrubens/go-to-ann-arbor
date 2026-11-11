@@ -675,6 +675,22 @@ body.hud-minimized .icon-show {
   animation: rise-in 0.4s var(--ease-out) both;
 }
 
+/* The next buses from the stop the player stands at: a plain line each under the place's name */
+.location-bus {
+  max-width: 480px;
+  margin-top: -3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.88);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7), 0 0 14px rgba(0, 0, 0, 0.4);
+  animation: rise-in 0.4s var(--ease-out) both;
+}
+
 .location-signs {
   display: flex;
   align-items: center;
@@ -1725,3 +1741,20 @@ body.split .split-divider {
 .golf-meter i { display: block; height: 100%; background: #fff; transform-origin: left; transform: scaleX(0); }
 .golf-line.swinging .golf-meter { opacity: 1; }
 body.touch-enabled .golf-line { bottom: 150px; font-size: 15px; }
+
+/* Lamp: chased by a cruiser (city-map.js setPursuer): the radar's edge flashes red and blue */
+#minimap-card.chased { animation: chase-flash 0.5s steps(1, end) infinite; }
+@keyframes chase-flash {
+  0% { box-shadow: 0 0 0 2px #ff2b3a, 0 0 22px 2px rgba(255, 43, 58, 0.55); }
+  50% { box-shadow: 0 0 0 2px #2f6bff, 0 0 22px 2px rgba(47, 107, 255, 0.55); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #minimap-card.chased { animation-duration: 1.6s; }
+}
+
+/* Lamp: the place name and street signs at the top left: a sign or name already shown stays still; a new one fades in
+   gently (main.js renderLocation), rather than the whole row rising in again at every change */
+.location-place.kept, .location-signs.kept { animation: none; }
+.street-sign.fresh { animation: sign-fade 0.45s var(--ease-out) both; }
+@keyframes sign-fade { from { opacity: 0; } to { opacity: 1; } }
+.location-place:not(.kept) { animation: sign-fade 0.45s var(--ease-out) both; }

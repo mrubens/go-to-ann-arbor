@@ -2,13 +2,13 @@ import { CROSSWALK } from './road-network.js';
 
 // Lazily connected sidewalk tracks; junctions stay on the same curb island. Crosswalk tracks are separate,
 // and pedestrian-system.js checks traffic permissions before entering them.
-function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
+function createPedestrianRoutes({ walkable, onSidewalk }, blockAt, trails = null) {
   const sidewalks = new Map(), crossings = new Map(), junctions = new Map(), connections = new WeakMap();
   const point = (track, end) => ({ x: track.ax + track.ux * track.len * end, z: track.az + track.uz * track.len * end });
   const segment = (a, b, extra = {}) => {
     const len = Math.hypot(b.x - a.x, b.z - a.z);
     return { ax: a.x, az: a.z, ux: (b.x - a.x) / len, uz: (b.z - a.z) / len,
-      len, node: null, side: 0, line: 0, ...extra };
+      len, node: null, side: 0, line: 0, trail: false, ...extra };
   };
 
   function clear(a, b, block = null) {
@@ -226,7 +226,7 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
     let best = null, bestScore = -Infinity;
     const a = point(track, dir > 0 ? 1 : 0);
     const gx = goalX - a.x, gz = goalZ - a.z, distance = Math.hypot(gx, gz) || 1;
-    for (const path of links(track, dir)) {
+    for (const path of track.trail ? trailLinks(track, dir) : links(track, dir)) {
       const last = path[path.length - 1], target = last.track;
       const ux = target.ux * last.dir, uz = target.uz * last.dir;
       const back = ux * track.ux * dir + uz * track.uz * dir < -0.8;
@@ -239,12 +239,88 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
   // Lamp: a step aside stays on the person's own curb island, within 4 m of its edge and clear of anything standing
   // there (cornerClear); most of Ann Arbor's islands have no curb rectangle for onSidewalk to find, as along() allows
   function canDodge(p, offset) {
-    const block = blockAt(p.x, p.z);
     const target = { x: p.ax + p.ux * p.t + p.uz * offset, z: p.az + p.uz * p.t - p.ux * offset };
+    // (off a park path, onto the grass either side: clear of whatever stands there)
+    if (p.trail) return Math.abs(offset) < 3 && clear(p, target);
+    const block = blockAt(p.x, p.z);
     return !!block && cornerClear(p, target, block);
   }
 
-  return { along, across, next, canDodge };
+  // Lamp: the walks through the parks, the woods and the campus lawns (GEO.trails: [kind, width, x, z, ...], kinds 0
+  // paved, 1 dirt, 2 asphalt; boardwalks and steps left out), as walk-only tracks of their own: each polyline a chain
+  // of segments (before/after), and at either end of it a way on into any other path with a point within 3 m (OSM's
+  // ways meet at shared nodes, ends or mid-way). Nothing joins them to the sidewalks: a park's walkers stay in it.
+  // Built on first use; trailsNear finds the segments round a point from a 64 m grid.
+  const TRAIL_CELL = 64, JOIN = 3;
+  let trailGrid = null, pointGrid = null;
+  const cellKey = (ix, iz) => ix * 100003 + iz;
+  function buildTrails() {
+    trailGrid = new Map(); pointGrid = new Map();
+    const push = (grid, k, v) => { let c = grid.get(k); if (!c) grid.set(k, (c = [])); c.push(v); };
+    for (const t of trails || []) {
+      if (t.length < 6 || t[0] > 2) continue;
+      const kind = t[0], chain = [];
+      let previous = null;
+      for (let i = 4; i < t.length; i += 2) {
+        const a = { x: t[i - 2], z: t[i - 1] }, b = { x: t[i], z: t[i + 1] };
+        if (Math.hypot(b.x - a.x, b.z - a.z) < 0.05) continue;
+        const track = segment(a, b, { trail: true, kind, width: t[1], chain, index: chain.length });
+        if (previous) { previous.after = track; track.before = previous; }
+        chain.push(track);
+        previous = track;
+        // every segment in each cell it passes through
+        const steps = Math.ceil(track.len / (TRAIL_CELL * 0.5));
+        let last = null;
+        for (let k = 0; k <= steps; k++) {
+          const key = cellKey(Math.floor((a.x + (b.x - a.x) * k / steps) / TRAIL_CELL), Math.floor((a.z + (b.z - a.z) * k / steps) / TRAIL_CELL));
+          if (key !== last) push(trailGrid, key, track);
+          last = key;
+        }
+      }
+      // its points (each segment's start, and the last one's end), to join others' ends to
+      for (let k = 0; k <= chain.length; k++) {
+        const tr = chain[Math.min(k, chain.length - 1)], end = k === chain.length ? 1 : 0;
+        const q = point(tr, end);
+        push(pointGrid, cellKey(Math.floor(q.x / JOIN), Math.floor(q.z / JOIN)), { x: q.x, z: q.z, chain, k });
+      }
+    }
+  }
+  function trailsNear(x, z, r, out) {
+    if (!trailGrid) buildTrails();
+    out.length = 0;
+    const seen = new Set();
+    const c0x = Math.floor((x - r) / TRAIL_CELL), c1x = Math.floor((x + r) / TRAIL_CELL);
+    const c0z = Math.floor((z - r) / TRAIL_CELL), c1z = Math.floor((z + r) / TRAIL_CELL);
+    for (let cx = c0x; cx <= c1x; cx++) for (let cz = c0z; cz <= c1z; cz++) {
+      const c = trailGrid.get(cellKey(cx, cz));
+      if (c) for (const t of c) if (!seen.has(t)) { seen.add(t); out.push(t); }
+    }
+    return out;
+  }
+  function trailLinks(track, dir) {
+    let ends = connections.get(track);
+    if (!ends) connections.set(track, ends = []);
+    const end = dir > 0 ? 1 : 0;
+    if (ends[end]) return ends[end];
+    const result = ends[end] = [];
+    const continuation = end ? track.after : track.before;
+    if (continuation) { result.push([{ track: continuation, dir }]); return result; }
+    const a = point(track, end);
+    const ix = Math.floor(a.x / JOIN), iz = Math.floor(a.z / JOIN);
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      for (const q of pointGrid.get(cellKey(ix + dx, iz + dz)) || []) {
+        const d = Math.hypot(q.x - a.x, q.z - a.z);
+        if (q.chain === track.chain || d > JOIN) continue;
+        // on along the other path either way from the point they share (a short step across first if they don't quite)
+        const lead = d > 0.3 ? [{ track: segment(a, q, { trail: true, kind: track.kind, width: track.width }), dir: 1 }] : [];
+        if (q.k < q.chain.length) result.push([...lead, { track: q.chain[q.k], dir: 1 }]);
+        if (q.k > 0) result.push([...lead, { track: q.chain[q.k - 1], dir: -1 }]);
+      }
+    }
+    return result;
+  }
+
+  return { along, across, next, canDodge, trailsNear };
 }
 
 export { createPedestrianRoutes };

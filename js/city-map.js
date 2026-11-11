@@ -18,6 +18,7 @@ import { rankSearch, bestRoad, searchPlaces } from './map-search.js';
 import { groundHeight } from './terrain.js';
 import { layOutHoles } from './golf.js';
 import { AIRPORT } from './airport-data.js';
+import { neighborhoods } from './districts.js';
 import { onAirfield } from './airport.js';
 import { TIER } from './device-tier.js';
 import { hot, BUTTON, STICK, TRIGGER, glyph, onInput, asset, log } from '../lamp-game.js';
@@ -123,6 +124,9 @@ const AREA_LABELS = [
   ['BURNS PARK', 1700, 1350, 2], ['OLD WEST SIDE', -800, 300, 2], ['WATER HILL', -700, -850, 2], ['LOWER TOWN', 900, -1150, 2],
   ['NICHOLS ARBORETUM', 2300, 50, 2], ['THE BIG HOUSE', -26, 1780, 2]
 ];
+
+// The city's neighbourhoods the names above already give, or whose umbrella they split into local names
+const HOOD_SKIP = new Set(['Downtown', 'Burns Park', 'Old West Side', 'North Campus', 'North Central', 'Central Campus Medical']);
 
 // Shorter map names for a few real street names
 const LABEL_ALIAS = {};
@@ -497,6 +501,19 @@ function drawGolfSign(ctx, x, y, r) {
   ctx.beginPath(); ctx.ellipse(x - r * 0.21, y + r * 0.6, r * 0.42, r * 0.14, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#ffcb05';
   ctx.beginPath(); ctx.moveTo(x - r * 0.14, y - r * 0.62); ctx.lineTo(x + r * 0.6, y - r * 0.38); ctx.lineTo(x - r * 0.14, y - r * 0.12); ctx.closePath(); ctx.fill();
+}
+
+// Lamp: the cruiser chasing the player (main.js sets `pursuer` from traffic.js): a dot flashing red and blue in a dark ring
+function drawPolice(ctx, x, y, r) {
+  const red = Math.floor(performance.now() / 250) % 2 === 0;
+  ctx.fillStyle = 'rgba(8, 10, 16, 0.85)';
+  ctx.beginPath();
+  ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = red ? '#ff2b3a' : '#2f6bff';
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function drawPlayerArrow(ctx, tipY, halfWidth, tailY) {
@@ -1425,6 +1442,16 @@ class CityMapSystem {
     ctx.textBaseline = 'alphabetic';
   }
 
+  // the cruiser chasing the player, or null (main.js, each frame): its dot on both maps, and the radar's edge flashing
+  setPursuer(car) {
+    this.pursuer = car || null;
+    const chased = Boolean(car);
+    if (chased !== this.chased) {
+      this.chased = chased;
+      document.getElementById('minimap-card')?.classList.toggle('chased', chased);
+    }
+  }
+
   update() {
     // Arrived: the GPS route goes once the player is within 25 m of its end
     if (this.waypoint && !this.isFullMapOpen) {
@@ -1604,6 +1631,12 @@ class CityMapSystem {
       const sx = toX(site.x), sy = toY(site.z);
       if (Math.abs(sx) < w * 0.48 && Math.abs(sy) < h * 0.48) drawWorkSign(ctx, sx, sy, 5);
     }
+    // the cruiser after the player: on the radar's edge when it's farther than the radar shows
+    if (this.pursuer) {
+      let cx = toX(this.pursuer.x), cy = toY(this.pursuer.z);
+      const k = Math.max(Math.abs(cx) / (w * 0.44), Math.abs(cy) / (h * 0.44), 1);
+      drawPolice(ctx, cx / k, cy / k, 3.6);
+    }
 
 
     // Camera FOV Cone & Player Arrow at center (0, 0)
@@ -1724,6 +1757,7 @@ class CityMapSystem {
       const sx = toX(site.x), sy = toY(site.z);
       if (Math.abs(sx) < v.w * 0.5 && Math.abs(sy) < v.h * 0.5) (v.s < DOTS_UNDER ? drawDot(ctx, sx, sy, '#ff8a1f', 2.2) : drawWorkSign(ctx, sx, sy, 7 * iconScale(v.s)));
     }
+    if (this.pursuer) drawPolice(ctx, toX(this.pursuer.x), toY(this.pursuer.z), 5);
 
 
     // Live Player Blip & Heading Arrow, with a slow pulse to find it at a glance
@@ -1907,6 +1941,38 @@ class CityMapSystem {
       if (overlaps(placed, box)) continue;
       placed.push(box);
       ctx.fillText(label, dx, dy);
+    }
+    // Lamp: the city's neighbourhoods (build-neighborhoods.py), zoomed in a little, each at the point deepest inside it
+    // and only where its name fits across it (on two lines at its dash or last space if need be), after the central names above
+    if (s >= 0.06 && s <= 1.2) {
+      ctx.font = `700 9.5px ${FONT}`;
+      ctx.fillStyle = 'rgba(168, 178, 192, 0.4)';
+      if (tracking) ctx.letterSpacing = '1.6px';
+      for (const n of neighborhoods()) {
+        if (HOOD_SKIP.has(n.name)) continue;
+        const dx = toX(n.label[0]);
+        const dy = toY(n.label[1]);
+        if (Math.abs(dx) > w * 0.47 || Math.abs(dy) > h * 0.47) continue;
+        const room = Math.min(n.w, n.r * 3) * s * 0.85;
+        const name = n.name.toUpperCase();
+        let lines = [name];
+        if (this.textWidth(ctx, name) > room) {
+          const dash = name.lastIndexOf('–'), space = name.lastIndexOf(' ');
+          lines = dash > 0 ? [name.slice(0, dash + 1), name.slice(dash + 1)]
+            : space > 0 ? [name.slice(0, space), name.slice(space + 1)] : null;
+        }
+        if (!lines || lines.some((l) => this.textWidth(ctx, l) > room) || lines.length * 12 > n.r * s * 1.6) continue;
+        // a pin in the way (a champion tree's, a park's) moves the name up or down a line, while it stays well inside
+        const half = Math.max(...lines.map((l) => this.textWidth(ctx, l))) * 0.5 + 4, tall = lines.length * 6 + 4;
+        for (const off of [0, -16, 16, -32, 32]) {
+          if (Math.abs(off) + tall > n.r * s * 0.8) break;
+          const y = dy + off, box = [dx - half, y - tall, dx + half, y + tall];
+          if (overlaps(placed, box)) continue;
+          placed.push(box);
+          lines.forEach((l, i) => ctx.fillText(l, dx, y + (i - (lines.length - 1) / 2) * 12));
+          break;
+        }
+      }
     }
     if (tracking) ctx.letterSpacing = '0px';
     ctx.textBaseline = 'alphabetic';

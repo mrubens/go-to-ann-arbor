@@ -30,6 +30,7 @@ The app itself, to open in [Lamp](https://lamp.dev) and change, is on the [main 
 - Uses [City Boundary](https://ckan.a2gov.org/dataset/c5d51794-60bb-478e-8cef-da420869d98d) by City of Ann Arbor, None
 - Uses [Land Use](https://ckan.a2gov.org/dataset/land-use) by City of Ann Arbor, None
 - Uses [Historic Districts](https://ckan.a2gov.org/dataset/historic-districts) by City of Ann Arbor, None
+- Uses [Neighborhoods](https://ckan.a2gov.org/dataset/neighborhoods) by City of Ann Arbor, None
 - Uses [Huron River at Ann Arbor gauge (04174500), live flow](https://waterdata.usgs.gov/monitoring-location/04174500/) by U.S. Geological Survey, LicenseRef-US-Government-Public-Domain
 - Uses [Amtrak GTFS timetable (Wolverine stops at Ann Arbor)](https://content.amtrak.com/content/gtfs/GTFS.zip) by Amtrak (National Railroad Passenger Corporation), None
 - Uses Huron River PFAS surface water sampling by Michigan EGLE (MPART), None
@@ -39,7 +40,6 @@ The app itself, to open in [Lamp](https://lamp.dev) and change, is on the [main 
 - Uses [MiDrive construction and closures](https://mdotjboss.state.mi.us/MiDrive/map) by Michigan Department of Transportation
 - Uses [OpenSky Network live aircraft states](https://opensky-network.org) by The OpenSky Network
 - Uses [Ann Arbor scooter locations (GBFS)](https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs) by Bird Rides (Spin), LicenseRef-Bird-GBFS-Data-License
-- Uses [Snow depth (Open-Meteo)](https://open-meteo.com) by Open-Meteo.com, CC-BY-4.0
 
 Map data is ODbL-1.0: it stays under that license, credited, in this remix.
 
@@ -80,6 +80,8 @@ City Boundary is used under its own terms (None).
 Land Use is used under its own terms (None).
 
 Historic Districts is used under its own terms (None).
+
+Neighborhoods is used under its own terms (None).
 
 Huron River at Ann Arbor gauge (04174500), live flow is used under its own terms (LicenseRef-US-Government-Public-Domain).
 

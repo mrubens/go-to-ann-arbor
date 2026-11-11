@@ -144,18 +144,9 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
   <!-- 3D WebGPU Viewport Container -->
   <main id="canvas-container" aria-label="3D Interactive Go To Ann Arbor Viewport"></main>
 
-  <!-- Top-Left: Brand & Renderer Telemetry -->
+  <!-- Top-Left: where the player is (the neighbourhood or place, and the street-name signs) -->
   <header class="hud hud-top-left">
-    <div class="panel brand">
-      <img class="mta-bullet app-logo" src="img/app-icon.png" alt="" aria-hidden="true">
-      <div class="brand-titles">
-        <div class="brand-heading">
-          <h1>Go To Ann Arbor</h1>
-          <span class="brand-fps" aria-label="Frames a second"><span id="hud-fps">--</span> fps</span>
-          <a class="repo-link" href="https://github.com/mrubens/go-to-ann-arbor" target="_blank" rel="noopener noreferrer" aria-label="Go To Ann Arbor on GitHub (opens in your browser)">GitHub <span aria-hidden="true">↗</span></a>
-        </div>
-      </div>
-    </div>
+    <div id="hud-location" class="location" aria-live="off"></div>
   </header>
 
   <!-- Top-Right Toolbar: Time of Day, Teleport, Map & Clean View -->
@@ -250,7 +241,7 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
     <button id="tp-countyfarm" class="pop-item tp-btn" data-teleport="countyfarm" type="button"><span class="pop-name">County Farm Park</span><span class="pop-sub">Platt Rd · Southeast</span></button>
     <button id="tp-leslie" class="pop-item tp-btn" data-teleport="leslie" type="button"><span class="pop-name">Leslie Park</span><span class="pop-sub">Traver Rd · North side</span></button>
     <div class="pop-title">Golf</div>
-    <button id="tp-golf-huron-hills-golf-course" class="pop-item tp-btn" data-teleport="golf-huron-hills-golf-course" type="button"><span class="pop-name">Huron Hills</span><span class="pop-sub">Huron Pkwy · 18 holes</span></button>
+    <button id="tp-golf-huron-hills-golf-course" class="pop-item tp-btn" data-teleport="golf-huron-hills-golf-course" type="button"><span class="pop-name">Huron Hills</span><span class="pop-sub">E Huron River Dr · 18 holes</span></button>
     <button id="tp-golf-leslie-park-golf-course" class="pop-item tp-btn" data-teleport="golf-leslie-park-golf-course" type="button"><span class="pop-name">Leslie Park</span><span class="pop-sub">Traver Rd · 18 holes</span></button>
     <button id="tp-golf-university-of-michigan-golf-course" class="pop-item tp-btn" data-teleport="golf-university-of-michigan-golf-course" type="button"><span class="pop-name">U-M Golf Course</span><span class="pop-sub">S Main St · 18 holes</span></button>
     <button id="tp-golf-georgetown-country-club" class="pop-item tp-btn" data-teleport="golf-georgetown-country-club" type="button"><span class="pop-name">Georgetown Country Club</span><span class="pop-sub">Southeast · 9 holes</span></button>
@@ -265,9 +256,8 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
     <button id="tp-airport" class="pop-item tp-btn" data-teleport="airport" type="button"><span class="pop-name">Ann Arbor Airport</span><span class="pop-sub">S State St · Helicopters</span></button>
   </div>
 
-  <!-- Bottom-Left: Street-Name Signs & Live GPS Radar Minimap -->
+  <!-- Bottom-Left: Live GPS Radar Minimap -->
   <div class="hud hud-bottom-left">
-    <div id="hud-location" class="location" aria-live="off"></div>
     <aside id="minimap-card" class="panel radar" aria-label="Live Ann Arbor Street Radar Minimap" title="Open the full Ann Arbor street map [M]">
       <canvas id="minimap-canvas"></canvas>
       <span class="radar-north" aria-hidden="true">N</span>
@@ -468,12 +458,12 @@ var c=new Image(),s=0;c.onload=function(){if(!s){s=1;location.replace(t[0])}};c.
 <div id="lamp-remix" hidden>
   <div class="lamp-remix-head">Make Go To Ann Arbor yours<button type="button" id="lamp-remix-close" aria-label="Close">×</button></div>
   <p>Say what you'd change. Lamp makes the change and keeps your data.</p>
-  <button type="button" class="lamp-remix-pick">Add a minimap showing where I am</button><button type="button" class="lamp-remix-pick">Let me change the time of day</button><button type="button" class="lamp-remix-pick">Make the helicopter fly faster with a boost</button>
+  <button type="button" class="lamp-remix-pick">Change how it looks</button><button type="button" class="lamp-remix-pick">Add something it doesn't do yet</button><button type="button" class="lamp-remix-pick">Make it work the way I'd want</button>
   <textarea id="lamp-remix-ask" rows="3" placeholder="Or say it your way"></textarea>
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of Go To Ann Arbor with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"09c39235dc77a6ca14dd6bed170015d141b539a7","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"link":"https:\/\/lamp.dev\/w\/D4vNNnfErs-go-to-ann-arbor","origin":{"commit":"40b3e6b816ddf9b5142f8fe51fcb49071230fa9f","repo":"https:\/\/github.com\/mrubens\/go-to-ann-arbor"},"request":"Make an app like Go To Ann Arbor: Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');

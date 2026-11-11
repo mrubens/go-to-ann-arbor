@@ -132,6 +132,8 @@ class CityAudioSources {
     const item = this.motors.take(player ? -1 : d2);
     if (!item) return;
     writeMotor(item, id, kind, x, y, z, speed, load, heading, player, seed, blocked, gain, range, verticalSpeed);
+    // heard from inside it: the player's own, from the first-person view (cameras.js viewInside)
+    item.cabin = Boolean(player && this.controllers.viewInside);
   }
 
   person(id, x, y, z, speed, grounded, rig, player = false, priority = player) {

@@ -4,6 +4,8 @@ import { cityUniforms } from './tsl-materials.js';
 import { groundHeight } from './terrain.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
+import { gameTime } from './game-clock.js';
+import { setBellTower } from './burton-bells.js';
 
 // Lamp: three of campus's landmarks modelled by hand in place of the survey's plain blocks, on their real outlines
 // (city-geodata.js's landmarks):
@@ -187,7 +189,8 @@ function burtonTower(B, site) {
       B.faceBox(cx, cz, H - 0.3, side, -1.3, 1.3, Y(0), Y(3.6), 0.4, 0.46, DOOR);
       B.faceBox(cx, cz, H - 0.3, side, -1.9, 1.9, Y(3.6), Y(4.2), 0, 0.8, LIMESTONE_DARK);
     }
-    // the clock: a cream dial on a stone panel, its ring and hours in gold, its hands at ten past ten
+    // the clock: a cream dial on a stone panel, its ring and hours in gold; its hands turn with the time the game shows
+    // (burtonHands)
     B.faceBox(cx, cz, H - 0.3, side, -2.6, 2.6, Y(31.2), Y(36.2), 0, 0.12, LIMESTONE_DARK);
     B.faceDisc(cx, cz, H - 0.3, side, 0, Y(33.7), 2.15, 0.14, GOLD);
     B.faceDisc(cx, cz, H - 0.3, side, 0, Y(33.7), 1.95, 0.16, CLOCK);
@@ -195,15 +198,8 @@ function burtonTower(B, site) {
       const a = (h / 12) * Math.PI * 2, r = 1.68;
       B.faceDisc(cx, cz, H - 0.3, side, Math.cos(a) * r, Y(33.7) + Math.sin(a) * r, h % 3 ? 0.07 : 0.13, 0.18, LOUVER, B.stone, 6);
     }
-    const hand = (a, len, w) => {
-      const ux = Math.cos(a), uy = Math.sin(a);
-      const [nx, nz] = SIDES[side], tx = -nz, tz = nx;
-      const P = (u, y) => [cx + nx * (H - 0.3 + 0.2) + tx * u, Y(33.7) + y, cz + nz * (H - 0.3 + 0.2) + tz * u];
-      B.quad(B.stone, P(-uy * w, ux * w), P(ux * len - uy * w, uy * len + ux * w), P(ux * len + uy * w, uy * len - ux * w), P(uy * w, -ux * w), LOUVER);
-    };
-    // u runs toward the viewer's left as they face the dial, so clockwise is measured with +θ
-    hand(Math.PI / 2 + (10 + 10 / 60) / 12 * Math.PI * 2, 1.05, 0.07);
-    hand(Math.PI / 2 + (10 / 60) * Math.PI * 2, 1.6, 0.05);
+    const [nx, nz] = SIDES[side];
+    DIALS.push({ x: cx + nx * (H - 0.3), y: Y(33.7), z: cz + nz * (H - 0.3), nx, nz });
   }
   // a cornice, then the bell chamber, set back, with three tall louvered openings a face
   B.box(cx - H - 0.15, cx + H + 0.15, Y(BELL), Y(BELL + 1.2), cz - H - 0.15, cz + H + 0.15, LIMESTONE_DARK);
@@ -222,6 +218,8 @@ function burtonTower(B, site) {
   B.box(cx - 4.1, cx + 4.1, Y(TOP + 3), Y(TOP + 4.8), cz - 4.1, cz + 4.1, LIMESTONE);
   B.box(cx - 4.3, cx + 4.3, Y(TOP + 4.8), Y(TOP + 5.3), cz - 4.3, cz + 4.3, LIMESTONE_DARK);
   B.hip(cx - 4.0, cx + 4.0, cz - 4.0, cz + 4.0, Y(TOP + 5.3), Y(58.5), COPPER);
+  // the bells hang in the chamber (burton-bells.js)
+  setBellTower({ x: cx, y: Y(BELL + 6), z: cz });
   return { minX: cx - H - 0.3, maxX: cx + H + 0.3, minZ: cz - H - 0.3, maxZ: cz + H + 0.3, maxY: Y(58.5) };
 }
 
@@ -736,9 +734,61 @@ const MODELS = [
   ['Michigan Union', michiganUnion]
 ];
 
+// Burton Tower's dials (their middles and which way they face), gathered as it's built
+const DIALS = [];
+
+// The clock's hands, the hour and minute hand on each of the four dials: one instanced quad, turned at most once a
+// second as it's drawn, by the time the game shows (game-clock.js: Ann Arbor's real time under "Now", a preset's own)
+function burtonHands() {
+  if (!DIALS.length) return null;
+  const geo = new THREE.BufferGeometry();
+  // a unit hand along +x from the arbor, ±1 across, facing +z
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([0, -1, 0, 1, -1, 0, 1, 1, 0, 0, -1, 0, 1, 1, 0, 0, 1, 0], 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], 3));
+  const lin = LOUVER.map((v) => v ** 2.2);
+  const mat = new THREE.MeshStandardNodeMaterial({ color: new THREE.Color(lin[0], lin[1], lin[2]), roughness: 0.7, side: THREE.DoubleSide });
+  const hands = new THREE.InstancedMesh(geo, mat, DIALS.length * 2);
+  hands.name = 'BurtonClockHands';
+  let cx = 0, cy = 0, cz = 0;
+  for (const d of DIALS) { cx += d.x / DIALS.length; cy += d.y / DIALS.length; cz += d.z / DIALS.length; }
+  hands.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx, cy, cz), 9);
+  const m = new THREE.Matrix4(), X = new THREE.Vector3(), Yv = new THREE.Vector3(), Z = new THREE.Vector3();
+  let shownAt = -Infinity, shown = NaN;
+  const set = () => {
+    const sec = gameTime().sec;
+    if (sec === shown) return;
+    shown = sec;
+    // clockwise from twelve: the hour hand round in 12 hours, the minute hand in one
+    const turns = [[(sec / 43200) % 1, 1.05, 0.07, 0.22], [(sec / 3600) % 1, 1.6, 0.05, 0.2]];
+    let i = 0;
+    for (const d of DIALS) {
+      // u runs toward the viewer's left as they face the dial (tx, tz), so clockwise is measured with +θ
+      const tx = -d.nz, tz = d.nx;
+      for (const [turn, len, w, out] of turns) {
+        const a = Math.PI / 2 + turn * Math.PI * 2, ux = Math.cos(a), uy = Math.sin(a);
+        X.set(tx * ux, uy, tz * ux).multiplyScalar(len);
+        Yv.set(-tx * uy, ux, -tz * uy).multiplyScalar(w);
+        Z.set(d.nx, 0, d.nz);
+        m.makeBasis(X, Yv, Z).setPosition(d.x + d.nx * out, d.y, d.z + d.nz * out);
+        hands.setMatrixAt(i++, m);
+      }
+    }
+    hands.instanceMatrix.needsUpdate = true;
+  };
+  set();
+  hands.onBeforeRender = function () {
+    const now = performance.now();
+    if (now - shownAt < 1000) return;
+    shownAt = now;
+    set();
+  };
+  return hands;
+}
+
 function buildCampusLandmarks(group, colliders, sites) {
   const B = builder();
   const built = [];
+  DIALS.length = 0;
   for (const [name, make] of MODELS) {
     const site = sites[name];
     if (!site || !site.ring) continue;
@@ -761,6 +811,8 @@ function buildCampusLandmarks(group, colliders, sites) {
   const glass = mesh(B.glass, landmarkGlass());
   glass.name = 'CampusLandmarkGlass';
   group.add(stone, glass);
+  const hands = burtonHands();
+  if (hands) group.add(hands);
   return built;
 }
 

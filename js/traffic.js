@@ -31,6 +31,8 @@ import {
 import { groundHeight, groundTilt } from './terrain.js';
 import { MOTO_SPECS, HELMET_OF, HELMET_PAINTS, buildMotoGeometry, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
+import { speedLimitAt } from './speed-limits.js';
+import { corridorsOf } from './safety-corridors.js';
 import { loadTheRide, createSchedule, createStopSigns, fetchTheRideLive } from './theride.js';
 
 // Cars and buses follow the road graph, obey signals, yield at crossings and react to collisions.
@@ -38,6 +40,8 @@ import { loadTheRide, createSchedule, createStopSigns, fetchTheRideLive } from '
 
 // Ann Arbor: a quiet college town, not Manhattan; fewer on a phone (device-tier.js)
 const NUM_CARS = Math.round(70 * TIER.traffic);
+// Lamp: and one more car slot, outside traffic's share: the cruiser watching a safety corridor's speed (speedTrap)
+const CAR_SLOTS = NUM_CARS + 1;
 const NUM_BUSES = Math.round(16 * Math.max(0.75, TIER.traffic)); // Lamp: TheRide's buses on the road near the player, as the timetable has them (theride.js)
 
 // Intelligent Driver Model: max acceleration, comfortable braking, time headway, standstill gap; the sideways
@@ -137,6 +141,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   // Synchronous notification: listeners must copy any fields they retain. Normal points from b toward a.
   function reportCollision(a, b, x, y, z, nx, nz, speed) {
+    if (speed > 6 && player.mode === 'car' && player.entity && (a === player.entity || b === player.entity)) reportOffense?.('careless driving');
     if (!collisionListener || speed <= 0.5) return;
     collisionEvent.a = a; collisionEvent.b = b;
     collisionEvent.x = x; collisionEvent.y = y; collisionEvent.z = z;
@@ -204,7 +209,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // Every body kind shares one 3D wheel model, instanced separately and scaled to the kind's wheel radius
   const carWheelLeftGeo = buildSteerableWheelGeo(BODY_SPECS.sedan, -1);
   const carWheelRightGeo = buildSteerableWheelGeo(BODY_SPECS.sedan, 1);
-  const carWheelStyles = new THREE.InstancedBufferAttribute(new Float32Array(NUM_CARS * 2), 1);
+  const carWheelStyles = new THREE.InstancedBufferAttribute(new Float32Array(CAR_SLOTS * 2), 1);
   carWheelLeftGeo.setAttribute('wheelStyle', carWheelStyles);
   carWheelRightGeo.setAttribute('wheelStyle', carWheelStyles);
   const carWheelMat = createCarWheelMaterial({ instanced: true });
@@ -227,15 +232,16 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // few cars as on a full fleet)
   let carSlot = 0;
   const baseCount = {};
-  for (let i = 0; i < NUM_CARS; i++) {
-    const isPolice = (i % 50) === 6 || (i % 100) === 56;
+  for (let i = 0; i < CAR_SLOTS; i++) {
+    const trap = i === NUM_CARS;
+    const isPolice = trap || (i % 50) === 6 || (i % 100) === 56;
     // about one in ten is a motorcycle, of each kind in turn; one in ten rides at the curb, and one in twenty more is
     // an e-bike, the commonest of those in Ann Arbor
     const extraEbike = !isPolice && i % 20 === 11;
     const curb = !isPolice && (i % 10 === 7 || extraEbike);
     const moto = curb || (!isPolice && i % 10 === 3);
     let bodyType;
-    if (isPolice) bodyType = (i % 100) === 56 ? 'suv' : 'sedan';
+    if (isPolice) bodyType = !trap && (i % 100) === 56 ? 'suv' : 'sedan';
     else if (extraEbike) bodyType = 'ebike';
     else if (curb) bodyType = CURB_KINDS[Math.floor(i / 10) % CURB_KINDS.length];
     else if (moto) bodyType = MOTO_KINDS[Math.floor(i / 10) % MOTO_KINDS.length];
@@ -248,9 +254,14 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       else if (bodyType === 'pickup' && k % 8 === 2) bodyType = 'r1t';
     }
 
+    // Lamp: the first van is an ambulance, plain white with a red band, no names (ambulanceRuns)
+    const ambulance = bodyType === 'van' && counts.van === 0;
     let col;
     let style;
-    if (moto) {
+    if (ambulance) {
+      col = policeWhite;
+      style = carStyleCode({ livery: 5, metallic: 0, trim: 2, wheel: 3, plate: i });
+    } else if (moto) {
       const paints = MOTO_SPECS[bodyType].paints;
       col = new THREE.Color(paints[(i * 7 + 3) % paints.length]);
       style = 0;
@@ -273,9 +284,17 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     // Lamp: a cruiser (`cruiser`) mostly drives as everyone does, its bar dark; now and then it goes on a call for a
     // minute or two (`isPolice`: lights and siren, through the reds), a few minutes apart (policeCalls)
     Object.assign(car, { isPolice: false, cruiser: isPolice, nextCall: isPolice ? 60 + Math.random() * 240 : 0, callUntil: 0,
+      trap, ambulance, nextRun: ambulance ? 90 + Math.random() * 180 : 0, pullUntil: 0, pullOff: 0, rank: 0,
       bodyType, paint, style, halfL: kind.halfL, mass: kind.mass, engine: kind.engine, moto, curb });
     if (curb) car.curbSpeed = MOTO_SPECS[bodyType].curbSpeed * (0.85 + (i % 7) * 0.05);
     cars.push(car);
+  }
+  // Lamp: which cars are out at the hour (setTrafficShare): the cruisers and the ambulance always, the rest in a fixed
+  // shuffled order, so the kinds keep their shares as the streets empty
+  {
+    const key = new Map(cars.map((c) => [c, c.cruiser || c.ambulance ? -1 : Math.random()]));
+    const order = cars.filter((c) => !c.trap).sort((a, b) => key.get(a) - key.get(b));
+    order.forEach((c, k) => { c.rank = k; });
   }
 
   // Per body kind: the full model (with separately instanced spinning wheels near the camera) and, beyond
@@ -338,8 +357,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   const RIDER_DISTANCE = 220;
   const _helmetScale = new THREE.Vector3();
 
-  const carWheelLeftInst = new THREE.InstancedMesh(carWheelLeftGeo, carWheelMat, NUM_CARS * 2);
-  const carWheelRightInst = new THREE.InstancedMesh(carWheelRightGeo, carWheelMat, NUM_CARS * 2);
+  const carWheelLeftInst = new THREE.InstancedMesh(carWheelLeftGeo, carWheelMat, CAR_SLOTS * 2);
+  const carWheelRightInst = new THREE.InstancedMesh(carWheelRightGeo, carWheelMat, CAR_SLOTS * 2);
   carWheelRightInst.userData.sharesPipelineWith = carWheelLeftInst;
 
   // 3D Collision Spark & Debris Particle Pool
@@ -379,16 +398,19 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   const lightbarMat = createLightbarMaterial();
   const policeLightbars = {
     sedan: new THREE.InstancedMesh(buildLightbarGeometry(BODY_SPECS.sedan), lightbarMat, Math.max(1, policeCounts.sedan)),
-    suv: new THREE.InstancedMesh(buildLightbarGeometry(BODY_SPECS.suv), lightbarMat, Math.max(1, policeCounts.suv))
+    suv: new THREE.InstancedMesh(buildLightbarGeometry(BODY_SPECS.suv), lightbarMat, Math.max(1, policeCounts.suv)),
+    // the ambulance's, red and white (createLightbarMaterial(true))
+    van: new THREE.InstancedMesh(buildLightbarGeometry(BODY_SPECS.van), createLightbarMaterial(true), 1)
   };
   // the same bars, dark, on cruisers that aren't on a call
   const darkLightbarMat = new THREE.MeshStandardNodeMaterial({ color: 0x1a1d21, roughness: 0.2, metalness: 0.25 });
   const darkLightbars = {
     sedan: new THREE.InstancedMesh(policeLightbars.sedan.geometry, darkLightbarMat, Math.max(1, policeCounts.sedan)),
-    suv: new THREE.InstancedMesh(policeLightbars.suv.geometry, darkLightbarMat, Math.max(1, policeCounts.suv))
+    suv: new THREE.InstancedMesh(policeLightbars.suv.geometry, darkLightbarMat, Math.max(1, policeCounts.suv)),
+    van: new THREE.InstancedMesh(policeLightbars.van.geometry, darkLightbarMat, 1)
   };
-  const policeLightbarMeshes = [policeLightbars.sedan, policeLightbars.suv, darkLightbars.sedan, darkLightbars.suv];
-  const carShadowInst = new THREE.InstancedMesh(unitPlane, contactShadowMat, NUM_CARS);
+  const policeLightbarMeshes = [policeLightbars.sedan, policeLightbars.suv, policeLightbars.van, darkLightbars.sedan, darkLightbars.suv, darkLightbars.van];
+  const carShadowInst = new THREE.InstancedMesh(unitPlane, contactShadowMat, CAR_SLOTS);
   carShadowInst.renderOrder = 998;
 
   for (const b of Object.values(bodies)) {
@@ -773,7 +795,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // First vehicle ahead of position s in a lane list
   function ahead(list, s, v) {
     // (a car passes a bicycle or scooter at the curb rather than queueing behind it)
-    for (const o of list) if (o.s > s && o.v !== v && (v.curb || !o.v.curb)) return o;
+    // (and, Lamp, a car pulled well over to the curb for a siren, or the corridor's cruiser parked there)
+    if (!list) return null;
+    for (const o of list) if (o.s > s && o.v !== v && (v.curb || !o.v.curb) && !(o.v.dl > v.halfWidth + o.v.halfWidth + 0.1 && !v.curb)) return o;
     return null;
   }
 
@@ -794,9 +818,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     if (v.curb) return v.curbSpeed;
     if (!e || !e.general) return v.v0;
     const mph = e.mph || CLASS_MPH[e.cls ?? 4] || 25;
+    // Lamp: a cruiser after the player goes as fast as it takes to catch them (traffic.js patrolWatch)
+    if (v.chase) return Math.min(62, Math.max(mph * 0.447 * 1.7, Math.hypot(player.vx, player.vz) * 1.2 + 5));
     return mph * 0.447 * (v.v0 / 11.8);
   };
-  const freeAcc = (v) => v.driver.a * (1 - (v.speed / vWant(v)) ** 4);
+  const freeAcc = (v) => v.driver.a * (v.chase ? 2.4 : 1) * (1 - (v.speed / vWant(v)) ** 4);
   function brake(v, gap, speed, s0 = v.driver.s0, T = v.driver.T) {
     const { a, b } = v.driver;
     const desired = s0 + Math.max(0, v.speed * T + (v.speed * (v.speed - speed)) / (2 * Math.sqrt(a * b)));
@@ -807,6 +833,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   // Braking for the vehicle ahead of position s in a lane list; remembers the nearest one
   function follow(v, list, s) {
+    if (v.chase) return 0; // (the cruiser after the player doesn't queue: the cars ahead pull over for its siren)
     const o = ahead(list, s, v);
     if (!o) return 0;
     const gap = o.s - o.v.half - s - v.half;
@@ -837,6 +864,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     // Lamp: a bus on its route takes the move onto its route's next road (unless its lane can't, when it must leave it).
     // It keeps the route to the end of the road it is on, serving the stops there, and only lets it go in leave() once it
     // has turned off it.
+    // Lamp: the ambulance on a run takes the shortest way to the hospital; the corridor's cruiser the way to the player
+    if (v.goal && toHospital) { const m = hospitalMove(v, fromLane); if (m) return m; }
+    if (v.chase) { const m = chaseMove(v, fromLane); if (m) return m; }
     if (v.route) {
       const next = v.route.edges[v.ri + 1];
       const m = next && e.moves.find((o) => o.to === next);
@@ -1049,6 +1079,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // May v, its front bumper d metres before the stop line, enter the intersection now? Sets the exit lane.
   // Once too close to stop, v is committed: it goes, and holds the intersection from then on.
   function mayEnter(v, d) {
+    if (v.chase) return true; // (the cruiser after the player goes through, siren clearing the way)
     const e = v.edge;
     const n = e.to;
     const phase = n.signal ? phaseOf(e) : 'green';
@@ -1241,7 +1272,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
         if (o) worst = Math.min(worst, Math.max(-v.driver.b, brake(v, o.s - o.v.half - vs - v.half, o.v.speed)));
         let vt = c ? bendSpeed(v, c) : Infinity;
         const cautious = e.to.signal ? v.isPolice && phaseOf(e) !== 'green' : e.axisIndex !== 0 || !!e.control;
-        if (cautious) vt = Math.min(vt, 5);
+        // (a cruiser chasing the player takes a red at a brisk 30 mph, its siren clearing the way, not at a crawl)
+        if (cautious) vt = Math.min(vt, v.chase ? 13 : 5);
         cap = Math.sqrt(vt * vt + 5 * Math.max(0, d));
       }
     } else {
@@ -1250,8 +1282,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       worst = Math.min(follow(v, f.occ[v.out], vs), follow(v, e.occ[v.lane], e.len + v.cs), signalAhead(v, f, f.len - vs - v.half), railAhead(v, f, vs));
       // someone crossing the way out: wait for them inside the intersection, short of the 2.5 m crosswalk
       const d = v.conn.len - 3 - v.cs - v.half;
-      const peds = pedsOut(v, d);
-      if (v.yielding && v.cs < v.yieldAt && holdsOn(v, peds)) {
+      const peds = v.chase ? null : pedsOut(v, d);
+      if (!v.chase && v.yielding && v.cs < v.yieldAt && holdsOn(v, peds)) {
         worst = Math.min(worst, stopAt(v, v.yieldAt - v.cs, 0.5)); // waiting inside to turn
       } else {
         if (v.yielding) cross(v);
@@ -1278,9 +1310,15 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       }
     }
     const acc = Math.min(freeAcc(v) + worst, (cap - v.speed) * 2);
-    v.acc = clamp(acc, -9, v.driver.a);
+    // (a cruiser chasing the player floors it: about 0-60 in 7 s, as a pursuit Explorer does)
+    v.acc = clamp(acc, -9, v.chase ? Math.max(v.driver.a * 2.4, 4) : v.driver.a);
     // dodging the player: braking (as hard as it can, unless that would stop it before it has swerved out of the way),
     // or flooring it (unless it must brake for something ahead)
+    // Lamp: pulled over for a siren behind: ease over to the curb (going on slowly while there's ground to cover) and stop
+    if (clock < v.pullUntil) {
+      const over = Math.abs(v.dl - v.pullOff) > 0.35;
+      v.acc = Math.min(v.acc, over && v.speed < 2.5 ? 0 : -Math.min(v.driver.b, 0.8 + v.speed * 0.3));
+    }
     if (clock < v.panicUntil) {
       if (v.panicAcc < 0) v.acc = Math.min(v.acc, v.evade ? -v.driver.b : -v.driver.bMax);
       else if (v.acc > -v.driver.b && v.speed < 1.5 * vWant(v)) v.acc = Math.max(v.acc, 1.5 * v.driver.a);
@@ -1463,7 +1501,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     let bend = Math.atan2(bendB.dx, bendB.dz) - Math.atan2(bendA.dx, bendA.dz);
     bend -= Math.round(bend / (Math.PI * 2)) * Math.PI * 2;
     // ...plus how far right of its path it heads, and how far right of where it should be it is (nose and dl - evade)
-    const off = v.dl - (v.evade || 0);
+    const off = v.dl - (v.evade || (clock < v.pullUntil ? v.pullOff : 0));
     const want = Math.atan((wheelbase * bend) / 2) + v.nose + Math.atan(((panic ? 3 : 1.2) * off) / (1 + v.speed));
     const lateral = panic ? v.driver.grip : 1.3 * v.driver.aLat; // the sideways acceleration it steers up to
     const most = Math.min(v.driver.lock, Math.atan((lateral * wheelbase) / Math.max(v.speed * v.speed, 1e-3)));
@@ -1764,7 +1802,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     collisionStep++;
     impacted.length = 0;
     for (const v of vehicles) {
-      if (v.edge && (v.impactTime > 0 || Math.abs(v.yawVel) > 0.05 || v.vx * v.vx + v.vz * v.vz > 0.04)) {
+      if (v.edge && !v.homing && !v.chase && (v.impactTime > 0 || Math.abs(v.yawVel) > 0.05 || v.vx * v.vx + v.vz * v.vz > 0.04)) {
         v.contactStep = collisionStep;
         impacted.push(v);
       }
@@ -1772,7 +1810,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     for (let i = 0; i < impacted.length; i++) {
       const v = impacted[i];
       for (const o of vehicles) {
-        if (o === v || !o.edge || o.contactDone === collisionStep) continue;
+        if (o === v || !o.edge || o.homing || o.chase || o.contactDone === collisionStep) continue;
         const reach = v.half + o.half + 0.5;
         const dx = v.x - o.x, dz = v.z - o.z;
         if (Math.abs(dx) > reach + Math.abs(dx - v.prevX + o.prevX)
@@ -1806,6 +1844,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // =========================================================================
   // Room at s in a lane list: margin metres to the vehicles either side, and two seconds more for the one behind
   function laneClear(list, s, margin) {
+    if (!list) return false;
     for (const o of list) if (Math.abs(o.s - s) < o.v.half + margin + (o.s < s ? 2 * o.v.speed : 0)) return false;
     return true;
   }
@@ -1883,7 +1922,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const sched = createSchedule(data, network);
     sched.um = false;
     schedules.push(sched);
-    stopSigns.add(data.stops, network);
+    stopSigns.add(data.stops, network, sched);
     scheduleTimer = 0;
     followLive(sched);
   });
@@ -1893,7 +1932,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     sched.um = true;
     schedules.push(sched);
     for (const [, x, z] of data.stops) busStops.push({ x, z });
-    stopSigns.add(data.stops, network);
+    stopSigns.add(data.stops, network, sched);
     scheduleTimer = 0;
   });
   // asked again every 30 s of play, counted in scheduleBuses (the game reads no clock of its own for this)
@@ -2047,8 +2086,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   let litVehicleCount = 0;
   let wheelCars = 0;
   let visibleCars = 0;
-  const policeDrawn = { sedan: 0, suv: 0 };
-  const darkDrawn = { sedan: 0, suv: 0 };
+  const policeDrawn = { sedan: 0, suv: 0, van: 0 };
+  const darkDrawn = { sedan: 0, suv: 0, van: 0 };
   let visibleBuses = 0;
   let updates = 0;
 
@@ -2122,7 +2161,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     dummy.updateMatrix();
     bodyInst.setMatrixAt(slot, dummy.matrix);
     if (c.riderRig && !c.riderOff) poseRider(c, Math.hypot(c.x - camX, c.z - camZ));
-    if (c.cruiser) {
+    if (c.cruiser || c.ambulance) {
       const lb = (c.isPolice ? policeLightbars : darkLightbars)[c.bodyType];
       if (lb) lb.setMatrixAt((c.isPolice ? policeDrawn : darkDrawn)[c.bodyType]++, dummy.matrix);
     }
@@ -2322,8 +2361,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       const pulse = 0.35 + 0.65 * Math.abs(wave);
       const side = redPhase ? -0.36 : 0.36;
       const pt = policeLightPool[policeLightsUsed++];
-      pt.color.setHex(redPhase ? 0xff1828 : 0x1868ff);
-      pt.position.set(v.x + side * v._cosY - 0.25 * v._sinY, (v._gy ?? 0) + (v.bodyType === 'suv' ? 2.05 : 1.85), v.z - side * v._sinY - 0.25 * v._cosY);
+      pt.color.setHex(redPhase ? 0xff1828 : v.ambulance ? 0xffeedd : 0x1868ff);
+      pt.position.set(v.x + side * v._cosY - 0.25 * v._sinY, (v._gy ?? 0) + (v.ambulance ? 2.85 : v.bodyType === 'suv' ? 2.05 : 1.85), v.z - side * v._sinY - 0.25 * v._cosY);
       pt.distance = 12.0;
       pt.intensity = 42.0 * tailScale * fade * pulse;
     }
@@ -2377,7 +2416,421 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   let lastFocusZ = Infinity;
   let vehicleCursor = 0;
 
+  // Lamp: pulling over for a siren. A car with a siren (a cruiser on a call, the ambulance on a run, the corridor's
+  // cruiser after a speeder: `isPolice`) closing from behind, at most the two nearest, has the cars ahead in its way
+  // ease over to the curb (the curb lane as far as the road's edge allows, swerveRoom) and stop till it has gone by
+  // (`pullUntil`, `pullOff`); it passes those well over (ahead).
+  const sirens = [];
+  function gatherSirens() {
+    sirens.length = 0;
+    for (const c of cars) {
+      if (!c.isPolice || !c.edge || c.speed < 3) continue;
+      if (Math.abs(c.x - focusX) > 320 || Math.abs(c.z - focusZ) > 320) continue;
+      sirens.push(c);
+      if (sirens.length >= 2) break;
+    }
+  }
+  function yieldToSiren(v) {
+    if (v.conn || v.curb || v.parked) return;
+    const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
+    for (const c of sirens) {
+      const dx = c.x - v.x, dz = c.z - v.z;
+      const along = dx * fx + dz * fz;
+      if (along > -4 || along < -75 || Math.abs(dz * fx - dx * fz) > 9) continue;
+      if (Math.sin(c.yaw) * fx + Math.cos(c.yaw) * fz < 0.6) continue;
+      if (clock >= v.pullUntil) {
+        v.pullOff = v.lane === v.edge.lanes.length - 1 ? swerveRoom(v, 1) : 0;
+        pulledOver++;
+      }
+      v.pullUntil = clock + 1.5;
+      return;
+    }
+  }
+  let pulledOver = 0;
+
+  // Lamp: the ambulance (the first van, white with a red band, no names): every 5-10 minutes (10-20 on the Xbox) while
+  // it's out near the player, it runs to University Hospital's emergency entrance on E Medical Center Dr, lights and
+  // siren on, through the reds, each turn the shortest way there (toHospital: the road graph's distances to it, worked
+  // out on the first run), and goes quiet once there (or after four minutes).
+  const ambulance = cars.find((c) => c.ambulance) || null;
+  const HOSPITAL = { x: 1482, z: -653 }; // University Hospital (its roof heliport, helipads.js)
+  let toHospital = null;
+  function hospitalDistances() {
+    const goal = [];
+    let nearest = null, nearestD = Infinity;
+    for (const e of edges) {
+      if (!e.lanes.length) continue;
+      const d = Math.hypot(e.to.x - HOSPITAL.x, e.to.z - HOSPITAL.z);
+      if (d < 160 && /Medical Center/.test(e.street || '')) goal.push(e);
+      if (d < nearestD) { nearestD = d; nearest = e; }
+    }
+    if (!goal.length && nearest) goal.push(nearest);
+    const into = new Map(); // edge -> the edges turning onto it
+    for (const e of edges) for (const m of e.moves) {
+      if (!into.has(m.to)) into.set(m.to, []);
+      into.get(m.to).push(e);
+    }
+    const dist = new Map();
+    const heap = []; // [d, edge], a binary heap on d
+    const push = (d, e) => {
+      heap.push([d, e]);
+      for (let i = heap.length - 1; i > 0;) {
+        const p = (i - 1) >> 1;
+        if (heap[p][0] <= heap[i][0]) break;
+        [heap[p], heap[i]] = [heap[i], heap[p]]; i = p;
+      }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        for (let i = 0; ;) {
+          const l = 2 * i + 1, r = l + 1;
+          let m = i;
+          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+          if (m === i) break;
+          [heap[m], heap[i]] = [heap[i], heap[m]]; i = m;
+        }
+      }
+      return top;
+    };
+    for (const e of goal) push(e.len * 0.5, e);
+    while (heap.length) {
+      const [d, e] = pop();
+      if (dist.has(e)) continue;
+      dist.set(e, d);
+      for (const p of into.get(e) || []) if (!dist.has(p) && !p.closed) push(d + p.len, p);
+    }
+    log(`[ambulance] routes to University Hospital: ${goal.length} entrance roads (${[...new Set(goal.map((e) => e.street))].join(', ')}), ${dist.size} roads lead there`);
+    return { dist, goal: new Set(goal) };
+  }
+  // the move onto the road nearest the hospital by road (chooseMove, for the ambulance on a run)
+  function hospitalMove(v, fromLane) {
+    let best = null, bestD = Infinity;
+    for (const m of v.edge.moves) {
+      if (m.to.closed || (fromLane && m.out[v.lane] < 0)) continue;
+      const d = toHospital.dist.get(m.to) ?? Infinity;
+      if (d < bestD) { bestD = d; best = m; }
+    }
+    return best;
+  }
+  function ambulanceRun(v) {
+    if (v.goal) {
+      const done = !v.edge || toHospital.goal.has(v.edge) || clock > v.runUntil;
+      if (done && !v.conn) {
+        if (v.edge) log(`[ambulance] ${toHospital.goal.has(v.edge) ? 'at University Hospital' : 'run over'} after ${Math.round(clock - v.runFrom)} s, ${pulledOver} cars pulled over`);
+        v.goal = null; v.isPolice = false; v.v0 = v.baseV0;
+        v.nextRun = clock + (XBOX ? 600 + Math.random() * 600 : 300 + Math.random() * 300);
+      }
+      return;
+    }
+    if (clock < v.nextRun || !v.edge || v.conn || Math.hypot(v.x - focusX, v.z - focusZ) > 300) return;
+    toHospital ??= hospitalDistances();
+    const d = toHospital.dist.get(v.edge);
+    if (d == null || d < 150) { v.nextRun = clock + 30; return; }
+    v.goal = 'hospital'; v.isPolice = true; v.runFrom = clock; v.runUntil = clock + 240;
+    v.baseV0 ??= v.v0; v.v0 = v.baseV0 * 1.3;
+    pulledOver = 0;
+    v.move = hospitalMove(v, false) || v.move;
+    log(`[ambulance] run to University Hospital from ${v.edge.street || 'a street'}, ${Math.round(d)} m by road`);
+  }
+
+  // Lamp: AAPD's Traffic Safety Corridors (safety-corridors.js): one cruiser outside traffic's share (`trap`) waits at
+  // the curb on the corridor the player drives toward. Pass it in a car at more than 10 over the posted limit and it
+  // pulls out after them, lights and siren on, each turn the one toward them. Stop, and it pulls up behind, and a
+  // moment later the one line: 'Warning: 47 in a 35'; then it drives off. Outrun it (250 m) or leave the roads and it
+  // gives up after 40 s. Nothing is lost either way.
+  const trapCar = cars.find((c) => c.trap) || null;
+  const trap = { state: 'idle', corridor: null, since: 0, mph: 0, limit: 0, still: 0, cooldown: 0, car: null, reason: null };
+  // Lamp: and anywhere in town, a patrol cruiser near the player (not on a call) that sees them speeding well over
+  // the limit (15 over), crash into a car or knock someone down goes after them the same way (patrolWatch): stop, and
+  // a warning; drive off, and it chases a while, then gives up. `offense` is the last crash or knock-down, for a moment.
+  const offense = { text: null, at: -Infinity };
+  function reportOffense(text) { offense.text = text; offense.at = clock; }
+  let onNotice = null;
+  let corridors = null;
+  function trapPlace(v, c) {
+    // a road of the corridor running the way the player is headed, about 350 m on ahead of them (nearer the corridor's
+    // own watching spot where it has one, Packard's at Platt)
+    const sp = Math.hypot(player.vx, player.vz) || 1, hx = player.vx / sp, hz = player.vz / sp;
+    // (out of sight if it can be, else no nearer than 300 m: a car at the curb that far off showing up goes unseen)
+    let best = null, bestD = Infinity, bestS = 0;
+    for (const e of c.edges) {
+      if (e.dx * hx + e.dz * hz < 0.7 || e.len < 2 * v.half + 12 || e.closed) continue;
+      const lane = e.lanes.length - 1;
+      for (let s = v.half + 6; s <= e.len - v.half - 6; s += 15) {
+        const x = e.sx + e.dx * s + e.rx * e.lanes[lane], z = e.sz + e.dz * s + e.rz * e.lanes[lane];
+        const mx = x - player.x, mz = z - player.z, ahead = mx * hx + mz * hz;
+        if (ahead < 200 || ahead > 650 || Math.abs(mz * hx - mx * hz) > 250) continue;
+        const seen = hasView && visible(x, z, 22);
+        if (seen && ahead < 300) continue;
+        const d = Math.abs(ahead - 350) + (seen ? 400 : 0) + (c.at ? 0.3 * Math.hypot(x - c.spot.x, z - c.spot.z) : 0);
+        if (d < bestD) { bestD = d; best = e; bestS = s; }
+      }
+    }
+    if (!best) return false;
+    const lane = best.lanes.length - 1, s = bestS;
+    place(v, best, lane, s);
+    v.speed = 0;
+    v.dl = 0;
+    locate(v);
+    v.yaw = Math.atan2(v.tx, v.tz);
+    const room = swerveRoom(v, 1);
+    v.dl = room > 0 ? room : 0;
+    locate(v);
+    v.parked = true;
+    v.isPolice = false;
+    return true;
+  }
+  function trapEnd(v, state) {
+    trap.state = state;
+    trap.since = clock;
+    v.isPolice = false;
+    v.parked = false;
+    v.chase = false;
+    v.v0 = v.baseV0 ?? v.v0;
+    // a patrol cruiser simply drives on as before; the patrols rest a minute
+    if (!v.trap && state !== 'chase') { trap.state = 'idle'; trap.car = null; trap.reason = null; trap.cooldown = clock + 60; }
+  }
+  // (fromLane: a cruiser already driving in traffic keeps to a turn its lane can make; one pulling out from the curb
+  // chooses freely, as it changes lanes as it goes)
+  function startChase(v, fromLane = false) {
+    trap.state = 'chase';
+    trap.since = clock;
+    trap.still = 0;
+    trap.car = v;
+    v.parked = false;
+    v.chase = true;
+    v.isPolice = true;
+    v.baseV0 ??= v.v0;
+    v.v0 = v.baseV0 * 1.7;
+    v.move = chaseMove(v, fromLane) || v.move;
+  }
+  // a cruiser put on a road behind the player, 90-220 m back and going their way, out of sight where it can be
+  function placeBehind(v) {
+    const sp = Math.hypot(player.vx, player.vz) || 1, hx = player.vx / sp, hz = player.vz / sp;
+    let best = null, bestD = Infinity, bestS = 0, bestLane = 0;
+    for (const e of edges) {
+      if (!e.general || e.closed || e.dx * hx + e.dz * hz < 0.6 || e.len < 2 * v.half + 8) continue;
+      const mx0 = e.sx - player.x, mz0 = e.sz - player.z;
+      if (mx0 * mx0 + mz0 * mz0 > 300 * 300 && (e.sx + e.dx * e.len - player.x) ** 2 + (e.sz + e.dz * e.len - player.z) ** 2 > 300 * 300) continue;
+      for (let s = v.half + 4; s <= e.len - v.half - 4; s += 12) {
+        const x = e.sx + e.dx * s, z = e.sz + e.dz * s;
+        const back = -((x - player.x) * hx + (z - player.z) * hz), aside = Math.abs((z - player.z) * hx - (x - player.x) * hz);
+        if (back < 90 || back > 220 || aside > 40) continue;
+        const seen = hasView && visible(x, z, 22);
+        const d = Math.abs(back - 140) + aside * 2 + (seen ? 300 : 0);
+        if (d < bestD) { bestD = d; best = e; bestS = s; bestLane = 0; }
+      }
+    }
+    if (!best) return false;
+    place(v, best, bestLane, bestS);
+    v.speed = Math.max(8, sp * 0.8);
+    v.dl = 0;
+    locate(v);
+    v.yaw = Math.atan2(v.tx, v.tz);
+    return true;
+  }
+  // Lamp: the chasing cruiser, within 90 m of the player, leaves its lane and drives straight at them over the roadway
+  // (network.isRoadClear: never onto a curb, a median or a building), aiming a little ahead of where they're going, as
+  // fast as it takes and slowing to pull up behind them; farther off, or blocked, it goes back to a lane of the street
+  // it's on and follows the streets (chaseMove)
+  function homeIn(v, dt) {
+    const d = Math.hypot(player.x - v.x, player.z - v.z);
+    if (!v.chase || v !== trap.car || (trap.state !== 'chase' && trap.state !== 'stopped') || !player.active || d > 80 || (!v.homing && d > 60)) {
+      if (v.homing && !unhome(v)) { v.speed *= Math.exp(-dt * 2); return true; }
+      return false;
+    }
+    const ax = player.x + player.vx * 0.6 - v.x, az = player.z + player.vz * 0.6 - v.z;
+    let dy = Math.atan2(ax, az) - v.yaw;
+    dy -= Math.round(dy / (Math.PI * 2)) * Math.PI * 2;
+    const rate = 1.3 + 0.9 * Math.max(0, 1 - v.speed / 25);
+    v.yaw += Math.max(-rate * dt, Math.min(rate * dt, dy));
+    const ps = Math.hypot(player.vx, player.vz);
+    // as fast as it takes, but never faster than it can brake from to pull up 7 m behind them (6 m/s²)
+    let target = Math.min(62, ps * 1.15 + 6, ps + Math.sqrt(12 * Math.max(0, d - 7)));
+    if (Math.abs(dy) > 0.9) target *= 0.5;
+    // the way ahead clear of curbs, medians and buildings: straight on if it is, else the nearest heading either side
+    // that is (looking further ahead the faster it goes)
+    const look = 2.4 + v.speed * 0.35;
+    let ok = false;
+    for (const off of [0, 0.2, -0.2, 0.45, -0.45, 0.8, -0.8]) {
+      const y = v.yaw + off;
+      if (!network.isRoadClear(v.x + Math.sin(y) * look, v.z + Math.cos(y) * look, 0.7)) continue;
+      v.yaw += Math.max(-rate * dt * 1.5, Math.min(rate * dt * 1.5, off));
+      if (Math.abs(off) > 0.3) target = Math.min(target, 14);
+      ok = true;
+      break;
+    }
+    if (!ok) target = 0;
+    v.acc = Math.max(-9, Math.min(5, (target - v.speed) * 2));
+    v.speed = Math.max(0, v.speed + v.acc * dt);
+    const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
+    const nx = v.x + fx * v.speed * dt, nz = v.z + fz * v.speed * dt;
+    // (and never into the player: it holds 6 m off them)
+    if (Math.hypot(player.x - nx, player.z - nz) < 6 && Math.hypot(player.x - nx, player.z - nz) < d) v.speed = Math.min(v.speed, ps);
+    else if (network.isRoadClear(nx, nz, 0.5)) { v.x = nx; v.z = nz; }
+    else if (!v.homing) return false;
+    else v.speed = 0;
+    if (!ok && v.speed < 1 && unhome(v)) return false;
+    v.homing = true;
+    v.tx = fx; v.tz = fz; v.nose = 0; v.dl = 0; v.dlv = 0;
+    return true;
+  }
+  // back onto the nearest lane going its way, keeping its speed
+  function unhome(v) {
+    v.homing = false;
+    const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
+    let best = null, bestD = 30, bestS = 0;
+    for (const e of edges) {
+      if (!e.general || e.closed || e.dx * fx + e.dz * fz < 0.3) continue;
+      const px = v.x - e.sx, pz = v.z - e.sz, s = px * e.dx + pz * e.dz;
+      if (s < v.half || s > e.len - v.half) continue;
+      const off = Math.abs(pz * e.dx - px * e.dz);
+      if (off < bestD) { bestD = off; best = e; bestS = s; }
+    }
+    if (!best) { v.homing = true; return false; } // (no lane near: it stays where it is, off its lane, till there is)
+    const speed = v.speed;
+    place(v, best, 0, bestS);
+    v.speed = speed;
+    locate(v);
+    v.yaw = Math.atan2(v.tx, v.tz);
+    v.move = chaseMove(v, true) || v.move;
+    return true;
+  }
+  function patrolWatch() {
+    if (trap.state !== 'idle' || clock < trap.cooldown || !(player.active && player.mode === 'car')) return;
+    const mph = Math.hypot(player.vx, player.vz) / 0.44704;
+    let why = null, limit = 0;
+    if (clock - offense.at < 4) why = offense.text;
+    else if (mph > 30) {
+      limit = speedLimitAt(player.x, player.z, Math.atan2(player.vx, player.vz));
+      if (limit && mph > limit + 15) why = 'speed';
+    }
+    if (!why) return;
+    // the nearest cruiser on patrol, close enough to have seen it
+    let best = null, bestD = why === 'speed' ? 60 : 90;
+    for (const c of cars) {
+      if (!c.cruiser || c.trap || !c.edge || c.isPolice || c.parked || c.conn) continue;
+      const d = Math.hypot(c.x - player.x, c.z - player.z);
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    offense.at = -Infinity;
+    // none near enough: one on patrol farther off is sent, coming up the road behind the player out of sight
+    if (!best) {
+      let far = null, farD = Infinity;
+      for (const c of cars) {
+        if (!c.cruiser || c.trap || !c.edge || c.isPolice || c.parked || c.conn) continue;
+        const d = Math.hypot(c.x - player.x, c.z - player.z);
+        if (d < farD && (!hasView || !visible(c.x, c.z, 22))) { farD = d; far = c; }
+      }
+      if (far && placeBehind(far)) { best = far; bestD = Math.hypot(far.x - player.x, far.z - player.z); }
+    }
+    if (!best) { trap.cooldown = clock + 5; return; }
+    trap.mph = Math.round(mph);
+    trap.limit = limit;
+    trap.reason = why === 'speed' ? null : why;
+    startChase(best, true);
+    log(`[police] a patrol cruiser ${Math.round(bestD)} m off goes after the player: ${why === 'speed' ? `${trap.mph} in a ${limit}` : why}`);
+  }
+  function speedTrap(v, dt) {
+    corridors ??= corridorsOf(network);
+    if (!corridors.length) return;
+    const inCar = player.active && player.mode === 'car';
+    const mph = Math.hypot(player.vx, player.vz) / 0.44704;
+    if (trap.state !== 'idle' && !v.edge) { log('[police] the cruiser was taken off the road'); v.homing = false; trapEnd(v, 'idle'); trap.cooldown = clock + 60; return; } // taken
+    switch (trap.state) {
+      case 'idle': {
+        if (clock < trap.cooldown || !inCar) return;
+        // the corridor the player is driving along (within 60 m of one of its roads, going its way)
+        if (Math.hypot(player.vx, player.vz) < 5) return;
+        let c = null;
+        for (const k of corridors) {
+          for (const e of k.edges) {
+            const px = player.x - e.sx, pz = player.z - e.sz, along = px * e.dx + pz * e.dz;
+            if (along > -20 && along < e.len + 20 && Math.abs(pz * e.dx - px * e.dz) < 60) { c = k; break; }
+          }
+          if (c) break;
+        }
+        if (!c || !trapPlace(v, c)) { trap.cooldown = clock + 2; return; }
+        trap.corridor = c;
+        trap.state = 'wait';
+        log(`[safety corridor] a cruiser watches ${c.name} at (${Math.round(v.x)}, ${Math.round(v.z)})`);
+        return;
+      }
+      case 'wait': {
+        if (Math.hypot(player.x - v.x, player.z - v.z) > 700) {
+          if (!hasView || !visible(v.x, v.z, 22)) { v.edge = null; trapEnd(v, 'idle'); }
+          return;
+        }
+        if (!inCar) return;
+        const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
+        const dx = player.x - v.x, dz = player.z - v.z;
+        const ahead = dx * fx + dz * fz, aside = Math.abs(dz * fx - dx * fz);
+        const sameWay = (player.vx * fx + player.vz * fz) > 0.8 * Math.hypot(player.vx, player.vz);
+        if (ahead < -40 || ahead > 25 || aside > 14 || !sameWay) return;
+        const limit = speedLimitAt(player.x, player.z, Math.atan2(player.vx, player.vz));
+        if (!limit || mph <= limit + 10) return;
+        trap.mph = Math.round(mph);
+        trap.limit = limit;
+        trap.reason = null;
+        startChase(v);
+        log(`[safety corridor] ${trap.mph} in a ${trap.limit} on ${trap.corridor.name}: the cruiser pulls out`);
+        return;
+      }
+      case 'chase': {
+        const d = Math.hypot(player.x - v.x, player.z - v.z);
+        // one car, chasing as fast as it takes (vWant); get 450 m clear and it's a getaway
+        if (!inCar || d > 450 || clock - trap.since > 75) {
+          log(`[police] the cruiser gives up (${!inCar ? 'off the road' : d > 450 ? 'outrun' : 'too long'})`);
+          if (inCar && d <= 450) onNotice?.('The police gave up', 3);
+          trapEnd(v, 'leave');
+          return;
+        }
+        // pulled over: stopped (or crawling) with the cruiser right behind, or stopped within 30 m of it
+        trap.still = (mph < 4 && d < 16) || (mph < 2 && d < 30) ? trap.still + dt : 0;
+        if (trap.still > 1.5) { trap.state = 'stopped'; trap.since = clock; }
+        return;
+      }
+      case 'stopped':
+        if (clock - trap.since > 3) {
+          const said = trap.reason ? `Warning: ${trap.reason}` : `Warning: ${trap.mph} in a ${trap.limit}`;
+          onNotice?.(said, 4);
+          log(`[police] ${said}`);
+          trapEnd(v, 'leave');
+        } else if (mph > 6) trap.state = 'chase';
+        return;
+      case 'leave':
+        // drives on as any car does; taken off out of sight, and the corridors rest a while
+        if (clock - trap.since > 8 && (!hasView || !visible(v.x, v.z, 22)) && !v.conn) {
+          v.edge = null;
+          trapEnd(v, 'idle');
+          trap.cooldown = clock + 90;
+        }
+    }
+  }
+  // the move toward the player (chooseMove, for the corridor's cruiser after a speeder)
+  function chaseMove(v, fromLane) {
+    let best = null, bestD = Infinity;
+    for (const m of v.edge.moves) {
+      if (m.to.closed || (fromLane && m.out[v.lane] < 0)) continue;
+      const e = m.to;
+      const d = Math.hypot(e.sx + e.dx * e.len - player.x, e.sz + e.dz * e.len - player.z)
+        + Math.hypot(e.sx - player.x, e.sz - player.z) * 0.5;
+      if (d < bestD) { bestD = d; best = m; }
+    }
+    return best;
+  }
+
   let spawnTick = 0;
+  // Lamp: how many of traffic's cars are out at the hour shown (main.js, from town-clock.js trafficShare)
+  let carTarget = NUM_CARS;
+  function setTrafficShare(share) {
+    const n = Math.max(4, Math.round(NUM_CARS * Math.max(0, Math.min(1, share))));
+    if (n !== carTarget) log(`[traffic] ${n} of ${NUM_CARS} cars out for the hour`);
+    carTarget = n;
+  }
   // a cruiser's calls: on one for 60-150 s, then 4-10 min of plain driving (each ends off a junction, not mid-way
   // through a red it was running)
   function policeCalls(v) {
@@ -2462,7 +2915,15 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     for (let scanned = 0; scanned < vehicles.length && budget > 0; scanned++) {
       const v = vehicles[vehicleCursor];
       vehicleCursor = (vehicleCursor + 1) % vehicles.length;
-      if (v.bus || v.held) continue; // (TheRide's buses come by the timetable: scheduleBuses; a taken car: takeCar)
+      if (v.bus || v.held || v.trap || v === trap.car) continue; // (the cruiser after the player stays) (TheRide's buses come by the timetable: scheduleBuses; a taken car: takeCar)
+      // Lamp: more cars than the hour has out (setTrafficShare): one out of sight goes home, and none comes in for it
+      if (v.rank >= carTarget) {
+        if (v.edge && !v.conn && !v.isPolice && !v.riderOff && (jump || !hasView || !visible(v.x, v.z, 22))) {
+          v.edge = null; v.trail = null; v.commit = null; v.speed = 0; v.pullUntil = 0;
+          budget--;
+        }
+        continue;
+      }
       const d = v.edge ? Math.hypot(v.x - focusX, v.z - focusZ) : Infinity;
       // (a car that somehow found its way into a closed block leaves it as soon as nobody's looking)
       if (d <= (jump ? NEAR_RADIUS : VEHICLE_RADIUS) && !(v.edge?.closed && !visible(v.x, v.z, 22))) continue;
@@ -2480,14 +2941,23 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     policeDrawn.suv = 0;
     darkDrawn.sedan = 0;
     darkDrawn.suv = 0;
+    policeDrawn.van = darkDrawn.van = 0;
     visibleBuses = 0;
+    if (ambulance) ambulanceRun(ambulance);
+    patrolWatch();
+    if (trap.car && trap.car !== trapCar) speedTrap(trap.car, dt);
+    else if (trapCar) speedTrap(trapCar, dt);
+    gatherSirens();
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
       if (!v.edge) continue;
-      if (v.cruiser) policeCalls(v);
+      if (v.cruiser && !v.trap && v !== trap.car) policeCalls(v);
+      if (sirens.length && !v.isPolice && !v.bus && v !== ridden) yieldToSiren(v);
+      if (v.parked) { v.speed = 0; v.acc = 0; locate(v); pose(v, dt); continue; }
 
       v.prevX = v.x;
       v.prevZ = v.z;
+      if ((v.chase || v.homing) && homeIn(v, dt)) { pose(v, dt); continue; }
       relateToPlayer(v);
       react(v, dt);
       drive(v, dt);
@@ -2497,7 +2967,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       if (v.riderOff) lieDown(v, dt);
     }
     if (player.active) {
-      for (const v of vehicles) if (v.edge) collideWithPlayer(v, player);
+      // (not the cruiser driving straight at them: it stops short by itself, and a contact would put it back on its lane)
+      for (const v of vehicles) if (v.edge && !v.homing) collideWithPlayer(v, player);
     }
     if (player2.active) {
       for (const v of vehicles) if (v.edge) collideWithPlayer(v, player2);
@@ -2551,6 +3022,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     syncInst(policeLightbars.suv, policeDrawn.suv);
     syncInst(darkLightbars.sedan, darkDrawn.sedan);
     syncInst(darkLightbars.suv, darkDrawn.suv);
+    syncInst(policeLightbars.van, policeDrawn.van);
+    syncInst(darkLightbars.van, darkDrawn.van);
     syncInst(carShadowInst, visibleCars);
     syncInst(busBodyInst, visibleBuses);
     syncInst(busHeaderInst, visibleBuses);
@@ -2603,7 +3076,25 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const [doorX, doorZ, yaw] = busDoor(v, 1.1);
     if (!v.edge) ridden = null;
     const label = v.trip && v.sched ? v.sched.label(v.trip) : null;
-    return { x: v.x, z: v.z, yaw, stopped: !!v.dwellUntil, gone: !v.edge, doorX, doorZ, route: label?.short, headsign: label?.headsign };
+    // the stop it is making or will make next on its route (busStop's cursor), by name
+    const st = v.route && v.sched ? v.route.stops[v.stopIx] : null;
+    return { x: v.x, z: v.z, yaw, stopped: !!v.dwellUntil, gone: !v.edge, doorX, doorZ, route: label?.short, headsign: label?.headsign,
+      nextStop: st ? v.sched.stopName(st.stop) : null, nextStopIx: st ? v.stopIx : -1 };
+  }
+  // Lamp: the next buses from the stop whose sign is within `reach` of (x, z): from each sign there (TheRide's and the
+  // U's), the soonest per route and headsign, soonest first, at most `max` (main.js, under the place label)
+  function busesDue(x, z, reach, max = 2) {
+    const signs = stopSigns.at(x, z, reach);
+    if (!signs.length) return null;
+    const now = Date.now(), out = [];
+    for (const { sched, stop } of signs.slice(0, 3)) for (const d of sched.departures(stop, now, max)) out.push({ ...d, um: sched.um });
+    const seen = new Set();
+    return out.sort((a, b) => a.secs - b.secs).filter((d) => {
+      const k = d.short + '|' + d.headsign;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).slice(0, max);
   }
   function leaveBus() {
     const ride = busRide();
@@ -2664,14 +3155,22 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     nearestCar,
     boardBus,
     busRide,
+    busesDue,
     leaveBus,
     closures,
     cars,
     buses,
     peds: pedestrianSystem.peds,
     setCrowdBusy: pedestrianSystem.setBusy,
+    setTrafficShare,
+    setNotice(fn) { onNotice = fn; },
+    // the cruiser after the player, while it is (for the map), or null
+    pursuer: () => (trap.car && (trap.state === 'chase' || trap.state === 'stopped') ? trap.car : null),
     crowdStats: pedestrianSystem.stats,
-    setPedestrianHitListener: pedestrianSystem.setHitListener,
+    setPedestrianHitListener: (fn) => pedestrianSystem.setHitListener((x, z, speed, who = 0, ...rest) => {
+      if (!who && player.mode === 'car' && speed > 3) reportOffense('hitting a pedestrian');
+      fn?.(x, z, speed, who, ...rest);
+    }),
     knockBy: (x, y, z, r, vx, vz) => pedestrianSystem.knockBy(x, y, z, r, vx, vz) | knockRiders(x, y, z, r, vx, vz),
     setPlayerStruckListener,
     setRailCrossings,

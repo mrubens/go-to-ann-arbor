@@ -22,7 +22,9 @@ function today() {
   const day = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(get('weekday')) + 1;
   const month = +get('month'), date = +get('day');
   const compost = month >= 4 && (month < 12 || date <= 15);
-  return { day, compost, name: ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][day] };
+  // leaf season (the city's fall leaf collection, early October to mid December): paper yard bags of leaves too
+  const leafBags = month >= 10 && (month < 12 || date <= 12);
+  return { day, compost, leafBags, name: ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][day] };
 }
 
 function inRing(ring, x, z) {
@@ -92,6 +94,33 @@ function cartGeometry() {
   return geo;
 }
 
+// A kraft paper yard waste bag full of leaves, its foot at the origin: a slightly bulging sack, its top rolled over
+function bagGeometry() {
+  const g = new THREE.CylinderGeometry(0.2, 0.18, 0.8, 4, 3);
+  g.rotateY(Math.PI / 4);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const y = p.getY(i), bulge = 1 + 0.12 * Math.cos(y * 3.6);
+    p.setXYZ(i, p.getX(i) * bulge * 1.15, y + 0.4, p.getZ(i) * bulge * 0.8);
+  }
+  const top = new THREE.BoxGeometry(0.46, 0.05, 0.3);
+  top.translate(0, 0.82, 0);
+  const geo = new THREE.BufferGeometry();
+  const parts = [[g, 1], [top, 0.8]];
+  const pos = [], col = [], idx = [];
+  for (const [part, shade] of parts) {
+    const base = pos.length / 3, q = part.attributes.position;
+    for (let i = 0; i < q.count; i++) { pos.push(q.getX(i), q.getY(i), q.getZ(i)); col.push(shade, shade, shade); }
+    for (let i = 0; i < part.index.count; i++) idx.push(base + part.index.getX(i));
+  }
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setIndex(idx);
+  const flat = geo.toNonIndexed();
+  flat.computeVertexNormals();
+  return flat;
+}
+
 // a steady number in 0..1 for a place, so the same house always puts out the same carts
 const hash = (x, z, k) => {
   const s = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
@@ -100,9 +129,10 @@ const hash = (x, z, k) => {
 
 function buildCurbCarts(group, data, addresses) {
   group.name = 'CurbCarts';
-  const { day, compost, name } = today();
+  const { day, compost, leafBags, name } = today();
   const rings = data?.zones?.[day] || [];
   const carts = [];
+  const bags = []; // leaf season: a few paper bags of leaves beside some houses' carts
   if (rings.length && addresses?.length) {
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const r of rings) for (let i = 0; i < r.length; i += 2) {
@@ -162,6 +192,17 @@ function buildCurbCarts(group, data, addresses) {
         const a = (k - (kinds.length - 1) / 2) * 0.8;
         carts.push({ kind, x: cx + s.ux * a, z: cz + s.uz * a, yaw: yaw + (hash(x, z, 3 + k) - 0.5) * 0.35 });
       });
+      // and in leaf season, about half the houses a row of 2 to 6 bags along the curb past them
+      if (leafBags && hash(x, z, 9) < 0.5) {
+        const n = 2 + Math.floor(hash(x, z, 10) * 5);
+        const dir = hash(x, z, 11) < 0.5 ? 1 : -1;
+        for (let b = 0; b < n; b++) {
+          const a = dir * ((kinds.length - 1) * 0.4 + 0.7 + b * 0.5);
+          const bx = cx + s.ux * a + nx * 0.15, bz = cz + s.uz * a + nz * 0.15;
+          if (!clear(bx, bz)) break;
+          bags.push({ x: bx, z: bz, yaw: yaw + (hash(x, z, 20 + b) - 0.5) * 0.8, s: 0.92 + hash(x, z, 30 + b) * 0.16, tone: hash(x, z, 40 + b) });
+        }
+      }
     }
   }
 
@@ -186,7 +227,29 @@ function buildCurbCarts(group, data, addresses) {
     mesh.computeBoundingSphere();
     group.add(mesh);
   }
-  return { count: carts.length, day: rings.length ? name : null, obstacles };
+  if (bags.length) {
+    // plain kraft, no printing
+    const mat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+    const mesh = new THREE.InstancedMesh(bagGeometry(), mat, bags.length);
+    mesh.name = 'LeafBags';
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0), color = new THREE.Color(), kraft = new THREE.Color(0xa7814f), dark = new THREE.Color(0x7d5f3a);
+    bags.forEach((b, i) => {
+      p.set(b.x, groundHeight(b.x, b.z), b.z);
+      q.setFromAxisAngle(up, b.yaw);
+      mesh.setMatrixAt(i, m.compose(p, q, sc.set(b.s, b.s * (0.94 + b.tone * 0.1), b.s)));
+      // newer bags paler, older ones weathered darker
+      mesh.setColorAt(i, color.copy(kraft).lerp(dark, b.tone * 0.7));
+      obstacles.push({ x: b.x, z: b.z, r: 0.24, kind: 'cart', height: 0.85, parts: [mesh, i] });
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    group.add(mesh);
+  }
+  return { count: carts.length, bags: bags.length, day: rings.length ? name : null, obstacles };
 }
 
 // The weekday name whose carts would be out now (as buildCurbCarts's `day`), or null when no zone's are: main.js
