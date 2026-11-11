@@ -73,7 +73,8 @@ function fitResources(context, resources) {
 
 // [ref distance, range] (m) of each animal's call
 // the Cube's clang when a car hits it (the-cube.js), heard across Regents Plaza
-const STEEL_REACH = { clang: [5, 140] };
+// and a playground swing's chain creaking on its hook (playgrounds.js), heard across the playground
+const STEEL_REACH = { clang: [5, 140], creak: [1.5, 30] };
 const ANIMAL_REACH = { chatter: [1.5, 30], quack: [3, 70], honk: [6, 150], hiss: [1.2, 18], wingbeat: [2, 40], hawk: [40, 420], snort: [4, 90], coo: [1.2, 22], caw: [6, 160], chirp: [1, 28] };
 
 // Direct sound is muffled behind buildings; the shared reflection path keeps some diffuse sound around corners.

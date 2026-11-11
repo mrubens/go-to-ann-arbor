@@ -592,6 +592,33 @@ function clang(ctx, seed) {
   }, 0.6, ANIMAL_RATE);
 }
 
+// A playground swing's chain creaking on its hook at the top bar as the seat turns at the end of its arc
+// (playgrounds.js): stick-slip, a train of little slips whose rate glides up or down and wobbles, each ringing two
+// small resonances of the hook and the links, with a little grit of rubbing
+function creak(ctx, seed, rising) {
+  const random = randomSource(seed);
+  const rate = ANIMAL_RATE, dur = 0.3 + random() * 0.14;
+  const f0 = 430 + random() * 160, glide = rising ? 0.4 : -0.3;
+  const wobF = 8 + random() * 7, wobD = 0.035 + random() * 0.03;
+  const res = [[2100 + random() * 350, 0.986, 1], [3400 + random() * 500, 0.976, 0.55]].map(([f, r, g]) =>
+    ({ a1: 2 * r * Math.cos(TAU * f / rate), a2: -r * r, g, y1: 0, y2: 0 }));
+  let phase = 0;
+  return makeBuffer(ctx, dur, (t) => {
+    const u = t / dur;
+    phase += f0 * (1 + glide * u) * (1 + wobD * Math.sin(TAU * wobF * t)) / rate;
+    // a slip, each a little stronger or weaker than the last
+    let x = (random() * 2 - 1) * 0.06;
+    if (phase >= 1) { phase -= 1; x += 0.6 + random() * 0.8; }
+    let out = 0;
+    for (const r of res) {
+      const y = x + r.a1 * r.y1 + r.a2 * r.y2;
+      r.y2 = r.y1; r.y1 = y;
+      out += y * r.g;
+    }
+    return out * Math.min(1, u / 0.12) * (1 - u) ** 1.3;
+  }, 0.5, ANIMAL_RATE);
+}
+
 // A buffer (or set) made the first time it's asked for, then kept: a rarely heard sound costs nothing at start-up
 function lazy(target, key, build) {
   Object.defineProperty(target, key, {
@@ -631,6 +658,7 @@ export function createEventResources(ctx, resources) {
   lazy(out, 'door', () => door(ctx));
   lazy(out, 'busChime', () => busChime(ctx));
   lazy(out, 'clang', () => [clang(ctx, 1701), clang(ctx, 1702)]);
+  lazy(out, 'creak', () => [creak(ctx, 2201, true), creak(ctx, 2202, false), creak(ctx, 2203, true)]);
   const animals = {
     chatter: () => [chatter(ctx, 1301), chatter(ctx, 1302)],
     quack: () => [quack(ctx, 1401), quack(ctx, 1402)],
@@ -657,7 +685,7 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   const start = Math.max(ctx.currentTime, finite(options.when, ctx.currentTime));
   const intensity = clamp(finite(options.intensity, 1));
   const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, paddle: 0.42, plunge: 0.9, door: 0.45, buschime: 0.22, thud: 0.5,
-    chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55, snort: 0.4,
+    chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55, creak: 0.3, snort: 0.4,
     coo: 0.22, caw: 0.36, chirp: 0.16 };
   if (!Object.hasOwn(levels, kind) || intensity === 0) return { endTime: start, dispose() {} };
   const gain = ctx.createGain();
@@ -778,6 +806,10 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   } else if (kind === 'clang') {
     // harder hits ring a little lower and longer
     play(resources.clang[Math.floor(random() * 2)], start, 1.06 - intensity * 0.12 + random() * 0.05);
+  } else if (kind === 'creak') {
+    // a swing's chain at the end of its arc: the higher it swung, the louder and a touch lower
+    const set = resources.creak;
+    play(set[Math.floor(random() * set.length)], start, 1.08 - intensity * 0.12 + (random() - 0.5) * 0.12);
   } else if (kind === 'snort') {
     // a snort, sometimes two, as the deer goes
     const set = resources.animals.snort, pitch = 0.9 + random() * 0.2;

@@ -84,7 +84,9 @@ function createSecondPlayer({ scene, colliders, share, beside, map = null, kept 
   function getInOrOut() {
     const p = cm.entities.person;
     if (cm.activeMode === 'person' && p.sitting) { cm.standUp(); return; }
+    if (cm.activeMode === 'person' && p.swing) { cm.leaveSwing(); return; }
     const choice = cm.enterOrExit();
+    if (choice?.swing) { cm.boardSwing(choice.swing); return; }
     if (!choice || choice.sit) return;
     cm.setMode(choice.mode);
     if (choice.jump) cm.bailOut(choice.jump);
