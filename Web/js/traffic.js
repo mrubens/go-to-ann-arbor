@@ -28,7 +28,7 @@ import {
   createBusWheelMaterial,
   createLoftedBusMaterial
 } from './bus.js';
-import { groundHeight, groundTilt, deckTop, groundUnderStreets } from './terrain.js';
+import { groundHeight, groundTilt, deckTop, groundNear, streetDeckTop, OVERPASS_STREETS, groundUnderStreets } from './terrain.js';
 import { MOTO_SPECS, HELMET_OF, HELMET_PAINTS, buildMotoGeometry, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
 import { speedLimitAt } from './speed-limits.js';
@@ -755,6 +755,15 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     }
   }
 
+  // Lamp: the height v rides at: up on an overpass's deck on the street it carries (terrain.js), else the ground. What
+  // passes over or under it there is neither braked for nor run into
+  function rideHeight(v) {
+    const street = v.edge?.street;
+    const top = street && OVERPASS_STREETS.has(street) ? streetDeckTop(v.x, v.z, street) : null;
+    return top ?? groundHeight(v.x, v.z);
+  }
+  const apart = (y, v) => Number.isFinite(y) && Math.abs(y - rideHeight(v)) > 3;
+
   // Where the player is relative to v: metres ahead, metres to the right, and how fast it moves v's way
   function relateToPlayer(v) {
     v.pAhead = Infinity;
@@ -762,6 +771,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const dx = player.x - v.x;
     const dz = player.z - v.z;
     if (Math.abs(dx) > LOOKAHEAD + 10 || Math.abs(dz) > LOOKAHEAD + 10) return;
+    if (Math.abs(dx) < 30 && Math.abs(dz) < 30 && apart(player.entity?.position.y, v)) return; // (on a bridge over it, or under it)
     const fx = Math.sin(v.yaw);
     const fz = Math.cos(v.yaw);
     v.pAhead = dx * fx + dz * fz;
@@ -1700,6 +1710,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const dz = pe.position.z - prevZ - v.z + v.prevZ;
     if (Math.abs(pe.position.x - v.x) > reach + Math.abs(dx)
       || Math.abs(pe.position.z - v.z) > reach + Math.abs(dz)) return;
+    if (apart(pe.position.y, v)) return; // (Lamp: over or under it, on an overpass)
     const a = contactA, b = contactB, hit = vehicleHit;
     const heading = pe.heading || 0;
     a.x = pe.position.x; a.z = pe.position.z;
@@ -1909,6 +1920,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
         const dx = v.x - o.x, dz = v.z - o.z;
         if (Math.abs(dx) > reach + Math.abs(dx - v.prevX + o.prevX)
           || Math.abs(dz) > reach + Math.abs(dz - v.prevZ + o.prevZ)) continue;
+        if (apart(rideHeight(o), v)) continue; // (Lamp: one on an overpass, the other under it)
         readTrafficBody(v, contactA);
         readTrafficBody(o, contactB);
         const hit = vehicleHit;
@@ -2206,12 +2218,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       dummy.rotation.set(v.wheelSpin + w * 0.55, rotY + (w === 0 ? v.steer : 0), roll, 'YXZ');
       // Lamp: each wheel on the ground under it
       const lx = v.x - halfTrack * cosY + wz * sinY, lz = v.z + halfTrack * sinY + wz * cosY;
-      dummy.position.set(lx, groundHeight(lx, lz) + radius, lz);
+      // (Lamp: on an overpass's deck, or the road under it, by the height it rides at: groundNear)
+      dummy.position.set(lx, (v._gy === undefined ? groundHeight(lx, lz) : groundNear(lx, lz, v._gy)) + radius, lz);
       dummy.updateMatrix();
       leftInst.setMatrixAt(i * 2 + w, dummy.matrix);
 
       const rx = v.x + halfTrack * cosY + wz * sinY, rz = v.z - halfTrack * sinY + wz * cosY;
-      dummy.position.set(rx, groundHeight(rx, rz) + radius, rz);
+      dummy.position.set(rx, (v._gy === undefined ? groundHeight(rx, rz) : groundNear(rx, rz, v._gy)) + radius, rz);
       dummy.updateMatrix();
       rightInst.setMatrixAt(i * 2 + w, dummy.matrix);
     }
@@ -2233,7 +2246,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     let gy = hasView ? lastGround : groundHeight(v.x, v.z);
     // over a road its street's bridge crosses, the deck isn't the ground (terrain.js): one already up on the bridge
     // stays on its deck, one on the road under it drives on under
-    if (v._gy !== undefined && v._gy > gy + 1) {
+    // (Lamp) and on a street a freeway's overpass carries, on its deck by the street it's driving (it may first be seen
+    // up there); on the road under it, under it
+    const street = v.edge?.street;
+    const top = street && OVERPASS_STREETS.has(street) ? streetDeckTop(v.x, v.z, street) : null;
+    if (top !== null) gy = Math.max(gy, top);
+    else if (v._gy !== undefined && v._gy > gy + 1) {
       const top = deckTop(v.x, v.z);
       if (top > gy + 1 && Math.abs(v._gy - top) < 1.5) gy = top;
     }
@@ -2241,7 +2259,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     return shown;
   }
   function settle(v, rotY, length, width) {
-    [v._tp, v._tr] = groundTilt(v.x, v.z, rotY, length, width);
+    [v._tp, v._tr] = groundTilt(v.x, v.z, rotY, length, width, v._gy);
   }
 
   function renderCar(c) {
