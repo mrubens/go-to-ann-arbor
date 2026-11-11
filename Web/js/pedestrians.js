@@ -2653,6 +2653,8 @@ class PersonRig {
     this.writeBone(BONE.CHEST, _qChest, this.jointFrom(BONE.PELVIS, BONE.CHEST, _qPelvis, _pelvis, _chest));
     // the head up, looking down the road however far the rider leans
     _qa.copy(_qRoot).multiply(qX(_q, Math.max(-0.1, lean * 0.25 - 0.08)));
+    // (Lamp: `head` [turn, nod] looks somewhere of its own: the people in the shops, shop-interiors.js)
+    if (p.head) _qa.copy(_qRoot).multiply(qY(_q, p.head[0])).multiply(qX(_q, p.head[1]));
     this.jointFrom(BONE.CHEST, BONE.HEAD, _qChest, _chest, _v);
     this.writeBone(BONE.HEAD, _qa, _v);
     this.headPosition = (this.headPosition || new THREE.Vector3()).copy(_v);

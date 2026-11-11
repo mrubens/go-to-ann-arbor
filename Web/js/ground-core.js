@@ -56,10 +56,12 @@ export const BUCKET = 32;
 export const bucketKey = (bx, bz) => bx * 100003 + bz;
 
 // The ground at (x, z) on a street's or railway's bridge deck, eased in from the ground over its first and last 8 m
-export function onDeck(r, x, z, h) {
+export function onDeck(r, x, z, h, overRoads = false) {
   const list = r.buckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
   if (!list) return h;
   for (const { deck, a, b } of list) {
+    // (over a road it crosses, the deck isn't the ground: the road runs on under it, terrain.js roadsUnder)
+    if (!overRoads && (a[5] || b[5])) continue;
     const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez;
     const t = ((x - a[0]) * ex + (z - a[1]) * ez) / l2;
     if (t < -0.2 || t > 1.2) continue;

@@ -32,7 +32,8 @@ import {
   uniform,
   texture,
   time,
-  instanceIndex
+  instanceIndex,
+  sign
 } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { LoftGeometry } from 'three/addons/geometries/LoftGeometry.js';
@@ -1637,6 +1638,40 @@ function carPlateTexture() {
   return _carPlateTexture;
 }
 
+// Lamp: the Ann Arbor police cars' door lettering, painted once: the top half 'POLICE' in heavy capitals over a smaller
+// 'ANN ARBOR' set to its right end; the bottom half '911' over 'EMERGENCY' (white on clear: the car's shader colours it)
+let _policeDecal;
+function policeDecalTexture() {
+  if (_policeDecal) return _policeDecal;
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff';
+  g.textBaseline = 'alphabetic';
+  const fit = (text, font, maxW) => { g.font = font; const w = g.measureText(text).width; return w > maxW ? maxW / w : 1; };
+  // POLICE, slightly italic and heavy, across the full width
+  g.save();
+  const k = fit('POLICE', '900 92px "Arial Black", Arial, sans-serif', 492);
+  g.translate(10, 88);
+  g.transform(1, 0, -0.08, 1, 0, 0);
+  g.scale(k, 1);
+  g.fillText('POLICE', 0, 0);
+  g.restore();
+  g.font = '800 30px Arial, sans-serif';
+  g.textAlign = 'right';
+  g.fillText('ANN ARBOR', 496, 122);
+  // 911 / EMERGENCY
+  g.textAlign = 'center';
+  g.font = '900 86px "Arial Black", Arial, sans-serif';
+  g.fillText('911', 256, 206);
+  g.font = '800 30px Arial, sans-serif';
+  g.fillText('EMERGENCY', 256, 246);
+  _policeDecal = new THREE.CanvasTexture(c);
+  _policeDecal.anisotropy = 8;
+  return _policeDecal;
+}
+
 /**
  * Creates the TSL material for lofted vehicles.
  * Instanced traffic reads the per-instance `paintColor` (vec3) and `carState` (vec4: brake (-1: parked, lamps off), left (+x) & right (-x)
@@ -1770,6 +1805,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
   const minEdgeW = (a, b, wa, wb) => mix(wa, wb, step(b, a));
 
   const isPolice = isLivery(1.0);
+  const isPoliceEV = isLivery(6.0); // Lamp: AAPD's electric patrol car, black with white doors
   const isBoro = isLivery(2.0);
   const isTLC = isLivery(3.0);
   const isAmbulance = isLivery(5.0); // a plain ambulance: a red band and pinstripe, no lettering
@@ -1884,6 +1920,17 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
       clamp(p.y.sub(plateR).div(0.115).add(0.5), 0.06, 0.94).add(plateVariant).div(PLATE_ROWS)
     );
     const plateCol = texture(carPlateTexture(), plateUV).rgb;
+    // Lamp: the police lettering, read the right way round from either side (u runs to the viewer's right): 'POLICE /
+    // ANN ARBOR' across the doors from just behind the B-pillar, '911 EMERGENCY' on the rear quarter under the glass
+    const sideU = sign(p.x).negate();
+    const decalH = 0.34, decalW = 1.62, decalZ = spec.doors[1] + 0.12, decalY = mix(float(sillY), belt, 0.56);
+    const du = p.z.sub(decalZ).div(decalW).mul(sideU).add(0.5), dv = p.y.sub(decalY).div(decalH).add(0.5);
+    const quarterZ = spec.zRear + 0.66, quarterY = belt.sub(0.16);
+    const qu = p.z.sub(quarterZ).div(0.6).mul(sideU).add(0.5), qv = p.y.sub(quarterY).div(0.24).add(0.5);
+    const decalA = texture(policeDecalTexture(), vec2(du.clamp(0.002, 0.998), dv.clamp(0.004, 0.996).mul(0.5).add(0.5))).a
+      .mul(step(0, du).mul(step(du, 1)).mul(step(0, dv)).mul(step(dv, 1)));
+    const quarterA = texture(policeDecalTexture(), vec2(qu.clamp(0.002, 0.998), qv.clamp(0.004, 0.996).mul(0.5))).a
+      .mul(step(0, qu).mul(step(qu, 1)).mul(step(0, qv)).mul(step(qv, 1)));
 
     If(isBody.greaterThan(0.5), () => {
       const bCol = vec3(basePaint.mul(ao)).toVar();
@@ -1900,7 +1947,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
 
       // Side doors, handles & liveries (evaluated only on side-facing body fragments)
       If(isSide.greaterThan(0.05), () => {
-        const hasLivery = max(max(isPolice, isAmbulance), max(isBoro, float(spec.sign ? 1.0 : 0.0)));
+        const hasLivery = max(max(max(isPolice, isPoliceEV), isAmbulance), max(isBoro, float(spec.sign ? 1.0 : 0.0)));
         If(hasLivery.greaterThan(0.5), () => {
           const along = smoothstep(spec.zRear + 0.22, spec.zRear + 0.3, p.z).mul(smoothstep(spec.zFront - 0.28, spec.zFront - 0.36, p.z));
           const stripe = band(p.y.sub(0.57), 0.072, fwY).mul(along);
@@ -1910,7 +1957,20 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
             .mul(band(p.y.sub(0.765), 0.042, fwY))
             .mul(band(p.z.sub(doorMid), 0.24, fwZ));
           const polMask = isPolice.mul(isSide).mul(ao);
-          bCol.assign(mix(mix(bCol, color(0x1b3d8a), max(stripe, lettering).mul(polMask)), color(0x6ba5dc), pin.mul(polMask)));
+          // Lamp: Ann Arbor's patrol cars (the navy paint is the car's own): a bright blue slash down the doors behind the
+          // end of 'POLICE', the lettering in white over it, '911 EMERGENCY' on the rear quarter
+          const onSideBody = smoothstep(sillY + 0.07, sillY + 0.1, p.y).mul(smoothstep(0.0, -0.02, p.y.sub(belt)));
+          const slashU = du.sub(0.74).add(dv.sub(0.5).mul(0.18));
+          const slash = band(slashU.mul(decalW), 0.085, max(fwZ, fwY)).mul(onSideBody);
+          bCol.assign(mix(bCol, color(0x2a6fe8), slash.mul(polMask)));
+          bCol.assign(mix(bCol, color(0xf4f6f8), max(decalA, quarterA).mul(polMask)));
+          // the electric one: black, its doors white from sill to belt, a silver badge on the front door, the lettering
+          // in black across the doors
+          const evMask = isPoliceEV.mul(isSide).mul(ao);
+          const doorPanel = band(p.z.sub(doorMid - 0.1), 1.06, fwZ).mul(onSideBody);
+          const polBadge = cov(length(vec2(p.z.sub(doorMid + 0.5), p.y.sub(0.84))).sub(0.1), max(fwZ, fwY));
+          bCol.assign(mix(bCol, color(0xf3f5f7), doorPanel.mul(evMask)));
+          bCol.assign(mix(mix(bCol, color(0x14161a), decalA.mul(evMask)), color(0x9aa0a6), polBadge.mul(doorPanel).mul(evMask)));
           const ambMask = isAmbulance.mul(isSide).mul(ao);
           const ambBand = band(p.y.sub(spec.cargo ? 1.12 : 0.72), 0.11, fwY).mul(along);
           bCol.assign(mix(mix(bCol, color(0xc41e24), max(stripe, ambBand).mul(ambMask)), color(0xc41e24), pin.mul(ambMask)));

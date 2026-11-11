@@ -24,7 +24,8 @@ class CarRadio {
     const saved = load('radio');
     this.own = Number.isInteger(saved?.own) ? saved.own : 0;
     this.phones = Number.isInteger(saved?.phones) ? saved.phones : OFF;
-    this.byCar = new Map();
+    // each car's station, kept through a reload of the code and between plays (the 'radio' save)
+    this.byCar = new Map(Object.entries(saved?.byCar || {}));
     this.carKey = null;
     this.station = OFF;
     this.playing = OFF;
@@ -66,6 +67,12 @@ class CarRadio {
     }
   }
 
+  // the stations saved: the player's car, their earbuds, and the last 40 other cars they've sat in
+  keep() {
+    const byCar = Object.fromEntries([...this.byCar].slice(-40));
+    save('radio', { own: this.own, phones: this.phones, byCar });
+  }
+
   tuneTo(station) {
     if (!this.carKey) return;
     this.tune(station - this.station);
@@ -77,7 +84,7 @@ class CarRadio {
   stationFor(key, own) {
     if (key === 'phones') return this.phones;
     if (own) return this.own;
-    if (!this.byCar.has(key)) this.byCar.set(key, Math.floor(random() * STATIONS.length));
+    if (!this.byCar.has(key)) { this.byCar.set(key, Math.floor(random() * STATIONS.length)); this.keep(); }
     return this.byCar.get(key);
   }
 
@@ -87,8 +94,8 @@ class CarRadio {
     this.station = ((this.station + 1 + dir) % n + n) % n - 1;
     if (this.carKey === 'own') this.own = this.station;
     else if (this.carKey === 'phones') this.phones = this.station;
-    if (this.carKey === 'own' || this.carKey === 'phones') save('radio', { own: this.own, phones: this.phones });
-    else this.byCar.set(this.carKey, this.station);
+    if (this.carKey !== 'own' && this.carKey !== 'phones') this.byCar.set(this.carKey, this.station);
+    this.keep();
     log(`[radio] tuned to ${this.station === OFF ? 'off' : STATIONS[this.station].call}`);
     this.draw();
   }
