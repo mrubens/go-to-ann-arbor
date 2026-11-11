@@ -11,6 +11,7 @@ import { riverFlow, riverDepth, waterLevel } from './terrain.js';
 import { chuteNear, CASCADE_ENTRY } from './cascades.js';
 import { pierPush } from './river.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
+import { cityUniforms } from './tsl-materials.js';
 
 const STEP = 3; // metres between the points of the way down
 const RUN = 2400; // the longest run before they're put back in at the top
@@ -18,6 +19,38 @@ const KAYAKS = 9, TUBES = 7;
 const DRAWN = 320, POSED = 140; // drawn within this far of the view, their people posed every frame within this (and
 // every few frames out to DRAWN, so no boat goes by empty)
 const GAP = 2.8; // how far behind whoever is ahead one keeps where the chutes squeeze everyone into the middle
+// out on the water only by day: from dusk (the town's windows lit, tsl-materials.js uInteriorGlow) they're off it.
+// Each one goes, or comes back, only while out of sight of both views, so none vanishes in front of the player
+const NIGHT_GLOW = 0.8, OUT_OF_SIGHT = 120;
+const SHOVE = 2.2; // how far off its lane a bumped boat can be knocked, easing back after
+
+// A boat as a row of circles: a kayak four along it bow to stern, a tube one round its middle
+const KAYAK_AT = [-1.2, -0.4, 0.4, 1.2], KAYAK_R = 0.46, TUBE_AT = [0], TUBE_R = 0.72;
+// how far boat A must move to clear boat B, into out: [x, z], the push (unit), returning how far (0 when they don't
+// touch). Every circle of one against every circle of the other, so two crossing in the middle push apart as surely
+// as two touching bow to bow
+export function boatOverlap(ax, az, ah, aKayak, bx, bz, bh, bKayak, out) {
+  const A = aKayak ? KAYAK_AT : TUBE_AT, B = bKayak ? KAYAK_AT : TUBE_AT;
+  const r = (aKayak ? KAYAK_R : TUBE_R) + (bKayak ? KAYAK_R : TUBE_R);
+  const asx = Math.sin(ah), asz = Math.cos(ah), bsx = Math.sin(bh), bsz = Math.cos(bh);
+  let px = 0, pz = 0, most = 0;
+  for (const i of A) {
+    const x1 = ax + asx * i, z1 = az + asz * i;
+    for (const j of B) {
+      let nx = x1 - (bx + bsx * j), nz = z1 - (bz + bsz * j);
+      const d = Math.hypot(nx, nz);
+      if (d >= r) continue;
+      if (d < 1e-4) { nx = ax - bx; nz = az - bz; const l = Math.hypot(nx, nz); if (l < 1e-4) { nx = asz; nz = -asx; } else { nx /= l; nz /= l; } }
+      else { nx /= d; nz /= d; }
+      px += nx * (r - d); pz += nz * (r - d);
+      most = Math.max(most, r - d);
+    }
+  }
+  const l = Math.hypot(px, pz);
+  if (!most || l < 1e-6) return 0;
+  out[0] = px / l; out[1] = pz / l;
+  return most;
+}
 
 // The way down: from the top of the channel, along its chutes, then wherever the river runs, nudged to the middle of
 // the open water. Each point has how much room there is to each side (left, right) and how much it's lined up on a
@@ -154,7 +187,7 @@ function buildRiverPeople(group) {
       lane: (rand() - 0.5) * 1.4, phase: rand() * 100,
       // (a tube drifts at the Huron's own half a metre a second, controllers.js KAYAK_CURRENT; a kayak paddles on)
       speed: kayak ? 1.5 + rand() * 0.7 : 0.45 + rand() * 0.2,
-      stroke: rand() * 6, spin: rand() * 6, heading: null, x: 0, y: 0, z: 0,
+      stroke: rand() * 6, spin: rand() * 6, heading: null, x: 0, y: 0, z: 0, ox: 0, oz: 0, out: true,
       rig: new PersonRig({ seed: 50 + i * 7.3, scale: 0.92 + rand() * 0.14, female: rand() < 0.5, girth: 0.9 + rand() * 0.25, hair: rand() * 0.6 }),
       root: new THREE.Object3D(),
       hands: [new THREE.Vector3(), new THREE.Vector3()], twist: 0, posedAt: -Infinity
@@ -179,6 +212,13 @@ function buildRiverPeople(group) {
     const off = Math.max(-1, Math.min(1, lane)) * room;
     p.x = a.x + (b.x - a.x) * t - tz * off;
     p.z = a.z + (b.z - a.z) * t + tx * off;
+    // knocked off its lane by a bump, easing back onto it
+    if (p.ox || p.oz) {
+      const k = Math.exp(-dt * 0.35);
+      p.ox *= k; p.oz *= k;
+      if (Math.abs(p.ox) + Math.abs(p.oz) < 0.01) p.ox = p.oz = 0;
+      p.x += p.ox; p.z += p.oz;
+    }
     const want = Math.atan2(tx, tz);
     if (p.heading === null) p.heading = want;
     let d = want - p.heading;
@@ -187,7 +227,7 @@ function buildRiverPeople(group) {
     return pull;
   }
 
-  let frame = 0;
+  let frame = 0, lastGlow = -1;
   // `focus2`: the second player's view in split screen, near which they're drawn and posed too
   function update(dt, elapsed, focus, focus2 = null) {
     if (dt <= 0) return;
@@ -197,7 +237,19 @@ function buildRiverPeople(group) {
     const away = (x, z) => focus2 ? Math.min(Math.hypot(x - focus.x, z - focus.z), Math.hypot(x - focus2.x, z - focus2.z)) : Math.hypot(x - focus.x, z - focus.z);
     const end = Math.min(length, RUN) - 4;
     let kayaksShown = 0, tubesShown = 0;
+    const glow = cityUniforms.uInteriorGlow.value, day = glow < NIGHT_GLOW;
+    // a jump in the light (a time button pressed) changes them at once, as the game opening does
+    const jumped = Math.abs(glow - lastGlow) > 0.3;
+    lastGlow = glow;
     for (const p of people) {
+      // (as the game opens, they're as the hour has them at once)
+      if (p.out !== day && (frame <= 1 || jumped || away(p.x, p.z) > OUT_OF_SIGHT)) p.out = day;
+      if (!p.out) {
+        if (p.kayak) { hulls.setMatrixAt(p.slot, none); cockpits.setMatrixAt(p.slot, none); paddles.setMatrixAt(p.slot, none); }
+        else tubes.setMatrixAt(p.slot, none);
+        p.posedAt = -Infinity;
+        continue;
+      }
       const pull = place(p, dt);
       // on through the chutes quicker: a tube is shot through at the chute's own pace
       let s = p.s + p.speed * (1 + (p.kayak ? 0.9 : 4) * pull) * dt;
@@ -265,15 +317,63 @@ function buildRiverPeople(group) {
       crowd.add(p.rig, far);
     }
     crowd.end();
+    bumpEachOther(focus, focus2);
     // a mesh with none of its boats near either view isn't drawn at all
     hulls.visible = cockpits.visible = paddles.visible = kayaksShown > 0;
     tubes.visible = tubesShown > 0;
     for (const mesh of meshes) mesh.instanceMatrix.needsUpdate = true;
   }
 
+  // knocks boat p `amount` along (nx, nz), off its lane, as far as open water and SHOVE allow
+  function shove(p, nx, nz, amount) {
+    let ox = p.ox + nx * amount, oz = p.oz + nz * amount;
+    const l = Math.hypot(ox, oz);
+    if (l > SHOVE) { ox *= SHOVE / l; oz *= SHOVE / l; }
+    const x = p.x + ox - p.ox, z = p.z + oz - p.oz;
+    if (!((riverDepth(x, z) ?? 0) > 0.25)) return false;
+    p.x = x; p.z = z; p.ox = ox; p.oz = oz;
+    return true;
+  }
+  // the boats near either view bumping one another: each takes half of it
+  const dir = [0, 0];
+  function bumpEachOther(focus, focus2) {
+    const close = (p) => Math.hypot(p.x - focus.x, p.z - focus.z) < POSED || (focus2 && Math.hypot(p.x - focus2.x, p.z - focus2.z) < POSED);
+    for (let i = 0; i < people.length; i++) {
+      const a = people[i];
+      if (!a.out || a.heading === null || !close(a)) continue;
+      for (let j = i + 1; j < people.length; j++) {
+        const b = people[j];
+        if (!b.out || b.heading === null || Math.abs(a.x - b.x) > 4 || Math.abs(a.z - b.z) > 4) continue;
+        const o = boatOverlap(a.x, a.z, a.heading, a.kayak, b.x, b.z, b.heading, b.kayak, dir);
+        if (o <= 0) continue;
+        shove(a, dir[0], dir[1], o * 0.5);
+        shove(b, -dir[0], -dir[1], o * 0.5);
+      }
+    }
+  }
+  // the player's boat at (x, z) bumping the kayakers and tubers: how far to move it to clear them (or null), the
+  // boats it struck knocked aside and slowed (controllers.js bumpLiveryBoats)
+  const push = { x: 0, z: 0, struck: 0 };
+  function collide(x, z, heading, kind, speed = 0) {
+    push.x = push.z = 0; push.struck = 0;
+    const kayak = kind !== 'paddleboat';
+    for (const p of people) {
+      if (!p.out || p.heading === null || Math.abs(p.x - x) > 5 || Math.abs(p.z - z) > 5) continue;
+      // (a pedal boat is wider and shorter than a kayak: near enough a tube)
+      const o = boatOverlap(x, z, heading, kayak, p.x, p.z, p.heading, p.kayak, dir);
+      if (o <= 0) continue;
+      // the struck boat takes half of it, if there's water to take it into, and loses some way
+      const took = shove(p, -dir[0], -dir[1], o * 0.5);
+      push.x += dir[0] * o * (took ? 0.5 : 1); push.z += dir[1] * o * (took ? 0.5 : 1);
+      p.s -= Math.min(0.5, Math.abs(speed) * 0.05);
+      push.struck = Math.max(push.struck, Math.abs(speed));
+    }
+    return push.x || push.z ? push : null;
+  }
+
   console.log(`[river] ${KAYAKS} kayakers and ${TUBES} tubers on a ${Math.round(Math.min(length, RUN))} m run from the cascades`);
   // where each one is, for the river's birds to keep clear of (animals.js)
-  return { update, count: people.length, length, people };
+  return { update, collide, count: people.length, length, people };
 }
 
 export { buildRiverPeople, kayakGeometry, paddleGeometry };

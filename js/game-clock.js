@@ -31,4 +31,12 @@ function gameTime(ms = Date.now()) {
   return { sec: ((local % 86400) + 86400) % 86400, live: true };
 }
 
-export { setClockPreset, gameTime, PRESET_TIME };
+// the moment the game shows, as a Date's milliseconds: now under "Now", and under a preset today at its hour (for the
+// stars, sky-stars.js)
+function gameMoment(ms = Date.now()) {
+  if (preset === 'now' || PRESET_TIME[preset] == null) return ms;
+  const local = ((ms / 1000 + detroitOffset(ms)) % 86400 + 86400) % 86400;
+  return ms + (PRESET_TIME[preset] - local) * 1000;
+}
+
+export { setClockPreset, gameTime, gameMoment, PRESET_TIME };

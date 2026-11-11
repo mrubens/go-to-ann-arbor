@@ -18,8 +18,10 @@ import { XBOX } from './device-tier.js';
 //   centre, and the taller stacks behind.
 // - Crisler Center (1967): the round arena, concrete walls with a blue and maize band under its low domed roof.
 // - Yost Ice Arena (1923): the brick field house with its barrel-vaulted roof and great arched end windows.
-// - Kerrytown: the old brick market buildings under a gabled roof.
-// - Ann Arbor Farmers Market: the long open sheds on green steel posts (no walls, so you can walk under them).
+// - Kerrytown Market & Shops: three old brick buildings round a courtyard, each its own height and brick, with
+//   segmental-arched windows, wood-and-glass shopfronts, loading-dock decks and the Kerrytown Chime's belfry.
+// - Ann Arbor Farmers Market: long open sheds, gabled along their length on green steel trusses, the stalls' tables
+//   under them (no walls, so you can walk under them).
 // - Ann Arbor District Library downtown: brick and concrete with long bands of windows.
 // - Tower Plaza: the 26-storey brown brick tower, windows in vertical strips, and its rooftop penthouse.
 // - The Gandy Dancer (1886): the Michigan Central depot in rough fieldstone with red sandstone arches, a red hipped
@@ -333,47 +335,408 @@ function yost(B, T) {
   return { s: { ...s, ring }, maxY: Y(wallH + rise) };
 }
 
-function kerrytown(B, T) {
-  const s = surveyAt(175, -556);
-  if (!s) return null;
-  const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
-  B.prism(r, g - 2, Y(0.5), LIME_DARK);
-  T.walls(r, Y(0.5), Y(7), BRICK_RED);
-  for (const e of edgesOf(r)) {
-    for (let u = 2.5; u < e.L - 2; u += 3.6) {
-      T.earch(e, u, Y(0.8), Y(3.8), 2, 0.03, GLASS);
-      T.ebox(e, u - 0.7, u + 0.7, Y(4.6), Y(6.2), 0.03, 0.06, GLASS, B.glass);
-      T.ebox(e, u - 0.85, u + 0.85, Y(6.2), Y(6.45), 0, 0.15, LIME);
+// Kerrytown Market & Shops: three old brick commercial buildings on the block between N Fourth and N Fifth Aves south
+// of E Kingsley, joined into one market of shops in 1969, each still its own height and brick, round a small courtyard,
+// with the Farmers Market's sheds against its south side. On the survey's three outlines (found by a point inside each):
+// - the corner building at Kingsley and Fifth: two storeys of red brick under a slate gable that runs along Kingsley,
+//   its gable end to Fifth Ave;
+// - the Fifth Ave building south of the courtyard: three storeys of warm orange-red brick under a corbelled parapet,
+//   the Kerrytown Chime's little open timber belfry on its roof by Fifth;
+// - the Fourth Ave building by the market: three tall storeys of darker brown brick, plain, its flat parapet higher.
+// Segmental-arched windows (a shallow brick arch over each, a stone sill under) a floor at a time; wood-and-glass
+// shopfronts with their doors along the streets (Fifth, and the sides toward the market and Detroit St; no awnings);
+// back walls plainer, with fewer windows; and wooden loading-dock decks under shed roofs on posts facing each other
+// across the courtyard, with steps down. The brick is brickMaterial's courses; the glass is the landmarks' (lit at night).
+const KT_BRICK = { corner: [0.5, 0.25, 0.19], fifth: [0.6, 0.35, 0.24], fourth: [0.4, 0.26, 0.2] };
+const KT_ARCH = [0.36, 0.17, 0.13];
+const KT_STONE = [0.7, 0.66, 0.58];
+const KT_BASE = [0.46, 0.43, 0.39];
+const KT_WOOD = [[0.12, 0.22, 0.16], [0.3, 0.1, 0.08], [0.15, 0.11, 0.08], [0.1, 0.17, 0.2]];
+const KT_SASH = [0.86, 0.83, 0.74];
+const KT_DECK = [0.42, 0.31, 0.21];
+const KT_DECK_DARK = [0.3, 0.22, 0.15];
+const KT_TIMBER = [0.55, 0.47, 0.37];
+const KT_BELL = [0.3, 0.22, 0.12];
+const KT_GOLD = [0.7, 0.56, 0.26];
+function ktTools(B, T) {
+  // a point on a wall: u along it, y up, d out from it
+  const P = (e, u, y, d) => [e.ax + e.tx * u + e.nx * d, y, e.az + e.tz * u + e.nz * d];
+  // one face on a wall, facing out
+  const face = (e, u0, u1, y0, y1, d, col, m = B.stone) => B.quad(m, P(e, u0, y0, d), P(e, u1, y0, d), P(e, u1, y1, d), P(e, u0, y1, d), col);
+  // a square beam from p to q, s thick (its four sides)
+  const beam = (p, q, s, col, m = B.stone) => {
+    const dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2], L = Math.hypot(dx, dy, dz) || 1;
+    const t = [dx / L, dy / L, dz / L];
+    const up = Math.abs(t[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const cr = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let u = cr(t, up); const ul = Math.hypot(...u); u = u.map((v) => (v / ul) * s / 2);
+    let v = cr(t, u); const vl = Math.hypot(...v); v = v.map((w) => (w / vl) * s / 2);
+    const c = (o, a, b) => [o[0] + a[0] + b[0], o[1] + a[1] + b[1], o[2] + a[2] + b[2]];
+    const n = (a) => a.map((w) => -w);
+    const k = [[u, v], [n(u), v], [n(u), n(v)], [u, n(v)]];
+    for (let i = 0; i < 4; i++) {
+      const [a1, b1] = k[i], [a2, b2] = k[(i + 1) % 4];
+      B.quad(m, c(p, a1, b1), c(p, a2, b2), c(q, a2, b2), c(q, a1, b1), col);
     }
-  }
-  T.band(r, Y(7), Y(7.4), LIME, 0.2);
-  // a gabled roof along its length
-  const x0 = s.b.minX, x1 = s.b.maxX, z0 = s.b.minZ, z1 = s.b.maxZ, zc = (z0 + z1) / 2, top = Y(11);
-  B.quad(B.stone, [x0 - 0.3, Y(7.4), z0 - 0.3], [x0 - 0.3, top, zc], [x1 + 0.3, top, zc], [x1 + 0.3, Y(7.4), z0 - 0.3], SLATE);
-  B.quad(B.stone, [x1 + 0.3, Y(7.4), z1 + 0.3], [x1 + 0.3, top, zc], [x0 - 0.3, top, zc], [x0 - 0.3, Y(7.4), z1 + 0.3], SLATE);
-  for (const x of [x0, x1]) B.tri(B.stone, [x, Y(7.4), z0], [x, top - 0.3, zc], [x, Y(7.4), z1], BRICK_RED);
-  for (const x of [x0, x1]) B.tri(B.stone, [x, Y(7.4), z1], [x, top - 0.3, zc], [x, Y(7.4), z0], BRICK_RED);
-  return { s, maxY: top };
+  };
+  // a segmental-arched window: glass from y0 up to y1 and a shallow arch `rise` over that, a rowlock arch of darker
+  // brick round its head, a stone sill, pale sash frames and a meeting rail
+  const segWin = (e, u, y0, y1, w, rise = 0.3, sash = KT_SASH) => {
+    const h = rise, R = (w * w / 4 + h * h) / (2 * h), cy = y1 + h - R, phi = Math.asin(Math.min(1, w / 2 / R)), n = 5;
+    const arc = (k, r) => { const a = -phi * 1.12 + (k / n) * phi * 2.24; return [u + Math.sin(a) * r, cy + Math.cos(a) * r]; };
+    face(e, u - w / 2, u + w / 2, y0, y1, 0.02, GLASS, B.glass);
+    for (let k = 0; k < n; k++) {
+      const a0 = -phi + (k / n) * phi * 2, a1 = -phi + ((k + 1) / n) * phi * 2;
+      B.tri(B.glass, P(e, u, y1, 0.02), P(e, u + Math.sin(a0) * R, cy + Math.cos(a0) * R, 0.02), P(e, u + Math.sin(a1) * R, cy + Math.cos(a1) * R, 0.02), GLASS);
+      const [p0u, p0y] = arc(k, R + 0.02), [p1u, p1y] = arc(k + 1, R + 0.02), [q0u, q0y] = arc(k, R + 0.3), [q1u, q1y] = arc(k + 1, R + 0.3);
+      B.quad(B.brick, P(e, p0u, p0y, 0.035), P(e, p1u, p1y, 0.035), P(e, q1u, q1y, 0.035), P(e, q0u, q0y, 0.035), KT_ARCH);
+    }
+    T.ebox(e, u - w / 2 - 0.12, u + w / 2 + 0.12, y0 - 0.16, y0, 0, 0.14, KT_STONE);
+    face(e, u - w / 2, u - w / 2 + 0.08, y0, y1, 0.04, sash);
+    face(e, u + w / 2 - 0.08, u + w / 2, y0, y1, 0.04, sash);
+    face(e, u - w / 2, u + w / 2, (y0 + y1) / 2 - 0.04, (y0 + y1) / 2 + 0.04, 0.04, sash);
+    face(e, u - w / 2, u + w / 2, y1 - 0.06, y1, 0.04, sash);
+  };
+  // a wood-and-glass shopfront from u0 to u1 over a wall's ground y: bays of a panelled bulkhead, a big pane, a
+  // transom of small lights and a sign band under a cornice, wood pilasters between, and a door in each bay, its own
+  // colours per bay
+  const shopfront = (e, u0, u1, y, k0 = 0) => {
+    const n = Math.max(1, Math.round((u1 - u0) / 6)), bw = (u1 - u0) / n;
+    for (let i = 0; i < n; i++) {
+      const a = u0 + i * bw, b = a + bw, wood = KT_WOOD[(k0 + i) % KT_WOOD.length];
+      const door = i % 2 ? a + 0.5 : b - 1.6; // the door at alternate ends, so pairs of shops share a pier
+      T.ebox(e, a, a + 0.4, y, y + 4.3, 0, 0.22, wood);
+      if (i === n - 1) T.ebox(e, b - 0.4, b, y, y + 4.3, 0, 0.22, wood);
+      // the bulkhead and its panel, either side of the door
+      for (const [p, q] of [[a + 0.4, door], [door + 1.1, b - (i === n - 1 ? 0.4 : 0)]]) {
+        if (q - p < 0.3) continue;
+        T.ebox(e, p, q, y, y + 0.75, 0, 0.12, wood);
+        face(e, p + 0.15, q - 0.15, y + 0.15, y + 0.6, 0.13, KT_WOOD[(k0 + i + 2) % KT_WOOD.length]);
+        face(e, p, q, y + 0.75, y + 3.1, 0.03, GLASS, B.glass);
+        face(e, (p + q) / 2 - 0.04, (p + q) / 2 + 0.04, y + 0.75, y + 3.1, 0.06, wood);
+      }
+      // the door: glass over a wood panel, in a wood frame, a stone step
+      face(e, door, door + 1.1, y + 1.0, y + 2.75, 0.02, GLASS, B.glass);
+      face(e, door, door + 1.1, y, y + 1.0, 0.025, wood);
+      T.ebox(e, door - 0.08, door, y, y + 3.1, 0, 0.1, wood);
+      T.ebox(e, door + 1.1, door + 1.18, y, y + 3.1, 0, 0.1, wood);
+      T.ebox(e, door - 0.1, door + 1.2, y - 0.3, y, 0, 0.45, KT_STONE);
+      // the transom's small lights and the sign band under a moulded cornice
+      face(e, a + 0.4, b, y + 3.25, y + 3.75, 0.03, GLASS, B.glass);
+      T.ebox(e, a + 0.4, b, y + 3.1, y + 3.25, 0, 0.12, wood);
+      for (let u = a + 1.2; u < b - 0.3; u += 0.8) face(e, u - 0.03, u + 0.03, y + 3.25, y + 3.75, 0.05, wood);
+      T.ebox(e, a, b, y + 3.75, y + 4.35, 0, 0.16, wood);
+      T.ebox(e, a - 0.05, b + 0.05, y + 4.35, y + 4.5, 0, 0.3, wood);
+    }
+  };
+  return { P, face, beam, segWin, shopfront };
 }
 
+// is (x, z) inside one of the survey's buildings other than `self` (the market's open sheds aside)?
+function otherBuildingAt(x, z, self, open) {
+  for (const b of REAL_BUILDINGS) {
+    if (b === self || b === open || x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
+    for (const p of b.polygons) if (polygonContains(p, x, z)) return true;
+  }
+  return false;
+}
+
+function kerrytown(B, T) {
+  const K = ktTools(B, T), { face, beam, segWin, shopfront } = K;
+  const out = [];
+  // the street walls (shops along them) by the way they face: Fifth Ave east, Kingsley north, the market south,
+  // Fourth Ave west
+  const facing = (e, dx, dz) => e.nx * dx + e.nz * dz > 0.8;
+  const market = surveyAt(168, -470)?.b;
+  const building = ({ at, brick, floors, H, roof, shops, front }) => {
+    const s = surveyAt(at[0], at[1]);
+    if (!s) return null;
+    const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
+    const roofY = roof === 'gable' ? H : H - 0.9;
+    B.prism(r, g - 2, Y(0.5), KT_BASE);
+    // the walls: a stone base, then brick to the roof (a parapet's inner face over a flat roof), the roof itself
+    B.prism(r, Y(roofY) - 0.05, Y(roofY), [0.25, 0.25, 0.27]);
+    for (const e of edgesOf(r)) {
+      face(e, 0, e.L, Y(0.5), Y(H), 0.012, brick, B.brick);
+      if (roof !== 'gable') face(e, e.L, 0, Y(roofY), Y(H), -0.3, brick, B.brick);
+      // the ground under this wall (the ground floor's doors and shopfronts stand on it)
+      const gw = Math.min(groundHeight(e.ax, e.az), groundHeight(e.ax + e.tx * e.L, e.az + e.tz * e.L)) - 0.3;
+      const lift = Math.min(Math.max(0, gw - g), floors[0][0] - 0.2);
+      const street = shops.some(([dx, dz]) => facing(e, dx, dz));
+      const back = !street && !front.some(([dx, dz]) => facing(e, dx, dz));
+      // a party wall or one a metre from its neighbour gets no windows
+      const free = (u) => !otherBuildingAt(e.ax + e.tx * u + e.nx * 1.2, e.az + e.tz * u + e.nz * 1.2, s.b, market);
+      if (e.L < 2.6) continue;
+      // the shopfronts, then each floor's windows
+      if (street && e.L > 5.5 && free(e.L / 2)) shopfront(e, 0.6, e.L - 0.6, Y(lift + 0.15), Math.round(e.ax));
+      const pitch = back ? 4.2 : 2.9;
+      const n = Math.max(1, Math.floor((e.L - 1.2) / pitch)), off = (e.L - n * pitch) / 2 + pitch / 2;
+      for (let f = 0; f < floors.length; f++) {
+        if (f === 0 && street && e.L > 5.5) continue;
+        const [y0, y1, w] = floors[f];
+        for (let k = 0; k < n; k++) {
+          const u = off + k * pitch;
+          if (!free(u)) continue;
+          // the back's ground floor: every other window, a plain door at its middle
+          if (f === 0 && back && k % 2) continue;
+          segWin(e, u, Y(y0 + (f === 0 ? lift : 0)), Y(y1 + (f === 0 ? lift : 0)), w);
+        }
+      }
+      // the stone base course and a stone belt course over the ground floor
+      T.ebox(e, 0, e.L, Y(0.4), Y(0.6), 0, 0.06, KT_STONE);
+      if (roof !== 'gable') {
+        // a corbelled brick cornice: two stepped courses over a row of dentils, under a stone coping
+        T.ebox(e, -0.05, e.L + 0.05, Y(H - 1.05), Y(H - 0.9), 0, 0.09, brick, B.brick);
+        T.ebox(e, -0.1, e.L + 0.1, Y(H - 0.9), Y(H - 0.7), 0, 0.18, brick, B.brick);
+        for (let u = 0.3; u < e.L - 0.2; u += 0.55) T.ebox(e, u - 0.12, u + 0.12, Y(H - 1.4), Y(H - 1.05), 0, 0.1, brick, B.brick);
+        T.ebox(e, -0.1, e.L + 0.1, Y(H), Y(H + 0.15), -0.35, 0.1, KT_STONE);
+      } else {
+        T.ebox(e, -0.1, e.L + 0.1, Y(H - 0.35), Y(H), 0, 0.14, KT_STONE);
+      }
+    }
+    return { s, r, g, Y, roofY };
+  };
+
+  // the corner building at Kingsley and Fifth
+  const A = building({ at: [175, -556], brick: KT_BRICK.corner, H: 8.2, roof: 'gable', front: [[0, 1], [0, -1]],
+    floors: [[1.0, 3.6, 1.5], [5.0, 7.0, 1.2]], shops: [[1, 0]] });
+  if (A) {
+    const { r, Y, s } = A;
+    // its slate gable along Kingsley: the ridge between the middles of the two short walls, the eaves out over the
+    // long ones, a brick gable end at each short wall (Fifth Ave's with a round window) under a stone rake
+    const pts = []; for (let i = 0; i < r.length; i += 2) pts.push([r[i], r[i + 1]]);
+    let i0 = 0, best = 0;
+    for (let i = 0; i < pts.length; i++) { const j = (i + 1) % pts.length, L = Math.hypot(pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]); if (L > best) { best = L; i0 = i; } }
+    const c = (k) => pts[(i0 + k) % pts.length];
+    const a0 = c(0), a1 = c(1), b1 = c(2), b0 = c(3);
+    const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+    const m0 = mid(a0, b0), m1 = mid(a1, b1);
+    const eaveY = Y(8.2), ridgeY = Y(12.6), o = 0.45;
+    const away = (p, m, d) => { const dx = p[0] - m[0], dz = p[1] - m[1], l = Math.hypot(dx, dz); return [p[0] + (dx / l) * d, p[1] + (dz / l) * d]; };
+    const ext = (p, q, d) => { const dx = p[0] - q[0], dz = p[1] - q[1], l = Math.hypot(dx, dz); return [p[0] + (dx / l) * d, p[1] + (dz / l) * d]; };
+    // eave corners out by `o` from the walls and past the gable ends by 0.3
+    const A0 = ext(away(a0, m0, o), a1, 0.3), A1 = ext(away(a1, m1, o), a0, 0.3), B0 = ext(away(b0, m0, o), b1, 0.3), B1 = ext(away(b1, m1, o), b0, 0.3);
+    const R0 = ext(m0, m1, 0.3), R1 = ext(m1, m0, 0.3);
+    const dropY = eaveY - o * (ridgeY - eaveY) / Math.hypot(a0[0] - m0[0], a0[1] - m0[1]);
+    const v = (p, y) => [p[0], y, p[1]];
+    B.quad(B.stone, v(A0, dropY), v(A1, dropY), v(R1, ridgeY), v(R0, ridgeY), SLATE);
+    B.quad(B.stone, v(B1, dropY), v(B0, dropY), v(R0, ridgeY), v(R1, ridgeY), SLATE);
+    // the fascia boards and the ridge's cap
+    beam(v(A0, dropY - 0.1), v(A1, dropY - 0.1), 0.22, KT_STONE);
+    beam(v(B0, dropY - 0.1), v(B1, dropY - 0.1), 0.22, KT_STONE);
+    beam(v(R0, ridgeY + 0.05), v(R1, ridgeY + 0.05), 0.2, [0.2, 0.2, 0.22]);
+    for (const [p, q, m] of [[a0, b0, m0], [a1, b1, m1]]) {
+      B.tri(B.brick, v(p, eaveY), v(q, eaveY), v(m, ridgeY - 0.05), KT_BRICK.corner);
+      beam(v(p, eaveY + 0.1), v(m, ridgeY + 0.15), 0.3, KT_STONE);
+      beam(v(q, eaveY + 0.1), v(m, ridgeY + 0.15), 0.3, KT_STONE);
+    }
+    // a round window in the gable end on Fifth Ave (the short wall facing east)
+    const gableEnd = edgesOf(r).find((e) => e.nx > 0.8);
+    if (gableEnd) {
+      const u = gableEnd.L / 2, cy = Y(10.0);
+      for (let k = 0; k < 12; k++) {
+        const t0 = (k / 12) * Math.PI * 2, t1 = ((k + 1) / 12) * Math.PI * 2;
+        B.tri(B.glass, K.P(gableEnd, u, cy, 0.03), K.P(gableEnd, u + Math.cos(t0) * 0.75, cy + Math.sin(t0) * 0.75, 0.03), K.P(gableEnd, u + Math.cos(t1) * 0.75, cy + Math.sin(t1) * 0.75, 0.03), GLASS);
+        B.quad(B.stone, K.P(gableEnd, u + Math.cos(t0) * 0.75, cy + Math.sin(t0) * 0.75, 0.05), K.P(gableEnd, u + Math.cos(t1) * 0.75, cy + Math.sin(t1) * 0.75, 0.05),
+          K.P(gableEnd, u + Math.cos(t1) * 0.98, cy + Math.sin(t1) * 0.98, 0.05), K.P(gableEnd, u + Math.cos(t0) * 0.98, cy + Math.sin(t0) * 0.98, 0.05), KT_STONE);
+      }
+    }
+    // two brick chimneys on the ridge
+    for (const t of [0.25, 0.7]) {
+      const x = m0[0] + (m1[0] - m0[0]) * t, z = m0[1] + (m1[1] - m0[1]) * t;
+      B.box(x - 0.45, x + 0.45, ridgeY - 1.5, ridgeY + 1.3, z - 0.45, z + 0.45, KT_BRICK.corner);
+      B.box(x - 0.55, x + 0.55, ridgeY + 1.3, ridgeY + 1.45, z - 0.55, z + 0.55, KT_STONE);
+    }
+    out.push({ s, maxY: ridgeY, decks: [] });
+  }
+
+  // the Fifth Ave building, south of the courtyard
+  const C = building({ at: [175, -526], brick: KT_BRICK.fifth, H: 11.4, roof: 'flat', front: [[0, -1]],
+    floors: [[1.0, 3.7, 1.5], [5.0, 7.1, 1.25], [8.3, 10.0, 1.25]], shops: [[1, 0], [0, 1]] });
+  if (C) {
+    const { r, Y, s, roofY } = C;
+    // the Kerrytown Chime's belfry by Fifth Ave: four timber posts over a railed deck, a pyramid roof on them, a
+    // finial, and its bells hung in the open
+    const cx = 190.5, cz = -527, hw = 1.5, y0 = Y(roofY), y1 = y0 + 3.6;
+    B.box(cx - hw - 0.2, cx + hw + 0.2, y0, y0 + 0.4, cz - hw - 0.2, cz + hw + 0.2, KT_TIMBER);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) beam([cx + sx * hw, y0 + 0.4, cz + sz * hw], [cx + sx * hw, y1, cz + sz * hw], 0.24, KT_TIMBER);
+    for (const [p, q] of [[[-1, -1], [1, -1]], [[1, -1], [1, 1]], [[1, 1], [-1, 1]], [[-1, 1], [-1, -1]]]) {
+      beam([cx + p[0] * hw, y0 + 1.3, cz + p[1] * hw], [cx + q[0] * hw, y0 + 1.3, cz + q[1] * hw], 0.12, KT_TIMBER);
+      beam([cx + p[0] * hw, y1 - 0.1, cz + p[1] * hw], [cx + q[0] * hw, y1 - 0.1, cz + q[1] * hw], 0.2, KT_TIMBER);
+      // a cross brace under each side's head
+      beam([cx + p[0] * hw, y1 - 0.9, cz + p[1] * hw], [cx + (p[0] + q[0]) / 2 * hw, y1 - 0.1, cz + (p[1] + q[1]) / 2 * hw], 0.1, KT_TIMBER);
+      beam([cx + q[0] * hw, y1 - 0.9, cz + q[1] * hw], [cx + (p[0] + q[0]) / 2 * hw, y1 - 0.1, cz + (p[1] + q[1]) / 2 * hw], 0.1, KT_TIMBER);
+    }
+    B.hip(cx - hw - 0.45, cx + hw + 0.45, cz - hw - 0.45, cz + hw + 0.45, y1, y1 + 2.2, [0.32, 0.5, 0.44]);
+    beam([cx, y1 + 2.1, cz], [cx, y1 + 3.1, cz], 0.08, KT_GOLD);
+    // the bells, smaller down the frame
+    for (const [bx, bz, br] of [[-0.6, -0.5, 0.42], [0.55, -0.45, 0.36], [0, 0.55, 0.3], [-0.55, 0.5, 0.25], [0.6, 0.6, 0.22]]) {
+      const top = y1 - 0.3, ring = [];
+      for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2; ring.push(cx + bx + Math.cos(a) * br, cz + bz + Math.sin(a) * br); }
+      B.prism(ring, top - br * 1.6, top - br * 1.5, KT_BELL);
+      for (let k = 0; k < 8; k++) {
+        const j = (k + 1) % 8;
+        B.quad(B.stone, [ring[k * 2], top - br * 1.5, ring[k * 2 + 1]], [ring[j * 2], top - br * 1.5, ring[j * 2 + 1]],
+          [cx + bx + (ring[j * 2] - cx - bx) * 0.55, top, cz + bz + (ring[j * 2 + 1] - cz - bz) * 0.55],
+          [cx + bx + (ring[k * 2] - cx - bx) * 0.55, top, cz + bz + (ring[k * 2 + 1] - cz - bz) * 0.55], KT_BELL);
+      }
+      beam([cx + bx, top, cz + bz], [cx + bx, y1 - 0.1, cz + bz], 0.05, [0.1, 0.1, 0.1]);
+    }
+    // rooftop units and a roof hatch, back from Fifth
+    B.box(162, 165.5, Y(roofY), Y(roofY + 1.5), -531, -528.5, [0.6, 0.61, 0.61]);
+    B.box(170, 172, Y(roofY), Y(roofY + 1.0), -523, -521, [0.55, 0.56, 0.56]);
+    // its roof is the parapet's height; the belfry a solid of its own on it
+    out.push({ s, maxY: Y(11.55), decks: [{ minX: cx - hw - 0.45, maxX: cx + hw + 0.45, minZ: cz - hw - 0.45, maxZ: cz + hw + 0.45,
+      minY: y0, maxY: y1 + 2.2, keepsSurvey: true }] });
+  }
+
+  // the Fourth Ave building, by the market
+  const D = building({ at: [130, -516], brick: KT_BRICK.fourth, H: 12.6, roof: 'flat', front: [[-1, 0]],
+    floors: [[1.1, 3.9, 1.5], [5.4, 7.6, 1.3], [9.0, 11.0, 1.3]], shops: [[0, 1]] });
+  if (D) {
+    const { s, Y, r, roofY } = D;
+    // its entrance on Fourth Ave: a door under a transom and a stone lintel
+    const w = edgesOf(r).find((e) => e.nx < -0.8);
+    if (w) {
+      const u = w.L / 2;
+      face(w, u - 0.9, u + 0.9, Y(0.5), Y(2.9), 0.02, GLASS, B.glass);
+      face(w, u - 0.9, u + 0.9, Y(3.0), Y(3.6), 0.02, GLASS, B.glass);
+      T.ebox(w, u - 1.05, u - 0.9, Y(0.5), Y(3.6), 0, 0.12, KT_WOOD[0]);
+      T.ebox(w, u + 0.9, u + 1.05, Y(0.5), Y(3.6), 0, 0.12, KT_WOOD[0]);
+      T.ebox(w, u - 0.9, u + 0.9, Y(2.9), Y(3.0), 0, 0.12, KT_WOOD[0]);
+      T.ebox(w, u - 1.3, u + 1.3, Y(3.6), Y(3.95), 0, 0.2, KT_STONE);
+      T.ebox(w, u - 1.4, u + 1.4, Y(0) - 0.3, Y(0.5), 0, 1.2, KT_STONE);
+    }
+    B.box(125, 128, Y(roofY), Y(roofY + 1.6), -520, -517.5, [0.6, 0.61, 0.61]);
+    out.push({ s, maxY: Y(12.75), decks: [] });
+  }
+
+  // the loading-dock decks: wood on posts a metre up, a shed roof over them on posts, steps down at one end; solid to
+  // walk into (a jump gets up on them), the posts left open
+  const deck = (x0, x1, z0, z1, wallZ, gY, stepsAt, high = 0.95) => {
+    const top = gY + high, out2 = wallZ < (z0 + z1) / 2 ? 1 : -1; // which way is away from the wall
+    B.box(x0, x1, top - 0.12, top, z0, z1, KT_DECK);
+    for (let x = x0; x < x1 + 0.01; x += 0.45) B.box(x - 0.01, x + 0.01, top, top + 0.005, z0, z1, KT_DECK_DARK);
+    B.box(x0, x1, gY - 0.3, top - 0.12, out2 > 0 ? z1 - 0.08 : z0, out2 > 0 ? z1 : z0 + 0.08, KT_DECK_DARK);
+    const outer = out2 > 0 ? z1 : z0, inner = out2 > 0 ? z0 : z1;
+    const roofIn = gY + 4.75, roofOut = gY + 3.95;
+    for (let x = x0 + 0.2; x <= x1 - 0.19; x += Math.max(2.5, (x1 - x0 - 0.4) / Math.round((x1 - x0 - 0.4) / 3))) {
+      beam([x, gY - 0.3, outer - out2 * 0.15], [x, roofOut, outer - out2 * 0.15], 0.18, KT_DECK);
+      // a railing between the posts
+      beam([x, top + 0.95, outer - out2 * 0.15], [Math.min(x1 - 0.2, x + 3), top + 0.95, outer - out2 * 0.15], 0.07, KT_DECK);
+    }
+    // the shed roof: corrugated metal from the wall out past the posts
+    B.quad(B.stone, [x0 - 0.3, roofIn, inner], [x1 + 0.3, roofIn, inner], [x1 + 0.3, roofOut - 0.1, outer + out2 * 0.5], [x0 - 0.3, roofOut - 0.1, outer + out2 * 0.5], [0.45, 0.47, 0.47]);
+    beam([x0 - 0.3, roofOut - 0.1, outer + out2 * 0.5], [x1 + 0.3, roofOut - 0.1, outer + out2 * 0.5], 0.12, [0.38, 0.4, 0.4]);
+    beam([x0, roofOut - 0.2, outer - out2 * 0.15], [x1, roofOut - 0.2, outer - out2 * 0.15], 0.2, KT_DECK);
+    // the steps down at one end
+    const sx = stepsAt < 0 ? x0 : x1, dir = stepsAt;
+    for (let k = 0; k < 4; k++) {
+      if (k * 0.24 >= high - 0.05) break;
+      const y = gY + k * 0.24, d = (Math.ceil(high / 0.24) - k) * 0.3;
+      const a = sx + dir * d, b = sx;
+      B.box(Math.min(a, b), Math.max(a, b), y, y + 0.24, z0 + 0.2, z1 - 0.2, KT_DECK);
+    }
+    return { minX: x0, maxX: x1, minZ: z0, maxZ: z1, maxY: top, keepsSurvey: true };
+  };
+  const yAt = (x, z) => groundHeight(x, z) - 0.05;
+  const level = (x0, x1, z) => Math.min(yAt(x0, z), yAt(x1, z));
+  const byS = (q) => out.find((o) => o.s === q?.s);
+  // in the courtyard: along the corner building's south wall and the Fifth Ave building's north wall (the alley on
+  // the market side is the survey's parking lot, so none there)
+  if (A) byS(A).decks.push(deck(165, 180, -546.3, -543.8, -546.6, level(165, 180, -545), -1));
+  if (C) byS(C).decks.push(deck(164.2, 181.2, -539.6, -536.9, -536.5, level(164, 181, -538), 1));
+  // colliders: each building's own strips, then its decks
+  return out.map(({ s, maxY, decks }) => ({ s, maxY, colliders: [...strips(s.ring, maxY), ...decks] }));
+}
+
+// The Ann Arbor Farmers Market: long open sheds on the survey's outline of their roofs, each a gable along its own
+// length on green steel trusses (a post each side, a tie, rafters to the ridge, a king post and braces) every 6 m or
+// so, a pale standing-seam metal roof with its ridge cap, and the stalls' tables down both sides under the eaves, with
+// produce crates on some. The north shed along the Kerrytown side, the long one along Detroit St and two short sheds
+// off it, and the stub by Fifth Ave; laid out by hand on the outline (found by a point inside it). Open: only the posts
+// stop anyone.
 function farmersMarket(B, T) {
   const s = surveyAt(168, -470);
   if (!s) return null;
-  const r = s.ring, g = groundOf(r) - 0.2, Y = (y) => g + y, poly = s.b.polygons[0];
-  // green steel posts on a grid under the roof, the roof's tin edge and its low pitch
-  for (let x = s.b.minX + 2; x < s.b.maxX - 1; x += 6) {
-    for (let z = s.b.minZ + 2; z < s.b.maxZ - 1; z += 6) {
-      if (!polygonContains(poly, x, z) || !polygonContains(poly, x + 1.2, z) || !polygonContains(poly, x - 1.2, z) ||
-        !polygonContains(poly, x, z + 1.2) || !polygonContains(poly, x, z - 1.2)) continue;
-      B.box(x - 0.14, x + 0.14, g - 0.5, Y(4.1), z - 0.14, z + 0.14, GREEN_STEEL);
-      // a stall's table beside every other post
-      if (((x + z) | 0) % 2) B.box(x + 0.6, x + 2.6, Y(0.8), Y(0.9), z - 0.5, z + 0.5, [0.5, 0.36, 0.22]);
+  const K = ktTools(B, T), { beam } = K;
+  const g = groundOf(s.ring) - 0.2;
+  // each shed: from a to b along its ridge, w wide
+  const sheds = [
+    { a: [115.5, -501.25], b: [184.5, -498.5], w: 8.6 },
+    { a: [192.1, -501.6], b: [147.1, -442.1], w: 8.4 },
+    { a: [144, -476], b: [172.5, -475.8], w: 8.6 },
+    { a: [138, -452.25], b: [154.5, -452.1], w: 8.4 },
+    { a: [191.75, -511.5], b: [191.75, -502.5], w: 8.5 }
+  ];
+  const ROOF_TOP = [0.72, 0.73, 0.71], ROOF_SEAM = [0.6, 0.61, 0.6], TABLE = [0.48, 0.35, 0.22], CLOTH = [[0.75, 0.2, 0.15], [0.2, 0.4, 0.6], [0.85, 0.8, 0.65]];
+  const CROPS = [[0.85, 0.4, 0.1], [0.7, 0.12, 0.1], [0.4, 0.55, 0.15], [0.55, 0.3, 0.45], [0.9, 0.75, 0.2]];
+  const colliders = [];
+  let maxY = g;
+  sheds.forEach(({ a, b, w }, si) => {
+    const dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz), tx = dx / L, tz = dz / L, nx = -tz, nz = tx;
+    const at = (u, v, y) => [a[0] + tx * u + nx * v, y, a[1] + tz * u + nz * v];
+    const gy = Math.min(groundHeight(...[a[0], a[1]]), groundHeight(b[0], b[1]), groundHeight((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)) - 0.15;
+    const eave = gy + 3.5, ridge = gy + 5.6, hw = w / 2, o = 0.6;
+    maxY = Math.max(maxY, ridge);
+    // the roof's two slopes, out past the posts, a seam every 0.6 m and the ridge's cap
+    const ey = eave - (o * (ridge - eave)) / hw;
+    for (const sg of [-1, 1]) {
+      B.quad(B.stone, at(-0.4, sg * (hw + o), ey), at(L + 0.4, sg * (hw + o), ey), at(L + 0.4, 0, ridge), at(-0.4, 0, ridge), ROOF_TOP);
+      // the underside, darker, a little below
+      B.quad(B.stone, at(L + 0.4, sg * (hw + o), ey - 0.08), at(-0.4, sg * (hw + o), ey - 0.08), at(-0.4, 0, ridge - 0.08), at(L + 0.4, 0, ridge - 0.08), [0.36, 0.38, 0.36]);
+      for (let u = 0.2; u < L + 0.3; u += 0.6) {
+        B.quad(B.stone, at(u - 0.03, sg * (hw + o), ey + 0.025), at(u + 0.03, sg * (hw + o), ey + 0.025), at(u + 0.03, 0, ridge + 0.025), at(u - 0.03, 0, ridge + 0.025), ROOF_SEAM);
+      }
+      beam(at(-0.4, sg * (hw + o), ey - 0.04), at(L + 0.4, sg * (hw + o), ey - 0.04), 0.12, GREEN_STEEL);
     }
-  }
-  const eave = insetRing(r, -0.6);
-  B.prism(eave, Y(4.1), Y(4.4), GREEN_STEEL, TIN);
-  T.slope(eave, Y(4.4), 2.5, Y(5.2), TIN);
-  return { s, maxY: Y(5.2), open: true };
+    beam(at(-0.45, 0, ridge + 0.04), at(L + 0.45, 0, ridge + 0.04), 0.22, ROOF_SEAM);
+    // the trusses: a post each side, a tie across, rafters to the ridge, a king post, braces; purlins between them
+    const n = Math.max(1, Math.round(L / 6)), step = L / n;
+    for (let k = 0; k <= n; k++) {
+      const u = k * step, pv = hw - 0.3;
+      for (const sg of [-1, 1]) {
+        beam(at(u, sg * pv, gy - 0.3), at(u, sg * pv, eave), 0.2, GREEN_STEEL);
+        // a knee brace from the post to the tie
+        beam(at(u, sg * pv, eave - 0.9), at(u, sg * (pv - 0.9), eave), 0.08, GREEN_STEEL);
+        beam(at(u, sg * pv, eave), at(u, 0, ridge - 0.12), 0.14, GREEN_STEEL);
+        beam(at(u, sg * pv * 0.5, eave), at(u, 0, ridge - 0.15), 0.07, GREEN_STEEL);
+        const p = at(u, sg * pv, 0);
+        colliders.push({ minX: p[0] - 0.15, maxX: p[0] + 0.15, minZ: p[2] - 0.15, maxZ: p[2] + 0.15, maxY: eave, keepsSurvey: true });
+      }
+      beam(at(u, -pv, eave), at(u, pv, eave), 0.12, GREEN_STEEL);
+      beam(at(u, 0, eave), at(u, 0, ridge - 0.1), 0.08, GREEN_STEEL);
+      if (k < n) {
+        for (const v of [-pv, -pv * 0.5, 0, pv * 0.5, pv]) {
+          const y = v === 0 ? ridge - 0.2 : eave + ((ridge - eave) * (1 - Math.abs(v) / pv)) - 0.12;
+          beam(at(u, v, Math.abs(v) === pv ? eave : y), at(u + step, v, Math.abs(v) === pv ? eave : y), 0.08, GREEN_STEEL);
+        }
+        // the stalls in this bay, both sides: a table under a cloth, crates of produce on some
+        for (const sg of [-1, 1]) {
+          const c0 = u + 0.6, c1 = u + step - 0.6, v0 = sg * (pv - 2.0), v1 = sg * (pv - 1.0);
+          const q = (uu, vv, yy) => at(uu, vv, yy);
+          const box = (u0, u1, w0, w1, y0, y1, col) => {
+            const A = q(u0, w0, y0), Bq = q(u1, w0, y0), C = q(u1, w1, y0), D = q(u0, w1, y0);
+            const A2 = q(u0, w0, y1), B2 = q(u1, w0, y1), C2 = q(u1, w1, y1), D2 = q(u0, w1, y1);
+            B.quad(B.stone, A2, B2, C2, D2, col);
+            B.quad(B.stone, A, Bq, B2, A2, col); B.quad(B.stone, Bq, C, C2, B2, col);
+            B.quad(B.stone, C, D, D2, C2, col); B.quad(B.stone, D, A, A2, D2, col);
+          };
+          const hash = (si * 31 + k * 7 + (sg > 0 ? 3 : 0)) % 10;
+          if (hash === 9) continue; // an empty stall
+          box(c0, c1, Math.min(v0, v1), Math.max(v0, v1), gy + 0.72, gy + 0.78, TABLE);
+          box(c0 + 0.02, c1 - 0.02, Math.min(v0, v1) - 0.02, Math.max(v0, v1) + 0.02, gy + 0.3, gy + 0.72, CLOTH[hash % 3]);
+          if (XBOX || hash % 3 === 0) continue;
+          for (let cu = c0 + 0.3; cu < c1 - 0.5; cu += 0.75) {
+            const crop = CROPS[(hash + Math.round(cu * 3)) % CROPS.length];
+            box(cu, cu + 0.55, Math.min(v0, v1) + 0.15, Math.min(v0, v1) + 0.75, gy + 0.78, gy + 0.98, TABLE);
+            box(cu + 0.04, cu + 0.51, Math.min(v0, v1) + 0.19, Math.min(v0, v1) + 0.71, gy + 0.98, gy + 1.05, crop);
+          }
+        }
+      }
+    }
+  });
+  return { s, maxY, colliders };
 }
 
 function districtLibrary(B, T) {

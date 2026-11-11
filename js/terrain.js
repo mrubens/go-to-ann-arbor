@@ -55,6 +55,11 @@ async function readHeights(url) {
     digBowl(g);
     g.river = await readRiver(g, './data/river.bin.gz');
     await readCore(g, './data/ground.bin.gz');
+    // the bridges' decks once the city's fine ground is in, so each meets the street it carries where it really is
+    if (g.river) {
+      buildDecks(g, g.river);
+      console.log(`[terrain] ${g.river.bridges.length} bridges`);
+    }
     return g;
   } catch (error) {
     console.warn('[terrain] no ground heights, the city stays flat:', error);
@@ -125,8 +130,7 @@ async function readRiver(g, url) {
     carveCascades(r); // the Argo Cascades' channel, unbroken (cascades.js)
     joinUnderFootbridges(r);
     packDig(r);
-    buildDecks(g, r);
-    console.log(`[terrain] the river's bed ${dcols} × ${drows} at ${dstep} m, ${r.bridges.length} bridges`);
+    console.log(`[terrain] the river's bed ${dcols} × ${drows} at ${dstep} m`);
     return r;
   } catch (error) {
     console.warn('[terrain] no river bed:', error);
@@ -222,9 +226,8 @@ function riverGaps() {
   return grid?.river?.gaps || [];
 }
 
-// Each bridge's deck: from the ground at one end to the ground at the other, raised where it's over the water to clear
-// it (2.4 m under a street's or a railway's, 1.3 m under a footbridge's), sampled every 4 m along it. Ways the map splits
-// along a bridge are joined first, so the deck runs whole from bank to bank.
+// Each bridge's deck, sampled every 4 m along it: a street's (streetDeck), a railway's or a footbridge's (otherDeck).
+// Ways the map splits along a bridge are joined first, so the deck runs whole from bank to bank.
 function buildDecks(g, r) {
   const list = (GEO.riverBridges || []).map((b) => {
     const pts = [];
@@ -245,20 +248,241 @@ function buildDecks(g, r) {
       joined = true;
     }
   }
+  // the ground the decks meet: the city's fine mesh where it's read (the streets as they're drawn), else the 10 m heights
+  const gh = (x, z) => (g.core && inCore(g.core, x, z) ? coreHeight(g.core, x, z) : baseHeight(g, x, z));
   for (const b of list) {
-    const S = [];
-    for (let i = 0; i + 1 < b.pts.length; i++) {
-      const [x0, z0] = b.pts[i], [x1, z1] = b.pts[i + 1], len = Math.hypot(x1 - x0, z1 - z0);
-      const n = Math.max(1, Math.ceil(len / 4));
-      for (let k = 0; k < n; k++) S.push([x0 + (x1 - x0) * k / n, z0 + (z1 - z0) * k / n]);
+    const made = b.kind === 0 ? streetDeck(g, r, b, gh) : otherDeck(g, r, b);
+    if (!made) continue;
+    const { S, deck } = made;
+    r.bridges.push(deck);
+    // a footbridge's deck isn't the ground (a kayak passes under it), but walkers and bikes go over it (footbridgeTop)
+    const into = b.kind === 2 ? (r.footBuckets ??= new Map()) : r.buckets;
+    for (let i = 0; i + 1 < S.length; i++) {
+      const seg = { deck, a: deck.points[i], b: deck.points[i + 1] };
+      // (a street's or railway's also 6 m beside it, for the ground's layers there: ground-core.js deckLayer)
+      const pad = deck.half + (b.kind !== 2 ? 6 : 0);
+      const x0 = Math.min(S[i][0], S[i + 1][0]) - pad, x1 = Math.max(S[i][0], S[i + 1][0]) + pad;
+      const z0 = Math.min(S[i][1], S[i + 1][1]) - pad, z1 = Math.max(S[i][1], S[i + 1][1]) + pad;
+      for (let bx = Math.floor(x0 / BUCKET); bx <= Math.floor(x1 / BUCKET); bx++) {
+        for (let bz = Math.floor(z0 / BUCKET); bz <= Math.floor(z1 / BUCKET); bz++) {
+          const key = bucketKey(bx, bz);
+          if (!into.has(key)) into.set(key, []);
+          into.get(key).push(seg);
+        }
+      }
     }
-    S.push(b.pts.at(-1));
-    let s = 0;
-    const L = [0];
-    for (let i = 1; i < S.length; i++) L.push(s += Math.hypot(S[i][0] - S[i - 1][0], S[i][1] - S[i - 1][1]));
-    if (s < 3) continue;
+  }
+}
+
+// A line of points resampled every 4 m, and the distance along it at each
+function sampled(pts) {
+  const S = [];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [x0, z0] = pts[i], [x1, z1] = pts[i + 1], len = Math.hypot(x1 - x0, z1 - z0);
+    const n = Math.max(1, Math.ceil(len / 4));
+    for (let k = 0; k < n; k++) S.push([x0 + (x1 - x0) * k / n, z0 + (z1 - z0) * k / n]);
+  }
+  S.push(pts.at(-1));
+  let s = 0;
+  const L = [0];
+  for (let i = 1; i < S.length; i++) L.push(s += Math.hypot(S[i][0] - S[i - 1][0], S[i][1] - S[i - 1][1]));
+  return { S, L, s };
+}
+
+// Whether each point's water is under the deck: in the river, or in it to either side within its reach
+function wetAlong(r, S, reach) {
+  return S.map(([x, z], i) => {
+    const j = Math.min(i + 1, S.length - 1), k = Math.max(i - 1, 0);
+    let tx = S[j][0] - S[k][0], tz = S[j][1] - S[k][1];
+    const tl = Math.hypot(tx, tz) || 1;
+    tx /= tl; tz /= tl;
+    return digAt(r, x, z) > 0.02 || [0, 1, -1, 2, -2].some((m) => digAt(r, x - tz * (reach + Math.abs(m) * 2) * Math.sign(m || 1), z + tx * (reach + Math.abs(m) * 2) * Math.sign(m || 1)) > 0.02
+      || digAt(r, x + tz * (reach + Math.abs(m) * 2), z - tx * (reach + Math.abs(m) * 2)) > 0.02);
+  });
+}
+
+// The street a bridge carries (GEO.roads), by the name of the road whose line runs along its middle
+function streetOf(pts) {
+  const m = Math.floor((pts.length - 1) / 2), [ax, az] = pts[m], [bx, bz] = pts[m + 1];
+  const x = (ax + bx) / 2, z = (az + bz) / 2, tl = Math.hypot(bx - ax, bz - az) || 1, tx = (bx - ax) / tl, tz = (bz - az) / tl;
+  let best = null, bd = 6;
+  for (const road of GEO.roads || []) {
+    const p = road[road.length - 1];
+    if (!Array.isArray(p) || typeof road[0] !== 'string') continue;
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const ex = p[i + 2] - p[i], ez = p[i + 3] - p[i + 1], l2 = ex * ex + ez * ez || 1;
+      if (Math.abs(ex * tx + ez * tz) / Math.sqrt(l2) < 0.8) continue;
+      const u = Math.max(0, Math.min(1, ((x - p[i]) * ex + (z - p[i + 1]) * ez) / l2));
+      const d = Math.hypot(x - p[i] - ex * u, z - p[i + 1] - ez * u);
+      if (d < bd) { bd = d; best = road[0]; }
+    }
+  }
+  return best;
+}
+
+// The line of a street carried on from a bridge's end `end` (heading away along `dir`) for `meters`, along the same
+// street's ways in GEO.roads: the points past the end, in order outward
+function streetOnward(name, end, dir, meters) {
+  const out = [];
+  let at = end, d = dir, left = meters;
+  for (let hop = 0; hop < 12 && left > 0.5; hop++) {
+    let next = null;
+    for (const road of GEO.roads || []) {
+      if (road[0] !== name) continue;
+      const p = road[road.length - 1];
+      if (!Array.isArray(p) || p.length < 4) continue;
+      const n = p.length / 2;
+      // (from its end, or from part way along one of its pieces where the line was cut short before)
+      for (let k = 0; k + 1 < n && !next; k++) {
+        const ax = p[k * 2], az = p[k * 2 + 1], ex = p[k * 2 + 2] - ax, ez = p[k * 2 + 3] - az, l = Math.hypot(ex, ez) || 1;
+        const u = Math.max(0, Math.min(1, ((at[0] - ax) * ex + (at[1] - az) * ez) / (l * l)));
+        if (Math.hypot(at[0] - ax - ex * u, at[1] - az - ez * u) > 1.5) continue;
+        const along = (ex * d[0] + ez * d[1]) / l;
+        if (Math.abs(along) < 0.7) continue;
+        const line = [];
+        if (along > 0) { for (let q = k + 1; q < n; q++) line.push([p[q * 2], p[q * 2 + 1]]); }
+        else { for (let q = k; q >= 0; q--) line.push([p[q * 2], p[q * 2 + 1]]); }
+        if (line.length && Math.hypot(line.at(-1)[0] - at[0], line.at(-1)[1] - at[1]) > 1) next = line;
+      }
+      if (next) break;
+    }
+    if (!next) break;
+    for (const q of next) {
+      const l = Math.hypot(q[0] - at[0], q[1] - at[1]);
+      if (l < 0.01) continue;
+      d = [(q[0] - at[0]) / l, (q[1] - at[1]) / l];
+      if (l >= left) { out.push([at[0] + d[0] * left, at[1] + d[1] * left]); left = 0; break; }
+      out.push(q);
+      at = q;
+      left -= l;
+    }
+  }
+  return out;
+}
+
+// For each point along a street's bridge, whether a railway runs under it there (GEO.rail's tracks crossing its line,
+// within 5 m of the track)
+function railsUnder(S) {
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z] of S) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+  const segs = [];
+  for (const t of GEO.rail?.tracks || []) {
+    const p = t[0];
+    if (!Array.isArray(p)) continue;
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const ax = p[i], az = p[i + 1], bx = p[i + 2], bz = p[i + 3];
+      if (Math.max(ax, bx) < x0 - 8 || Math.min(ax, bx) > x1 + 8 || Math.max(az, bz) < z0 - 8 || Math.min(az, bz) > z1 + 8) continue;
+      segs.push([ax, az, bx, bz]);
+    }
+  }
+  return S.map(([x, z]) => segs.some(([ax, az, bx, bz]) => {
+    const ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1;
+    const u = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / l2));
+    return Math.hypot(x - ax - ex * u, z - az - ez * u) < 5;
+  }));
+}
+
+// A street's bridge (Lamp): its deck held at the clearance a real one gives, with the climb to it never steeper than 6%,
+// and carried on along its street past the bank (an approach on fill) where it can't come down to the ground sooner.
+// Over the river its top stands 4.4 m over the water (3.5 m to paddle under its girders); over a road it crosses 5.6 m
+// over the road; over a railway 7.2 m over the track. Each point the least of those it must clear and the ground, then
+// lifted by the 6% slope from every other (a tent over them), its crest eased round; its ends then cut back to where it
+// meets the ground again. Broadway's bridge over the river and the railway by the depot is carried down the street to
+// both of its ends, as the real one (rebuilt in 2003) is, and stands high over the river on its arches (8 m to its top).
+const STREET_CLEAR = 4.4, BROADWAY_CLEAR = 8, ROAD_CLEAR = 5.6, RAIL_CLEAR = 7.2, GRADE = 0.06;
+function streetDeck(g, r, b, gh) {
+  const name = streetOf(b.pts);
+  let pts = b.pts.map((p) => p.slice());
+  const reach = b.w / 2 + 2.5, clearWater = name === 'Broadway St' ? BROADWAY_CLEAR : STREET_CLEAR;
+  const shape = (line) => {
+    const { S, L, s } = sampled(line);
+    const wet = wetAlong(r, S, reach);
+    const overRoad = roadsUnder(S, line), overRail = railsUnder(S);
+    const G = S.map(([x, z]) => gh(x, z));
+    const need = S.map(([x, z], i) => {
+      let h = G[i];
+      // over the river's open water at its middle the full clearance; where only its edge is beside it, the bank's
+      if (digAt(r, x, z) > 0.02) h = Math.max(h, levelAt(r, x, z) + clearWater);
+      else if (wet[i]) h = Math.max(h, levelAt(r, x, z) + 1.6);
+      if (overRoad[i]) h = Math.max(h, G[i] + ROAD_CLEAR);
+      if (overRail[i]) h = Math.max(h, G[i] + RAIL_CLEAR);
+      return h;
+    });
+    // the tent: each point at least every other's need less the 6% fall between them
+    const H = need.map((h, i) => {
+      let top = h;
+      for (let j = 0; j < need.length; j++) top = Math.max(top, need[j] - GRADE * Math.abs(L[i] - L[j]));
+      return top;
+    });
+    // its crest rounded (raised only, so nothing it clears comes nearer)
+    for (let pass = 0; pass < 4; pass++) {
+      for (let i = 1; i + 1 < H.length; i++) H[i] = Math.max(H[i], (H[i - 1] + H[i] + H[i + 1]) / 3);
+    }
+    return { S, L, s, wet, overRoad, overRail, G, H };
+  };
+  // Broadway's bridge carries the street over the railway by the depot as well as the river: the map has only its
+  // river span, so it's carried on from there south down Broadway past the tracks (the tent then raises it over them)
+  if (name === 'Broadway St') {
+    const [e, f] = [pts[0], pts[1]], l = Math.hypot(e[0] - f[0], e[1] - f[1]) || 1;
+    const south = streetOnward(name, e, [(e[0] - f[0]) / l, (e[1] - f[1]) / l], 200);
+    if (railsUnder(sampled([...south].reverse().concat(pts)).S).some(Boolean)) pts = south.reverse().concat(pts);
+  }
+  let m = shape(pts);
+  // carried on along its street where an end stands well over the ground (more than the half metre the cars' easing
+  // onto it takes up: onDeck), then cut back to where the deck comes down to it
+  const longest = name === 'Broadway St' ? 240 : 140;
+  for (let tries = 0; tries < 3 && name; tries++) {
+    const lift0 = m.H[0] - m.G[0], lift1 = m.H.at(-1) - m.G.at(-1);
+    if (lift0 <= 0.5 && lift1 <= 0.5) break;
+    let grew = false;
+    for (const [lift, atStart] of [[lift0, true], [lift1, false]]) {
+      if (lift <= 0.5) continue;
+      const e = atStart ? pts[0] : pts.at(-1), f = atStart ? pts[1] : pts.at(-2), l = Math.hypot(e[0] - f[0], e[1] - f[1]) || 1;
+      const more = streetOnward(name, e, [(e[0] - f[0]) / l, (e[1] - f[1]) / l], Math.min(longest, lift / GRADE + 24));
+      if (!more.length) continue;
+      pts = atStart ? more.reverse().concat(pts) : pts.concat(more);
+      grew = true;
+    }
+    if (!grew) break;
+    m = shape(pts);
+  }
+  // an end that still stands over the ground (its street goes no further: Broadway at Beakes and Division, over Depot
+  // St) is brought down to it, the deck coming down to it at 6% whatever it was to clear there, but never lower over the
+  // water than 2.6 m over it (1.7 m under its girders)
+  for (const k of [0, m.S.length - 1]) {
+    if (m.H[k] - m.G[k] <= 0.5) continue;
+    m.H = m.H.map((h, i) => {
+      const cap = m.G[k] + 0.5 + GRADE * Math.abs(m.L[i] - m.L[k]);
+      if (h <= cap) return h;
+      const [x, zz] = m.S[i], least = digAt(r, x, zz) > 0.02 ? levelAt(r, x, zz) + 2.6 : m.G[i];
+      return Math.max(cap, least);
+    });
+  }
+  // the ends cut back to the last point still standing over the ground
+  let a = 0, z = m.S.length - 1;
+  while (a + 2 < z && m.H[a + 1] - m.G[a + 1] < 0.15) a++;
+  while (z - 2 > a && m.H[z - 1] - m.G[z - 1] < 0.15) z--;
+  const cut = (list) => list.slice(a, z + 1);
+  const S = cut(m.S), wet = cut(m.wet), overRoad = cut(m.overRoad), overRail = cut(m.overRail), G = cut(m.G), H = cut(m.H);
+  const L = cut(m.L).map((l) => l - m.L[a]), s = L.at(-1);
+  // its very ends on the ground they meet
+  H[0] = Math.min(H[0], G[0] + 0.5);
+  H[H.length - 1] = Math.min(H.at(-1), G.at(-1) + 0.5);
+  if (s < 3) return null;
+  const deck = { kind: 0, w: b.w, name, level: false, half: b.w / 2 + 1.5, length: s,
+    // [x, z, along, top, over the water, not the ground (a road crosses under: onDeck), a railway under it, the ground]
+    points: S.map((p, i) => [p[0], p[1], L[i], H[i], wet[i], overRoad[i], overRail[i], G[i]]) };
+  return { S, deck };
+}
+
+// A railway's bridge or a footbridge: from the ground at one end to the ground at the other, raised where it's over the
+// water to clear it (3.5 m under a railway's girders, 1.3 m under a footbridge's)
+function otherDeck(g, r, b) {
+  {
+    const { S, L, s } = sampled(b.pts);
+    if (s < 3) return null;
     const ha = baseHeight(g, ...S[0]), hb = baseHeight(g, ...S.at(-1));
-    const clear = b.kind === 2 ? 2.6 : 3.7, reach = b.kind === 2 ? 0 : b.w / 2 + 2.5;
+    const clear = b.kind === 2 ? 2.6 : 4.6, reach = b.kind === 2 ? 0 : b.w / 2 + 2.5;
     const wet = S.map(([x, z], i) => {
       const j = Math.min(i + 1, S.length - 1), k = Math.max(i - 1, 0);
       let tx = S[j][0] - S[k][0], tz = S[j][1] - S[k][1];
@@ -285,8 +509,9 @@ function buildDecks(g, r) {
     }
     // over a road a bridge can't climb from the ground to clear it in a few metres: a railway's deck runs level end to
     // end at the height the road needs, on abutments (river.js), the track rising to it on embankments (railways.js); a
-    // street's eases up and down at most 6% from its ends
-    const level = overRoad.some(Boolean);
+    // street's eases up and down at most 6% from its ends. (Lamp) And so does a railway's over the river: level at the
+    // height the water needs, never a hump a train leaps
+    const level = overRoad.some(Boolean) || (b.kind === 1 && wet.some(Boolean));
     if (level && b.kind === 1) {
       const top = Math.max(...H);
       H = H.map(() => top);
@@ -299,33 +524,47 @@ function buildDecks(g, r) {
     const deck = { kind: b.kind, w: b.w, level, half: b.kind === 2 ? b.w / 2 : b.w / 2 + 1.5, length: s, points: S.map((p, i) => [p[0], p[1], L[i], H[i], wet[i],
       // (nor is it the ground where it stands well over dry land: the lawns and paths there stay on the ground)
       overRoad[i] || (level && !wet[i] && H[i] - baseHeight(g, p[0], p[1]) > 1.2)]) };
-    r.bridges.push(deck);
-    // a footbridge's deck isn't the ground (a kayak passes under it), but walkers and bikes go over it (footbridgeTop)
-    const into = b.kind === 2 ? (r.footBuckets ??= new Map()) : r.buckets;
-    for (let i = 0; i + 1 < S.length; i++) {
-      const seg = { deck, a: deck.points[i], b: deck.points[i + 1] };
-      const x0 = Math.min(S[i][0], S[i + 1][0]) - deck.half, x1 = Math.max(S[i][0], S[i + 1][0]) + deck.half;
-      const z0 = Math.min(S[i][1], S[i + 1][1]) - deck.half, z1 = Math.max(S[i][1], S[i + 1][1]) + deck.half;
-      for (let bx = Math.floor(x0 / BUCKET); bx <= Math.floor(x1 / BUCKET); bx++) {
-        for (let bz = Math.floor(z0 / BUCKET); bz <= Math.floor(z1 / BUCKET); bz++) {
-          const key = bucketKey(bx, bz);
-          if (!into.has(key)) into.set(key, []);
-          into.get(key).push(seg);
-        }
-      }
-    }
+    return { S, deck };
   }
 }
 
 // For each point along a bridge, whether a road crosses under it there: within the road's half width (and 2 m) of one of
-// GEO.roads' segments that runs across the bridge (more than 35° off its line, so the bridge's own street isn't one)
-function roadsUnder(S) {
+// GEO.roads' segments that runs across the bridge (more than 35° off its line, so the bridge's own street isn't one).
+// With the street's own `line` (Lamp): only a road that passes under it, not one meeting it at grade (a road whose way
+// has a node on the street's line, a junction, is the street's own crossing at its level)
+function roadsUnder(S, line = null) {
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
   for (const [x, z] of S) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+  const onLine = (px, pz) => {
+    for (let i = 0; i + 1 < line.length; i++) {
+      const [ax, az] = line[i], ex = line[i + 1][0] - ax, ez = line[i + 1][1] - az, l2 = ex * ex + ez * ez || 1;
+      const u = Math.max(0, Math.min(1, ((px - ax) * ex + (pz - az) * ez) / l2));
+      if (Math.hypot(px - ax - ex * u, pz - az - ez * u) < 2) return true;
+    }
+    return false;
+  };
   const segs = [];
   for (const road of GEO.roads || []) {
     const w = road[1] || 8, pts = road[road.length - 1];
     if (!Array.isArray(pts)) continue;
+    if (line) {
+      // (and one that only comes up to it, a T junction, doesn't cross it: its way must pass right across the line)
+      let joins = false, crosses = false;
+      for (let i = 0; i + 1 < pts.length && !joins; i += 2) {
+        if (pts[i] < x0 - 20 || pts[i] > x1 + 20 || pts[i + 1] < z0 - 20 || pts[i + 1] > z1 + 20) continue;
+        joins = onLine(pts[i], pts[i + 1]);
+      }
+      if (joins) continue;
+      const side = (px, pz, [ax, az], [bx, bz]) => (bx - ax) * (pz - az) - (bz - az) * (px - ax);
+      for (let i = 0; i + 3 < pts.length && !crosses; i += 2) {
+        for (let k = 0; k + 1 < line.length && !crosses; k++) {
+          const p = [pts[i], pts[i + 1]], q = [pts[i + 2], pts[i + 3]];
+          crosses = side(...p, line[k], line[k + 1]) * side(...q, line[k], line[k + 1]) < 0
+            && side(...line[k], p, q) * side(...line[k + 1], p, q) < 0;
+        }
+      }
+      if (!crosses) continue;
+    }
     for (let i = 0; i + 3 < pts.length; i += 2) {
       const ax = pts[i], az = pts[i + 1], bx = pts[i + 2], bz = pts[i + 3];
       const pad = w / 2 + 2;
@@ -438,6 +677,24 @@ function groundHeight(x, z) {
 function deckTop(x, z) {
   const h = groundHeight(x, z);
   return grid?.river ? onDeck(grid.river, x, z, h, true) : h;
+}
+
+// The ground at (x, z) with no street's bridge on it (Lamp): under a street's deck standing well over it (Broadway's over
+// the railway by the depot), the ground under the deck; elsewhere groundHeight. For the railways laid on the ground
+// (railways.js), which a street bridges over
+function groundUnderStreets(x, z) {
+  const h = groundHeight(x, z), r = grid?.river;
+  if (!r) return h;
+  const under = riverbedHeight(x, z);
+  if (h - under < 1.5) return h;
+  const list = r.buckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
+  for (const { deck, a, b } of list || []) {
+    if (deck.kind !== 0) continue;
+    const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez || 1;
+    const u = Math.min(1, Math.max(0, ((x - a[0]) * ex + (z - a[1]) * ez) / l2));
+    if (Math.hypot(x - a[0] - ex * u, z - a[1] - ez * u) <= deck.half + 0.5) return under;
+  }
+  return h;
 }
 
 // The ground at (x, z) under any bridge: the river's banks and bed where it's dug out
@@ -1004,7 +1261,9 @@ function groundOfGrid(g) {
     const r = g.river;
     const c = g.core;
     // on the city's mesh a worker needs only it and the bridges' decks
-    const ground = c ? { core: c, river: r && { buckets: r.buckets } } : { x0: g.x0, z0: g.z0, step: g.step, cols: g.cols, rows: g.rows, heights: g.heights, river: r && {
+    // (and where the river's dug, so the layers under a street's bridge go down out of sight there: deckLayer)
+    const ground = c ? { core: c, river: r && { buckets: r.buckets, dx0: r.dx0, dz0: r.dz0, dstep: r.dstep, dcols: r.dcols, drows: r.drows,
+      digBlocks: r.digBlocks, bcols: r.bcols } } : { x0: g.x0, z0: g.z0, step: g.step, cols: g.cols, rows: g.rows, heights: g.heights, river: r && {
       dx0: r.dx0, dz0: r.dz0, dstep: r.dstep, dcols: r.dcols, drows: r.drows, digBlocks: r.digBlocks, bcols: r.bcols,
       lx0: r.lx0, lz0: r.lz0, lstep: r.lstep, lcols: r.lcols, lrows: r.lrows, level: r.level, buckets: r.buckets
     } };
@@ -1572,7 +1831,7 @@ function drawOver(mat, lift = LIFT.over) {
 
 export {
   drawOver, cityGround,
-  GROUND_ORDER, loadTerrain, setPools, groundHeight, deckTop, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
+  GROUND_ORDER, loadTerrain, setPools, groundHeight, deckTop, groundUnderStreets, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
   tessellate, drapeGeometry, liftGeometry, liftInstances, setOnTerrain,
   streamGround, updateGroundStreaming, putStreamedGround, groundStreamStats, groundStreamCenter, groundStreamBytes, streamFromSquares, streamNear
 };

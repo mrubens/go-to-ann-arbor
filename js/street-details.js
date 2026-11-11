@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { Fn, float, color, positionWorld, uniform, mod, fract, step, smoothstep, mix } from 'three/tsl';
+import { Fn, float, color, positionWorld, uniform, mod, fract, step, smoothstep, mix, uv, fwidth, abs, min, max } from 'three/tsl';
 import { groundHeight, groundHeightNode, groundStreamCenter } from './terrain.js';
 import { TIER } from './device-tier.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -984,11 +984,102 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
         for (const k of [0, 2, 1, 0, 3, 2]) { pos.push(...v[f[k]]); col.push(tmpC.r, tmpC.g, tmpC.b); }
       }
     };
-    const net = (half, h = 0.95) => { solid(0, 0, 0, 0.03, half * 2, h, 0x1c1d1f); solid(0, -half, 0, 0.08, 0.08, h + 0.12, 0x3a3d42); solid(0, half, 0, 0.08, 0.08, h + 0.12, 0x3a3d42); };
+    // shapes from three.js geometries, placed in the court's frame by `m` (a along x, up y, b along z)
+    const frame = new THREE.Matrix4(), place = new THREE.Matrix4(), v3 = new THREE.Vector3();
+    const shape = (geo, m, hex) => {
+      tmpC.set(hex);
+      const flat = geo.index ? geo.toNonIndexed() : geo, P = flat.attributes.position;
+      place.multiplyMatrices(frame, m);
+      for (let k = 0; k < P.count; k++) {
+        v3.fromBufferAttribute(P, k).applyMatrix4(place);
+        pos.push(v3.x, v3.y, v3.z); col.push(tmpC.r, tmpC.g, tmpC.b);
+      }
+      if (flat !== geo) flat.dispose();
+    };
+    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), T = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0), D = new THREE.Vector3();
+    // a round bar of radius r from (a0, y0, b0) to (a1, y1, b1) in the court's frame
+    const pipeGeo = new THREE.CylinderGeometry(1, 1, 1, 10, 1, true);
+    const pipe = (a0, y0, b0, a1, y1, b1, r, hex) => {
+      D.set(a1 - a0, y1 - y0, b1 - b0);
+      const len = D.length();
+      if (len < 1e-4) return;
+      Q.setFromUnitVectors(UP, D.multiplyScalar(1 / len));
+      M.compose(T.set((a0 + a1) / 2, FURN_LAWN + (y0 + y1) / 2, (b0 + b1) / 2), Q, S.set(r, len, r));
+      shape(pipeGeo, M, hex);
+    };
+    const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+    const box = (a, y, b, la, h, lb, hex) => { M.compose(T.set(a, FURN_LAWN + y, b), Q.identity(), S.set(la, h, lb)); shape(boxGeo, M, hex); };
+    const rimGeo = new THREE.TorusGeometry(0.2286, 0.011, 6, 28).rotateX(Math.PI / 2);
+    const POLE = 0x4d5257, BOARD = 0xeceae4, ORANGE = 0xe0601e, NET = 0xeeeeea;
+    // An outdoor hoop at the court's end `base` (e: which way is out): a gooseneck post a little behind the baseline,
+    // bent forward over it to the back of the board, braced; a 1.83 x 1.07 m board with its face 1.22 m in from the
+    // baseline, bottom edge at 2.9 m, a border and shooting square painted on it; an orange rim at 10 ft (3.05 m) on a
+    // bracket, and a white chain-diamond net hanging from it
+    const hoop = (base, e) => {
+      const ap = base + e * 0.75, face = base - e * 1.22, back = face + e * 0.04;
+      // the post, its bend over the baseline, and a brace
+      pipe(ap, 0, 0, ap, 2.55, 0, 0.057, POLE);
+      pipe(ap, 2.55, 0, ap - e * 0.35, 3.05, 0, 0.057, POLE);
+      pipe(ap - e * 0.35, 3.05, 0, back + e * 0.12, 3.45, 0, 0.05, POLE);
+      pipe(ap, 1.9, 0, ap - e * 0.75, 3.02, 0, 0.03, POLE);
+      box(back + e * 0.07, 3.43, 0, 0.12, 0.6, 0.5, POLE); // mounting plate
+      box(ap, 0.1, 0, 0.3, 0.2, 0.3, 0x8a8c8e); // footing
+      // the board: a thin slab, its painted border and shooting square standing just proud of its face
+      box(face + e * 0.02, 3.435, 0, 0.04, 1.07, 1.83, BOARD);
+      const f = face - e * 0.003;
+      const paint = (y, b, h, w) => box(f, y, b, 0.004, h, w, ORANGE);
+      paint(3.94, 0, 0.05, 1.83); paint(2.925, 0, 0.05, 1.83); paint(3.435, 0.89, 1.07, 0.05); paint(3.435, -0.89, 1.07, 0.05);
+      paint(3.48, 0, 0.05, 0.61); paint(3.075, 0, 0.05, 0.61); paint(3.2775, 0.28, 0.455, 0.05); paint(3.2775, -0.28, 0.455, 0.05);
+      // the rim on its bracket
+      const rc = face - e * (0.15 + 0.2286);
+      box(face - e * 0.08, 3.03, 0, 0.16, 0.05, 0.2, ORANGE);
+      M.compose(T.set(rc, FURN_LAWN + 3.05, 0), Q.identity(), S.set(1, 1, 1)); shape(rimGeo, M, ORANGE);
+      // the net: twelve cords round the rim, crossing in diamonds down to a narrower bottom
+      const ring = (k, lv) => {
+        const y = 3.05 - lv * 0.14, r = 0.225 - lv * 0.03, t = (k + (lv % 2) * 0.5) / 12 * Math.PI * 2;
+        return [rc + Math.cos(t) * r, y, Math.sin(t) * r];
+      };
+      for (let lv = 0; lv < 3; lv++) {
+        for (let k = 0; k < 12; k++) {
+          const p = ring(k, lv), q0 = ring(k, lv + 1), q1 = ring(k - 1, lv + 1);
+          pipe(p[0], p[1], p[2], q0[0], q0[1], q0[2], 0.006, NET);
+          pipe(p[0], p[1], p[2], q1[0], q1[1], q1[2], 0.006, NET);
+        }
+      }
+    };
+    // A net across the court at a = 0 from b = -half to half: posts at each end, the mesh hanging between them from
+    // `edge` at the posts to `mid` at the middle (a tennis net's sag), from `y0` up, with a white band along its top
+    // and, where it sags, a white strap holding its middle down. The mesh itself is its own see-through draw (netPos,
+    // drawn with a cord pattern below); the band, strap and posts are part of the courts' mesh
+    const netPos = [], netUv = [];
+    const NET_SEG = 12;
+    const net = (half, edge = 1.07, mid = 0.914, y0 = 0, posts = true) => {
+      const top = (t) => y0 + mid + (edge - mid) * t * t; // t: 0 middle to 1 at a post
+      for (let k = 0; k < NET_SEG; k++) {
+        const b0 = -half + 2 * half * k / NET_SEG, b1 = -half + 2 * half * (k + 1) / NET_SEG;
+        const t0 = Math.abs(b0) / half, t1 = Math.abs(b1) / half, h0 = top(t0), h1 = top(t1);
+        // the mesh, from just above the ground (or y0) to under the band
+        const lo = y0 + (y0 > 0 ? 0 : 0.04);
+        const w = frame.elements, P = (b, y) => [w[12] + w[8] * b, FURN_LAWN + y, w[14] + w[10] * b];
+        const q = [P(b0, lo), P(b1, lo), P(b1, h1 - 0.05), P(b0, h0 - 0.05)];
+        const u = [[b0 + half, lo], [b1 + half, lo], [b1 + half, h1 - 0.05], [b0 + half, h0 - 0.05]];
+        for (const i of [0, 1, 2, 0, 2, 3]) { netPos.push(...q[i]); netUv.push(u[i][0], u[i][1]); }
+        // the band over it, both faces
+        const bm = (b0 + b1) / 2, hm = (h0 + h1) / 2;
+        D.set(0, h1 - h0, b1 - b0);
+        Q.setFromUnitVectors(Z1, D.clone().normalize());
+        M.compose(T.set(0, FURN_LAWN + hm - 0.025, bm), Q, S.set(0.02, 0.06, D.length() + 0.01));
+        shape(boxGeo, M, 0xf2f2ee);
+      }
+      if (mid < edge - 0.05) box(0, y0 + mid / 2, 0, 0.012, mid, 0.05, 0xf2f2ee); // centre strap
+      if (posts) for (const sb of [-1, 1]) pipe(0, 0, sb * (half + 0.05), 0, y0 + edge + 0.04, sb * (half + 0.05), 0.04, 0x2e4636);
+    };
+    const Z1 = new THREE.Vector3(0, 0, 1);
     for (let i = 0; i < CT.length; i += 6) {
       const sport = CT[i];
       cx = CT[i + 1]; cz = CT[i + 2]; ux = Math.cos(CT[i + 3]); uz = Math.sin(CT[i + 3]);
       const L = CT[i + 4], W = CT[i + 5], hl = L / 2, hw = W / 2;
+      frame.set(ux, 0, -uz, cx, 0, 1, 0, 0, uz, 0, ux, cz, 0, 0, 0, 1);
       if (sport === 0) { // tennis: green apron, blue court
         const s = Math.min(1, (L - 2) / 23.77, (W - 1) / 10.97), a = 11.885 * s, b = 5.485 * s, bs = 4.115 * s, sv = 6.4 * s;
         quad(-hl, hl, -hw, hw, FURN_LAWN + 0.02, 0x3f6e4c);
@@ -996,7 +1087,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
         rect(-a, a, -b, b); line(-a, -bs, a, -bs); line(-a, bs, a, bs);
         line(-sv, -bs, -sv, bs); line(sv, -bs, sv, bs); line(-sv, 0, sv, 0);
         line(-a, 0, -a + 0.3, 0); line(a, 0, a - 0.3, 0);
-        net(b + 0.9);
+        net(b + 0.9, 1.07, 0.914);
       } else if (sport === 1) { // basketball: blacktop, white lines, a hoop at each end (one on a half court)
         const full = L >= 20, s = Math.min(1, (L - 1) / (full ? 28 : 14), (W - 1) / 15);
         const a = (full ? 14 : 7) * s, b = 7.5 * s, kw = 2.45 * s, kl = 5.8 * s, tp = 6.75 * s;
@@ -1010,10 +1101,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
           arc(k, 0, 1.8 * s, e > 0 ? Math.PI / 2 : -Math.PI / 2, e > 0 ? Math.PI * 1.5 : Math.PI / 2, 0xf2f2ee, 10);
           const rim = base - e * 1.6 * s;
           arc(rim, 0, tp, e > 0 ? Math.PI / 2 + 0.25 : -Math.PI / 2 + 0.25, e > 0 ? Math.PI * 1.5 - 0.25 : Math.PI / 2 - 0.25, 0xf2f2ee, 18);
-          solid(base + e * 0.4, 0, 0, 0.14, 0.14, 3.2, 0x3a3d42); // post
-          solid(base - e * 0.9, 0, 2.9, 0.06, 1.8, 1.05, 0xe9e9e6); // backboard
-          solid(base - e * 1.15, 0, 3.05, 0.5, 0.5, 0.03, 0xe06a22); // rim
-          solid(base - e * 0.15, 0, 3.05, 1.1, 0.12, 0.08, 0x3a3d42); // arm
+          hoop(base, e);
         }
       } else if (sport === 2) { // pickleball
         const s = Math.min(1, (L - 1) / 13.41, (W - 1) / 6.1), a = 6.705 * s, b = 3.05 * s, kz = 2.13 * s;
@@ -1021,13 +1109,13 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
         quad(-a - 0.4, a + 0.4, -b - 0.4, b + 0.4, FURN_LAWN + 0.03, 0x2e5f8c);
         rect(-a, a, -b, b); line(-kz, -b, -kz, b); line(kz, -b, kz, b);
         line(-a, 0, -kz, 0); line(kz, 0, a, 0);
-        net(b + 0.3, 0.88);
+        net(b + 0.3, 0.914, 0.864);
       } else if (sport === 3) { // sand volleyball
         const s = Math.min(1, (L - 1) / 16, (W - 1) / 8), a = 8 * s, b = 4 * s;
         quad(-hl, hl, -hw, hw, FURN_LAWN + 0.02, 0xd8c28e);
         rect(-a, a, -b, b, 0x2f6fb0);
-        solid(0, 0, 1.4, 0.03, b * 2 + 0.6, 1.0, 0x1c1d1f);
-        solid(0, -b - 0.5, 0, 0.1, 0.1, 2.5, 0x8d9095); solid(0, b + 0.5, 0, 0.1, 0.1, 2.5, 0x8d9095);
+        net(b + 0.5, 1.43, 1.43, 1.0, false);
+        pipe(0, 0, -b - 0.5, 0, 2.5, -b - 0.5, 0.05, 0x8d9095); pipe(0, 0, b + 0.5, 0, 2.5, b + 0.5, 0.05, 0x8d9095);
       } else if (sport === 4 && L > 30) { // soccer: the field's lines on its grass, a goal at each end
         const a = hl - 1.5, b = hw - 1.5, pd = Math.min(16.5, L * 0.15), pw = Math.min(20.15, b * 0.6), gw = Math.min(3.66, b * 0.18);
         quad(-hl, hl, -hw, hw, FURN_LAWN + 0.015, 0x5a8a40);
@@ -1054,6 +1142,23 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
     courts.name = 'ParkCourts';
     courts.receiveShadow = true;
     group.add(courts);
+    // the nets' mesh: dark cords in a 4.5 cm square weave, see-through between them, the weave's cords kept a pixel
+    // wide (fwidth) and faded to the weave's average shade where the squares get smaller than a pixel
+    if (netPos.length) {
+      const ng = new THREE.BufferGeometry();
+      ng.setAttribute('position', new THREE.Float32BufferAttribute(netPos, 3));
+      ng.setAttribute('uv', new THREE.Float32BufferAttribute(netUv, 2));
+      ng.computeVertexNormals();
+      const netMat = new THREE.MeshStandardNodeMaterial({ color: 0x141517, roughness: 0.9, side: THREE.DoubleSide, transparent: true, depthWrite: false });
+      const cell = uv().div(0.045), fw = fwidth(cell).max(1e-4);
+      const g2 = abs(fract(cell.sub(0.5)).sub(0.5)).div(fw); // distance to the nearest cord, in pixels
+      const cord = float(1).sub(min(g2.x, g2.y).min(1));
+      const tiny = smoothstep(0.3, 0.9, max(fw.x, fw.y)); // squares under a pixel or so: the weave's average
+      netMat.opacityNode = mix(cord.mul(0.95), float(0.45), tiny);
+      const nets = new THREE.Mesh(ng, netMat);
+      nets.name = 'ParkCourtNets';
+      group.add(nets);
+    }
   }
 
   // USPS blue mailboxes along the curbs

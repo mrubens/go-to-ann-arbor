@@ -4,9 +4,9 @@ import { Fn, float, vec2, vec3, vec4, attribute, varying, positionGeometry, posi
 import { log } from '../lamp-game.js';
 import { TIER } from './device-tier.js';
 import { cityUniforms } from './tsl-materials.js';
-import { polygonContains } from './building-collision.js';
-import { SHOP_TYPES, SHOP_CUISINES, SHOP, shopBays, shopHour, shopOpenShares, bayDoorLeft, markBayRoom, shopLookOf } from './shop-types.js';
-import { shopKit, STYLES, FLOORS, WALLS, H0, D0, HT } from './shop-kits.js';
+import { polygonContains, polygonBoxOverlaps } from './building-collision.js';
+import { SHOP_TYPES, SHOP_CUISINES, SHOP, shopBays, shopOutlines, shopHour, shopOpenShares, bayDoorLeft, markBayRoom, shopLookOf } from './shop-types.js';
+import { shopKit, kitVariants, STYLES, FLOORS, WALLS, H0, D0, HT } from './shop-kits.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
 import { LIFE } from './street-life.js';
 
@@ -26,6 +26,7 @@ const REACH = 64; // rooms are drawn within this of the camera
 const GLASS = 46; // the glass is left out within this (it comes back in a dither over the 10 m before it)
 const FLOOR_Y = 0.23; // the floor above the ground the building stands on (the sidewalk's height at the door)
 const MIN_DEPTH = 4, MAX_DEPTH = 8, MIN_HALF = 2.4;
+const MIN_SHORT = 3.5; // a room cut short by another room or another building is kept down to this
 const PHONE = TIER.name === 'phone';
 const BUDGET = TIER.name === 'full' ? { rooms: 72, people: 64, each: 6 } : TIER.name === 'light' ? { rooms: 56, people: 44, each: 5 } : { rooms: 36, people: 20, each: 3 };
 const STRIDE = 20; // floats a room: five vec4s (roomA..roomE below)
@@ -36,7 +37,8 @@ const smooth = (x) => { const t = Math.max(0, Math.min(1, x)); return t * t * (3
 // Which bays get a room, and how deep
 function prepare() {
   const bays = shopBays().slice().sort((a, b) => (b.own ? 1 : 0) - (a.own ? 1 : 0));
-  const rooms = [], byRecord = new Map(), skipped = { narrow: 0, low: 0, shallow: 0, corner: 0 };
+  const rooms = [], byRecord = new Map(), skipped = { narrow: 0, low: 0, shallow: 0, corner: 0, neighbour: 0 };
+  const shortened = { corner: 0, neighbour: 0 };
   const corners = (r, depth) => {
     const hw = r.halfW, d0 = -0.05, d1 = depth + 0.1;
     return [[-hw, d0], [hw, d0], [hw, d1], [-hw, d1]].map(([a, d]) => [r.x + r.ux * a + r.nx * d, r.z + r.uz * a + r.nz * d]);
@@ -52,6 +54,30 @@ function prepare() {
       }
     }
     return true;
+  };
+  // the other buildings' outlines, by where they are: none may run through a room (a neighbour's wall in a salon)
+  const OUT = 24, outlines = new Map();
+  for (const c of shopOutlines()) {
+    for (let ix = Math.floor(c.minX / OUT); ix <= Math.floor(c.maxX / OUT); ix++) for (let iz = Math.floor(c.minZ / OUT); iz <= Math.floor(c.maxZ / OUT); iz++) {
+      const k = ix + ',' + iz;
+      if (!outlines.has(k)) outlines.set(k, []);
+      outlines.get(k).push(c);
+    }
+  }
+  const others = (r, rec) => {
+    const found = new Set(), R = MAX_DEPTH + r.halfW + 1;
+    for (let ix = Math.floor((r.x - R) / OUT); ix <= Math.floor((r.x + R) / OUT); ix++) for (let iz = Math.floor((r.z - R) / OUT); iz <= Math.floor((r.z + R) / OUT); iz++) {
+      for (const c of outlines.get(ix + ',' + iz) || []) {
+        if (rec.polygons.includes(c.polygon) || c.minX > r.x + R || c.maxX < r.x - R || c.minZ > r.z + R || c.maxZ < r.z - R) continue;
+        found.add(c.polygon);
+      }
+    }
+    return [...found];
+  };
+  // does one of them come into the room's box (a hand's width in from its sides and its glass, to its back wall)?
+  const crossed = (r, depth, list) => {
+    const d0 = 0.15, d1 = depth + 0.05, mid = (d0 + d1) / 2;
+    return list.some((poly) => polygonBoxOverlaps(poly, r.x + r.nx * mid, r.z + r.nz * mid, r.halfW - 0.12, (d1 - d0) / 2, r.ux, -r.uz));
   };
   for (const bay of bays) {
     markBayRoom(bay, false);
@@ -74,15 +100,34 @@ function prepare() {
     }
     depth = Math.min(MAX_DEPTH, depth - 0.3);
     if (depth < MIN_DEPTH) { skipped.shallow++; continue; }
-    // not into a room round the corner
-    const others = byRecord.get(rec) || [];
+    // not into another building: its own outline was tested above, but a neighbour's may overlap it
+    const near = others(r, rec);
+    if (near.length && crossed(r, depth, near)) {
+      while (depth >= MIN_SHORT && crossed(r, depth, near)) depth -= 0.25;
+      if (depth < MIN_SHORT) { skipped.neighbour++; continue; }
+      shortened.neighbour++;
+    }
+    // not into a room round the corner: this one is cut short, and then the one it runs into
+    const mates = byRecord.get(rec) || [];
     let box = corners(r, depth);
-    while (depth >= MIN_DEPTH && others.some((o) => o.wallRow !== r.wallRow && overlaps(box, o.box))) { depth -= 0.5; box = corners(r, depth); }
-    if (depth < MIN_DEPTH) { skipped.corner++; continue; }
+    const hits = (bx) => mates.filter((o) => o.wallRow !== r.wallRow && overlaps(bx, o.box));
+    if (hits(box).length) {
+      while (depth > MIN_SHORT && hits(box).length) { depth = Math.max(MIN_SHORT, depth - 0.25); box = corners(r, depth); }
+      const left = hits(box), cut = [];
+      for (const o of left) {
+        let d = o.depth;
+        while (d > MIN_SHORT && overlaps(box, corners(o, d))) d = Math.max(MIN_SHORT, d - 0.25);
+        if (overlaps(box, corners(o, d))) { cut.length = 0; cut.push(null); break; }
+        cut.push([o, d]);
+      }
+      if (cut[0] === null) { skipped.corner++; continue; }
+      for (const [o, d] of cut) { o.depth = d; o.box = corners(o, d); shortened.corner++; }
+      shortened.corner++;
+    }
     r.depth = depth;
     r.box = box;
-    others.push(r);
-    byRecord.set(rec, others);
+    mates.push(r);
+    byRecord.set(rec, mates);
     rooms.push(r);
     markBayRoom(bay, true);
   }
@@ -105,13 +150,40 @@ function prepare() {
     r.people = [];
     r.shown = false;
   }
+  // which of its kind's layouts (shop-kits.js): by the business's own number, so its bays agree; a business beside
+  // another of its kind (within 16 m) takes the next layout, so two neighbours never have the one room
+  const firms = new Map();
+  for (const r of rooms) {
+    let f = firms.get(r.bay.sign);
+    if (!f) firms.set(r.bay.sign, (f = { sign: r.bay.sign, kit: r.kit, biz: r.bay.biz, rooms: [] }));
+    f.rooms.push(r);
+  }
+  const placedFirms = [];
+  let bumped = 0;
+  for (const f of [...firms.values()].sort((a, b) => a.sign - b.sign)) {
+    const n = kitVariants(f.kit);
+    f.layout = Math.floor(hash(f.biz, 9.1 + f.sign * 0.37) * n) % n;
+    if (n > 1) {
+      const taken = new Set();
+      for (const o of placedFirms) {
+        if (o.kit !== f.kit) continue;
+        if (f.rooms.some((a) => o.rooms.some((b) => Math.hypot(a.x - b.x, a.z - b.z) < 16))) taken.add(o.layout);
+      }
+      let tries = 0;
+      const first = f.layout;
+      while (taken.has(f.layout) && tries++ < n) f.layout = (f.layout + 1) % n;
+      if (taken.has(f.layout)) f.layout = first; else if (f.layout !== first) bumped++;
+    }
+    placedFirms.push(f);
+    for (const r of f.rooms) { r.layout = f.layout; r.kitName = f.layout ? r.kit + '~' + f.layout : r.kit; }
+  }
   const grid = new Map();
   for (const r of rooms) {
     const k = Math.floor(r.x / REACH) + ',' + Math.floor(r.z / REACH);
     if (!grid.has(k)) grid.set(k, []);
     grid.get(k).push(r);
   }
-  log(`[shop rooms] ${rooms.length} rooms behind the glass of ${bays.length} named bays (too narrow ${skipped.narrow}, too low ${skipped.low}, no depth ${skipped.shallow}, round a corner ${skipped.corner})`);
+  log(`[shop rooms] ${rooms.length} rooms behind the glass of ${bays.length} named bays (too narrow ${skipped.narrow}, too low ${skipped.low}, no depth ${skipped.shallow}, round a corner ${skipped.corner}, another building in it ${skipped.neighbour}); cut short ${shortened.corner} for a room round the corner, ${shortened.neighbour} for another building; ${bumped} businesses took another layout than a neighbour's`);
   return { rooms, grid };
 }
 
@@ -227,11 +299,13 @@ function createRoomMaterial() {
       .mul(mix(0.78, 1.0, smoothstep(0.0, 0.7, mix(dp.sub(z), hw.sub(abs(x)), backIs)))), wallIs));
     ao.assign(mix(ao, mix(0.7, 1.0, smoothstep(0.0, 0.42, y)), max(fs(0), fs(3))));
     const open = vState.y;
-    const level = mix(vState.z, vState.w, uNight).mul(mix(0.1, 1.0, open));
+    const level = mix(vState.z, vState.w, uNight).mul(mix(mix(0.1, 0.04, uNight), 1.0, open));
     const day = float(1).sub(uNight);
     const daylight = cityUniforms.uSkyHorizonColor.mul(day).mul(exp(z.div(-2.6)))
       .mul(max(n.z.negate(), 0).mul(0.5).add(up.mul(0.3)).add(0.3)).mul(0.62);
-    const lit = albedo.mul(vLight.mul(level).mul(shade).add(daylight)).mul(ao);
+    const raw = albedo.mul(vLight.mul(level).mul(shade).add(daylight)).mul(ao);
+    // (after dark a pale room would be a white-hot box in the street: its brightest eased down)
+    const lit = raw.div(raw.mul(uNight.mul(0.32)).add(1));
     // what shines by itself: a lamp while the shop is open (2: all night)
     const always = step(1.75, glow);
     const gain = mix(clamp(glow, 1, 1.6), float(0.85), always);
@@ -377,7 +451,7 @@ export function createShopInteriors(group) {
   function kindOf(name) {
     let k = kinds.get(name);
     if (k) return k;
-    const kit = shopKit(name), cap = 28;
+    const kit = shopKit(name), cap = kitVariants(name.split('~')[0]) > 1 ? 16 : 28;
     const g = new THREE.InstancedBufferGeometry();
     for (const a of ['position', 'normal', 'color', 'aux']) g.setAttribute(a, kit.geometry.getAttribute(a));
     const array = new Float32Array(cap * STRIDE);
@@ -492,7 +566,7 @@ export function createShopInteriors(group) {
     let nPanes = 0, nPeople = 0;
     const keep = new Map();
     for (const r of near) {
-      const k = kindOf(r.kit);
+      const k = kindOf(r.kitName);
       if (k.count >= k.cap) { reach = Math.min(reach, r.dist - 2); continue; }
       const open = r.openAt <= shares[r.type] - 0.001 ? 1 : 0;
       const a = k.array, o = k.count++ * STRIDE;
@@ -500,7 +574,7 @@ export function createShopInteriors(group) {
       a[o + 4] = r.ux; a[o + 5] = r.uz; a[o + 6] = r.halfW; a[o + 7] = r.depth;
       a[o + 8] = r.height; a[o + 9] = open; a[o + 10] = r.hideLeft; a[o + 11] = r.hideRight;
       a[o + 12] = r.wall; a[o + 13] = r.floor; a[o + 14] = r.accent; a[o + 15] = r.light;
-      a[o + 16] = 1.7 * r.day; a[o + 17] = 1.25 * r.night; a[o + 18] = r.floorKind; a[o + 19] = r.wallKind;
+      a[o + 16] = 1.7 * r.day; a[o + 17] = 1.15 * r.night; a[o + 18] = r.floorKind; a[o + 19] = r.wallKind;
       const q = nPanes++ * 8;
       paneArray[q] = r.x; paneArray[q + 1] = r.y - 0.05; paneArray[q + 2] = r.z; paneArray[q + 3] = r.bay.width;
       paneArray[q + 4] = r.ux; paneArray[q + 5] = r.uz; paneArray[q + 6] = Math.min(2.8, r.height - 0.15); paneArray[q + 7] = 0;

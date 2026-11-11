@@ -13,6 +13,7 @@ import { groundHeight, riverDepth, riverbedHeight, nearestWater, waterLevel } fr
 import { kayakGeometry, paddleGeometry } from './river-people.js';
 import { pierPush } from './river.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
+import { cityUniforms } from './tsl-materials.js';
 
 // the boathouse (OSM way 292066180) and its docks (ways 458993137-458993144), in metres east and south of Main & Liberty
 const LIVERY = { x: 3986, z: 306 };
@@ -342,6 +343,7 @@ function buildLivery(group) {
   // The people whose boat the player took: over the side, they swim for the nearest bank, wade out and walk a little
   // way up it, then stand about until they're out of sight
   const swimmers = [];
+  let lastGlow = -1;
   const ashore = (x, z) => riverDepth(x, z) <= 0.02;
   const findShore = (x, z) => {
     for (let d = 2; d <= 90; d += 2) {
@@ -421,12 +423,13 @@ function buildLivery(group) {
   const open = (x, z) => (pierPush(x, z, 1.2, pierOut) ? 0 : riverDepth(x, z));
   let shown = true;
 
-  // Bumping: each boat is two circles along its keel (a pedal boat's broad, a kayak's narrow), each dock run a capsule
+  // Bumping: each boat is three circles along its keel, bow, middle and stern (a pedal boat's broad, a kayak's narrow,
+  // overlapping so there's no gap amidships to slip through), each dock run a capsule
   // as wide as its deck; `push` says how far circle (x, z, r) must move to clear what it overlaps.
-  const HULL = { pedal: [1.0, 0.82], kayak: [1.15, 0.38] };
+  const HULL = { pedal: [0.9, 0.85], kayak: [1.15, 0.44] };
   const circles = (x, z, heading, kind, out) => {
     const [o, r] = HULL[kind], s = Math.sin(heading) * o, c = Math.cos(heading) * o;
-    out[0] = x + s; out[1] = z + c; out[2] = x - s; out[3] = z - c; out[4] = r;
+    out[0] = x + s; out[1] = z + c; out[2] = x; out[3] = z; out[4] = x - s; out[5] = z - c; out[6] = r;
     return out;
   };
   const push = { x: 0, z: 0 };
@@ -444,12 +447,13 @@ function buildLivery(group) {
     push.x += dx / d * (min - d); push.z += dz / d * (min - d);
     return min - d;
   };
-  const ca = new Float32Array(5), cb = new Float32Array(5);
+  const ca = new Float32Array(7), cb = new Float32Array(7);
   // how far boat a overlaps boat b (both as circle pairs), adding a's way out to push
   const clearBoat = (a, bx, bz, bh, bkind) => {
     circles(bx, bz, bh, bkind, cb);
-    return Math.max(clearCircle(a[0], a[1], a[4], cb[0], cb[1], cb[4]), clearCircle(a[0], a[1], a[4], cb[2], cb[3], cb[4]),
-      clearCircle(a[2], a[3], a[4], cb[0], cb[1], cb[4]), clearCircle(a[2], a[3], a[4], cb[2], cb[3], cb[4]));
+    let most = 0;
+    for (let i = 0; i < 6; i += 2) for (let j = 0; j < 6; j += 2) most = Math.max(most, clearCircle(a[i], a[i + 1], a[6], cb[j], cb[j + 1], cb[6]));
+    return most;
   };
   const npcKind = (b) => (b.pedal ? 'pedal' : 'kayak');
   // the player's boat, as it last bumped about: the boats out on the water give it room
@@ -497,7 +501,7 @@ function buildLivery(group) {
     push.x = push.z = 0;
     const a = circles(b.x, b.z, b.heading, npcKind(b), ca);
     if (Math.abs(b.x - LIVERY.x) < 90 && Math.abs(b.z - LIVERY.z) < 90) {
-      clearDocks(a[0], a[1], a[4]); clearDocks(a[2], a[3], a[4]);
+      clearDocks(a[0], a[1], a[6]); clearDocks(a[2], a[3], a[6]); clearDocks(a[4], a[5], a[6]);
       for (const r of rentals) if (r.kind === 'pedal' && r !== rentals[taken]) clearBoat(a, r.x, r.z, r.yaw, 'pedal');
     }
     for (const o of npcs) {
@@ -525,7 +529,7 @@ function buildLivery(group) {
         if (along < -0.3 || along > s.len + 0.3 || Math.abs(dx * s.tz - dz * s.tx) > s.hw + 0.05) continue;
         foot.x = person.x; foot.z = person.z;
         for (const b of npcs) {
-          if (b.taken) continue;
+          if (b.taken || b.out === false) continue;
           const d2 = (b.x - foot.x) ** 2 + (b.z - foot.z) ** 2;
           if (d2 < bd) { bd = d2; calling = b; }
         }
@@ -545,8 +549,15 @@ function buildLivery(group) {
       rentals.forEach((r, i) => { if (r.kind === 'pedal') placeRental(i, Math.sin(time * 1.4 + i * 1.7) * 0.02); });
     }
     crowd.begin();
+    // out on the water only by day (river-people.js does the same): each goes or comes back only out of sight
+    const glow = cityUniforms.uInteriorGlow.value, day = glow < 0.8;
+    const jumped = Math.abs(glow - lastGlow) > 0.3; // (a time button pressed: at once)
+    lastGlow = glow;
     for (const b of npcs) {
       if (b.taken) continue;
+      if (b.out === undefined) b.out = day; // (as the game opens, as the hour has them at once)
+      if (b.out !== day && (jumped || Math.hypot(b.x - cam.x, b.z - cam.z) > 120)) b.out = day;
+      if (!b.out) { hideNpc(b); continue; }
       if (near) steer(b, dt);
       const y = (waterLevel(b.x, b.z) ?? level) + Math.sin(time * 1.6 + b.phase) * 0.02;
       e.set(Math.sin(time * 1.1 + b.phase) * 0.015, b.heading, Math.sin(time * 1.3 + b.phase * 2) * 0.025, 'YXZ');
@@ -614,12 +625,12 @@ function buildLivery(group) {
       push.x = push.z = 0;
       const a = circles(x, z, heading, player.kind, ca);
       if (Math.abs(x - LIVERY.x) < 90 && Math.abs(z - LIVERY.z) < 90) {
-        clearDocks(a[0], a[1], a[4]); clearDocks(a[2], a[3], a[4]);
+        clearDocks(a[0], a[1], a[6]); clearDocks(a[2], a[3], a[6]); clearDocks(a[4], a[5], a[6]);
         for (const r of rentals) if (r.kind === 'pedal' && r !== rentals[taken]) clearBoat(a, r.x, r.z, r.yaw, 'pedal');
       }
       let struck = 0;
       for (const b of npcs) {
-        if (b.taken || Math.abs(b.x - x) > 5 || Math.abs(b.z - z) > 5) continue;
+        if (b.taken || b.out === false || Math.abs(b.x - x) > 5 || Math.abs(b.z - z) > 5) continue;
         const px = push.x, pz = push.z, o = clearBoat(a, b.x, b.z, b.heading, npcKind(b));
         if (o <= 0) continue;
         // the struck boat takes half of it, and drifts off
@@ -645,7 +656,7 @@ function buildLivery(group) {
       // (its distance given as if within the rentals' reach, so the two compare)
       const scale = reach / (reach + 0.9);
       npcs.forEach((b, n) => {
-        if (b.taken) return;
+        if (b.taken || b.out === false) return;
         const d = Math.hypot(b.x - x, b.z - z) * scale;
         if (d * d < bd) { bd = d * d; best = { i: rentals.length + n, kind: npcKind(b), x: b.x, z: b.z, d }; }
       });

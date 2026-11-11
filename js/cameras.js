@@ -210,6 +210,22 @@ class CameraSystem {
     const rag = entity.type === 'person' && entity.fallen && entity.rig?.ragdolling ? entity.rig.rag : null;
     // where to watch: the car, or the thrown body's pelvis (the player's own position stays on the ground meanwhile)
     const at = (out) => (rag ? out.set(rag.p[0], rag.p[1] - 0.4, rag.p[2]) : out.copy(entity.position));
+    // a jump that touched down and took off again on a flight too short for a new cut: its numbers once it settles
+    const carry = this._jumpCarry;
+    if (!jc && carry) {
+      if (entity.airborne) {
+        const q = entity.position;
+        carry.high = Math.max(carry.high, q.y - groundHeight(q.x, q.z));
+        carry.air = entity.flightTime || 0;
+        carry.still = 0;
+      } else if ((carry.still = (carry.still || 0) + dt) > 0.5) {
+        this._jumpCarry = null;
+        const q = entity.position, air = carry.done + (carry.air || 0);
+        const ft = Math.hypot(q.x - carry.x0, q.z - carry.z0) * 3.281;
+        this.onJumpStats?.({ air, distanceFt: ft, heightFt: carry.high * 3.281 });
+        log(`[jump cam] landed: ${air.toFixed(1)} s in the air, ${Math.round(ft)} ft, ${Math.round(carry.high * 3.281)} ft up`);
+      }
+    }
     if (!jc) {
       const launch = rag && entity.fallen.launch;
       if (!launch && (entity.type !== 'car' || !entity.airborne)) { this._jumpLooked = false; return false; }
@@ -270,14 +286,55 @@ class CameraSystem {
       const camY = Math.max(above(cx, cz) + (best.n >= 1 ? 3.2 : 1.1),
         Math.min(p.y, Math.max(landY, above(p.x + vx * tLeft, p.z + vz * tLeft))) + 1.4);
       jc = this.jumpCam = { entity, after: 0, pos: new THREE.Vector3(cx, camY, cz), flight: launch ? tLeft : 0 };
+      // Lamp: for the jump's numbers once it lands (a car's: airtime, how far, how high): where it left the ground, back
+      // along its flight so far, and the highest it gets over the ground under it
+      if (!launch) {
+        const ft = entity.flightTime || 0;
+        // (a jump that touched down a moment and took off again carries on as one: its take-off, airtime and height)
+        const carry = this._jumpCarry;
+        this._jumpCarry = null;
+        jc.stats = carry ? { ...carry, air: 0, surface } : { x0: p.x - vx * ft, z0: p.z - vz * ft, high: h, done: 0, surface };
+      }
       this.currentPos.copy(jc.pos);
       this.currentLookAt.set(p.x, p.y + 0.6, p.z);
       this.setFov(40);
       log(launch ? `[jump cam] cut to the side of a wipeout at ${Math.round(hv * 2.237)} mph` : `[jump cam] cut to the side for about ${tLeft.toFixed(1)} s in the air`);
     }
     // a body is down once it lies still (or has tumbled a good while), a car once it lands
-    if (jc.flight ? !rag || rag.still > 0.25 || rag.time > jc.flight + 2.5 : !entity.airborne) jc.after += dt;
-    if (jc.after > 0.8) return this.endJumpCam(), false;
+    const s = jc.stats;
+    if (s && entity.airborne) {
+      const q = entity.position;
+      // off the ground again after touching down: the same jump carries on; if it's heading well away from the camera,
+      // cut to a new spot beside this flight (keeping the jump's numbers)
+      if (s.down) {
+        s.done += s.air || 0;
+        s.air = 0;
+        s.down = false;
+        jc.after = 0;
+        const sp = Math.hypot(entity.speed || 0, entity.vy || 0);
+        if (q.distanceTo(jc.pos) > 25 || sp > 15) {
+          this._jumpCarry = { x0: s.x0, z0: s.z0, high: s.high, done: s.done };
+          this.endJumpCam();
+          this._jumpLooked = false;
+          return false;
+        }
+      }
+      s.high = Math.max(s.high, q.y - s.surface(q.x, q.z));
+      s.air = entity.flightTime || 0;
+    }
+    if (jc.flight ? !rag || rag.still > 0.25 || rag.time > jc.flight + 2.5 : !entity.airborne) {
+      if (s) s.down = true;
+      jc.after += dt;
+      // settled (half a second down, not a bounce on the way): the numbers, once (main.js shows them: onJumpStats)
+      if (s && !s.told && jc.after > 0.5) {
+        s.told = true;
+        const q = entity.position, air = s.done + (s.air || 0);
+        const ft = Math.hypot(q.x - s.x0, q.z - s.z0) * 3.281;
+        this.onJumpStats?.({ air, distanceFt: ft, heightFt: s.high * 3.281 });
+        log(`[jump cam] landed: ${air.toFixed(1)} s in the air, ${Math.round(ft)} ft, ${Math.round(s.high * 3.281)} ft up`);
+      }
+    }
+    if (jc.after > (jc.stats ? 1.0 : 0.8)) return this.endJumpCam(), false;
     // the camera stays put and pans with the car, a little lazily so it feels hand-held
     const p = at(this._jumpAt);
     this.currentPos.copy(jc.pos);

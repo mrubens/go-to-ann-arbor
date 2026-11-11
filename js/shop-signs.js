@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { GEO } from './city-geodata.js';
 import { groundHeight } from './terrain.js';
 import { TIER } from './device-tier.js';
-import { SHOP_TYPES, SHOP_CUISINES, signType, signCuisine, signPlace } from './shop-types.js';
+import { SHOP_TYPES, SHOP_CUISINES, signType, signCuisine, signPlace, awningOver } from './shop-types.js';
 
 // Lamp: a sign over each named shop, restaurant, cafe and bar from OpenStreetMap (GEO.signs, placed by the generator on
 // the wall of its building that faces the street, then hung centred over the shopfront bay that is its own:
@@ -92,6 +92,8 @@ function buildShopSigns(group) {
     }
   };
 
+  const lettered = new Set(); // the awnings with a name on them already
+  let onAwnings = 0;
   for (let i = 0; i < count; i++) {
     let [x, z, deg, w, y, ni, cat] = list.slice(i * 7, i * 7 + 7);
     // Nickels Arcade's State St entrance is an open arch (more-landmarks.js): a sign set across it goes on the shop
@@ -152,17 +154,38 @@ function buildShopSigns(group) {
 
     // the board on the wall: its face out along the wall's normal, centred on (x, z)
     const a = (deg * Math.PI) / 180;
-    const nx = Math.sin(a), nz = Math.cos(a); // outward
-    const ux = nz, uz = -nx; // along the wall, left to right as seen from the street
-    const g = groundHeight(x, z);
-    const y0 = g + y - BOARD_H / 2, y1 = g + y + BOARD_H / 2;
-    const hw = w / 2;
-    const fx = x + nx * DEPTH, fz = z + nz * DEPTH;
+    let nx = Math.sin(a), nz = Math.cos(a); // outward
+    let ux = nz, uz = -nx; // along the wall, left to right as seen from the street
+    // (on a slope the shopfront stands on its building's ground, not the sidewalk's below the sign: the board goes with it)
+    const g = place && place.ground != null ? Math.max(place.ground, groundHeight(x, z)) : groundHeight(x, z);
+    let y0 = g + y - BOARD_H / 2, y1 = g + y + BOARD_H / 2;
+    let hw = w / 2;
+    let fx = x + nx * DEPTH, fz = z + nz * DEPTH;
+    // under a canvas awning (building-details.js) a board is hidden from the sidewalk: the name goes on the awning's
+    // valance instead, as shops letter theirs, and there is no board (a second business under the one awning keeps
+    // its board, hung clear above the canvas)
+    const awning = awningOver(x, z, nx, nz);
+    let valance = false;
+    if (awning && !lettered.has(awning)) {
+      lettered.add(awning);
+      valance = true;
+      onAwnings++;
+      const c = awning.canopy, vh = c.height - 0.07, ax = Math.cos(awning.ry), az = -Math.sin(awning.ry);
+      hw = Math.min(awning.d / 2 - 0.15, (w * vh / BOARD_H) / 2); // (the letters keep their shape)
+      const base = awning.y - 3.05; // the ground the awning was hung from
+      y1 = base + c.top - 0.035; y0 = y1 - vh;
+      const wx = awning.x - ax * 0.75, wz = awning.z - az * 0.75;
+      fx = wx + ax * (c.out + 0.022); fz = wz + az * (c.out + 0.022);
+      nx = ax; nz = az; ux = az; uz = -ax; // (square to the canvas, which hangs square to its own wall)
+    } else if (awning) {
+      y0 = Math.max(y0, awning.y + 0.38); y1 = y0 + BOARD_H;
+    }
     const P = (px, pz, s, py) => [px + ux * s, py, pz + uz * s];
     const u0 = cx / W, u1 = (cx + CELL_W) / W;
     const v0 = 1 - (cy + CELL_H) / H, v1 = 1 - cy / H;
     quad(face, [P(fx, fz, -hw, y0), P(fx, fz, hw, y0), P(fx, fz, hw, y1), P(fx, fz, -hw, y1)], [nx, 0, nz],
       [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
+    if (valance) continue; // (sewn on the canvas: no box behind it)
     // its edges: a shallow box back to the wall
     const e = 0.03;
     const top = [P(x, z, -hw - e, y1 + e), P(x, z, hw + e, y1 + e), P(fx, fz, hw + e, y1 + e), P(fx, fz, -hw - e, y1 + e)];
@@ -207,7 +230,7 @@ function buildShopSigns(group) {
 
   group.add(backs, faces);
   group.userData.terrain = 'set'; // stood on the ground as they were placed
-  console.info(`[shop signs] ${count} storefront signs`);
+  console.info(`[shop signs] ${count} storefront signs, ${onAwnings} lettered on their awning's valance`);
   return { count };
 }
 

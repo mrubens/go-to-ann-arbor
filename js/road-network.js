@@ -436,13 +436,27 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
       return { half, axis, fwd, back, turn, fi: { ...info(true), bikeL: 0, shareL: 0, turn }, bi: { ...info(false), bikeL: 0, shareL: 0, turn } };
     }
     const DEG = Math.PI / 180;
+    // Lamp: a divided road's two one-way roadways drawn between the same two junctions run along one centreline
+    // between them (see below), so they keep just the bends both share
+    const travelKey = (l, back = false) => (l.dir > 0 !== back ? find(l.a) + ',' + find(l.b) : find(l.b) + ',' + find(l.a));
+    const oneWayPair = new Set();
+    for (const l of links) if (l.dir !== 0) oneWayPair.add(travelKey(l));
+    const pairedOneWay = (l) => l.dir !== 0 && oneWayPair.has(travelKey(l, true));
+    // how far p lies from the segment a-b
+    const offChord = (p, a, b) => {
+      const ex = b.x - a.x, ez = b.z - a.z;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * ex + (p.z - a.z) * ez) / (ex * ex + ez * ez || 1)));
+      return Math.hypot(a.x + ex * t - p.x, a.z + ez * t - p.z);
+    };
+    const CHORD_TOLERANCE = 0.75; // m the drawn street may stray from the straight edge standing in for it
+    const CHORD_MIN = 10; // m, the shortest edge a gentle curve is cut into (addEdgeGeneral drops those under 8 m)
     for (const l of links) {
       const A = junction(find(l.a));
       const B = junction(find(l.b));
       if (A === B) continue;
       const pts = [{ x: A.x, z: A.z }, ...l.pts.slice(1, -1), { x: B.x, z: B.z }];
       // stations along it: the ends and every bend over 12° at least 15 m from the last station and from the far end
-      const stations = [A];
+      const at = [0];
       let last = pts[0];
       let rest = l.len;
       for (let k = 1; k < pts.length - 1; k++) {
@@ -453,10 +467,39 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
         let turn = Math.abs(Math.atan2(p2.z - p1.z, p2.x - p1.x) - Math.atan2(p1.z - last.z, p1.x - last.x));
         if (turn > Math.PI) turn = 2 * Math.PI - turn;
         if (turn < 12 * DEG || d0 < 15 || rest < 15) continue;
-        const s = { x: p1.x, z: p1.z, hx: 0, hz: 0, signal: false, in: [], out: [], general: true, shape: true };
+        at.push(k);
+        last = p1;
+      }
+      at.push(pts.length - 1);
+      // Lamp: and along a gentle curve (bends each under 12°, adding up), where the street strays more than
+      // CHORD_TOLERANCE from the straight edge between two stations, a station at the point furthest from it, again
+      // and again, so the lanes and their paint stay on the drawn street (N Main St by Sunset Rd bowed 2.4 m off its
+      // edge, its double yellow line heading off across a lane toward the curb, and 17 m off the next one north, whose
+      // lanes ran into the curbs and were left unpainted and without traffic)
+      const refined = [0];
+      const refine = (i, j) => {
+        let best = -1;
+        let far = CHORD_TOLERANCE;
+        for (let k = i + 1; k < j; k++) {
+          const d = offChord(pts[k], pts[i], pts[j]);
+          if (d <= far) continue;
+          if (Math.hypot(pts[k].x - pts[i].x, pts[k].z - pts[i].z) < CHORD_MIN) continue;
+          if (Math.hypot(pts[k].x - pts[j].x, pts[k].z - pts[j].z) < CHORD_MIN) continue;
+          far = d;
+          best = k;
+        }
+        if (best >= 0) {
+          refine(i, best);
+          refine(best, j);
+        } else refined.push(j);
+      };
+      if (pairedOneWay(l)) refined.push(...at.slice(1));
+      else for (let k = 0; k + 1 < at.length; k++) refine(at[k], at[k + 1]);
+      const stations = [A];
+      for (const k of refined.slice(1, -1)) {
+        const s = { x: pts[k].x, z: pts[k].z, hx: 0, hz: 0, signal: false, in: [], out: [], general: true, shape: true };
         nodes.push(s);
         stations.push(s);
-        last = p1;
       }
       stations.push(B);
       const lanes = lanesOf(l);

@@ -3543,8 +3543,8 @@ function createWaterMaterial() {
   // the river partly clear: its bed shows through where you look down into it, the surface a mirror toward the
   // horizon, white water solid, and from underneath a bright window up to the sky
   mat.transparent = true;
-  // a flat sheet has no back-to-front order to keep: one draw a tile, not a back-face pass then a front-face one
-  mat.forceSinglePass = true;
+  // (two passes, back faces then front: in one, a both-sided see-through surface draws its two sides in whatever order
+  // its triangles come, and the cascades' raised waves flickered between them)
   mat.opacityNode = mix(clamp(max(float(0.58).add(fresnel.mul(0.9)), foam), 0.0, 1.0), float(0.7), float(1).sub(float(frontFacing)));
 
   // Sediment-laden estuary: deep blue-green grey ↔ silty olive grey; thin sunlit crests transmit a greener tint

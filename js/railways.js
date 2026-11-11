@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GEO } from './city-geodata.js';
-import { groundHeight, riverbedHeight, deckTop, bridgeDecks } from './terrain.js';
+import { groundHeight, groundUnderStreets, riverbedHeight, deckTop, bridgeDecks } from './terrain.js';
 import { localTime } from './theride.js';
 import { HORN_PATTERN } from './rail-sounds.js';
 
@@ -28,7 +28,8 @@ function tinted(geo, hex) {
 }
 
 // A line of flat x, z pairs resampled every `step` metres, with the height of its rails' base along it: the ground
-// averaged over 30 m either way (a railroad doesn't follow every bump), and a straight run across a bridge between
+// averaged over 30 m either way (a railroad doesn't follow every bump; under a street's bridge, the ground under its
+// deck: terrain.js groundUnderStreets), and a straight run across a bridge between
 // `ends` (the heights of the track meeting it at each end, else the ground there). A bridge over the river runs on the
 // deck terrain.js lays there (river.js draws it; groundHeight is its top), so trains ride on the bridge that is drawn.
 // The ends of the level railway bridges over roads (terrain.js `level`): the track climbs to them on an embankment at
@@ -62,7 +63,7 @@ function railPath(flat, bridge, step = 5, ends = null) {
     if (carry < 0) carry += step;
   }
   out.push(pts[pts.length - 1]);
-  const n = out.length, g = out.map(([x, z]) => groundHeight(x, z));
+  const n = out.length, g = out.map(([x, z]) => groundUnderStreets(x, z));
   const y = new Float32Array(n);
   let river = false;
   if (bridge) {
@@ -110,7 +111,7 @@ function routePath(flat, bridges) {
       if (Math.abs(ax * cx + az * cz) > 0.85) deck[i] = b.y[bj];
     }
   }
-  const g = p.x.map((x, i) => groundHeight(x, p.z[i]));
+  const g = p.x.map((x, i) => groundUnderStreets(x, p.z[i]));
   const R = 6;
   for (let i = 0; i < n; i++) {
     if (!Number.isNaN(deck[i])) { p.y[i] = deck[i]; continue; }
@@ -338,7 +339,7 @@ function buildRailways(group, crossings = [], wolverine = null) {
     if (bridge) {
       for (let s = 9; s < p.length - 4; s += 18) {
         sample(p, s, at);
-        const g = groundHeight(at.x, at.z), h = at.y - 1.3 - g;
+        const g = groundUnderStreets(at.x, at.z), h = at.y - 1.3 - g;
         // (none in a road the bridge crosses: there the deck stands over the road, deckTop above groundHeight)
         if (h < 0.8 || deckTop(at.x, at.z) - g > 3) continue;
         const b = {};

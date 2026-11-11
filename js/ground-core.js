@@ -55,7 +55,9 @@ export function levelAt(r, x, z) {
 export const BUCKET = 32;
 export const bucketKey = (bx, bz) => bx * 100003 + bz;
 
-// The ground at (x, z) on a street's or railway's bridge deck, eased in from the ground over its first and last 8 m
+// The ground at (x, z) on a street's or railway's bridge deck, eased in from the ground over its first and last 8 m.
+// (Lamp) A street's deck, which meets the ground at its ends (terrain.js streetDeck), never sags under its own line
+// there where the bank falls away under it: no lower than the deck less what its end stands over the ground
 export function onDeck(r, x, z, h, overRoads = false) {
   const list = r.buckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
   if (!list) return h;
@@ -69,7 +71,10 @@ export function onDeck(r, x, z, h, overRoads = false) {
     if (Math.hypot(x - a[0] - ex * u, z - a[1] - ez * u) > deck.half) continue;
     const s = a[2] + (b[2] - a[2]) * u, top = a[3] + (b[3] - a[3]) * u;
     const w = Math.min(1, Math.min(s, deck.length - s) / 8);
-    return h + (top - h) * w;
+    const eased = h + (top - h) * w;
+    if (deck.kind !== 0 || w >= 1) return eased;
+    const end = s < deck.length - s ? deck.points[0] : deck.points[deck.points.length - 1];
+    return Math.max(eased, top - (1 - w) * Math.max(0, end[3] - end[7]));
   }
   return h;
 }
@@ -472,12 +477,44 @@ export function indexLayer(layer) {
   };
 }
 
-// How far a bridge's deck lifts the ground at (x, z) over the city's mesh (0 off every deck)
+// How far a bridge's deck lifts the ground's layers at (x, z) over the city's mesh (0 off every deck). Only where the
+// deck lies on the ground (within 10 cm of it, at its ends) do they follow it; where it stands any higher they fall
+// back to the ground under it within another 40 cm, so the bridge (river.js) is what's drawn there, over open air:
+// the streets', lawns' and paths' layers never stand up into walls and wedges under a deck (Lamp)
+// In the river's dug ground under and beside a street's or railway's bridge (its road, sidewalks and lawns running on
+// across the river under it, down the banks), they go down out of sight under the banks and the bed (river.js draws
+// those), so no pavement lies down the banks under a bridge.
+function deckLayerLift(lift) {
+  return lift <= 0.1 ? lift : Math.max(0, 0.1 * (0.5 - lift) / 0.4);
+}
+const BURY = 2.5, BESIDE = 6;
+// The ground's layers' height at (x, z) on, under or beside a deck, over the ground `h` there (as onDeck finds the deck)
+function deckLayer(r, x, z, h) {
+  const list = r.buckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
+  if (!list) return h;
+  let dug = null, beside = false;
+  const inRiver = () => (dug ??= !!(r.digBlocks || r.dig) && digAt(r, x, z) > 0.01);
+  for (const { deck, a, b } of list) {
+    if (a[5] || b[5]) continue;
+    const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez;
+    const t = ((x - a[0]) * ex + (z - a[1]) * ez) / l2;
+    if (t < -0.2 || t > 1.2) continue;
+    const u = Math.min(1, Math.max(0, t));
+    const d = Math.hypot(x - a[0] - ex * u, z - a[1] - ez * u);
+    if (d > deck.half + (deck.kind !== 2 ? BESIDE : 0)) continue;
+    const s = a[2] + (b[2] - a[2]) * u, top = a[3] + (b[3] - a[3]) * u;
+    const w = Math.min(1, Math.min(s, deck.length - s) / 8), lift = (top - h) * w;
+    if (d > deck.half) { if (lift > 0.5) beside = true; continue; }
+    if (deck.kind !== 2 && lift > 0.5 && inRiver()) return h - Math.min(BURY, (lift - 0.5) * 6);
+    return h + deckLayerLift(lift);
+  }
+  return beside && inRiver() ? h - BURY : h;
+}
 function deckLift(g, x, z) {
   const r = g.river;
   if (!r || !r.buckets.has(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)))) return 0;
   const h = coreHeight(g.core, x, z);
-  return onDeck(r, x, z, h) - h;
+  return deckLayer(r, x, z, h) - h;
 }
 
 // A layer cut to follow the ground (unless `tolerance` is 0) and every vertex raised by the ground under it. The
@@ -492,7 +529,10 @@ export function drapeLayer(g, layer, tolerance) {
     for (let i = 0; i < pos.length; i += 3) pos[i + 1] += lift(pos[i], pos[i + 2]);
     return indexLayer(out);
   }
-  const h = (x, z) => groundOf(g, x, z);
+  const h = (x, z) => {
+    if (!g.river) return baseHeight(g, x, z);
+    return deckLayer(g.river, x, z, riverbedOf(g, x, z));
+  };
   const out = tolerance ? tessellateLayer(layer, tolerance, 10, h) : layer;
   const pos = out.attrs.find((a) => a.name === 'position').array;
   for (let i = 0; i < pos.length; i += 3) pos[i + 1] += h(pos[i], pos[i + 2]);
@@ -501,5 +541,5 @@ export function drapeLayer(g, layer, tolerance) {
 
 // What the cutting depends on, as text, so a change to any of it makes the saved ground layers again (terrain.js)
 export const CORE_SOURCE = [baseHeight, digCell, digAt, levelAt, onDeck, riverbedOf, groundOf, tessellateLayer, drapeLayer,
-  leafOf, onPlane, coreHeight, cutToGround, deckLift, indexLayer]
+  leafOf, onPlane, coreHeight, cutToGround, deckLayerLift, deckLayer, deckLift, indexLayer]
   .map((f) => f.toString()).join('\n');
