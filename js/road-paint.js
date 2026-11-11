@@ -3,6 +3,7 @@ import { CROSSWALK } from './road-network.js';
 import { GEO } from './city-geodata.js';
 import { createRoadPaintMaterial } from './tsl-materials.js';
 import { curbStalls } from './curb-parking.js';
+import { bridgeDecks } from './terrain.js';
 
 // Road markings generated from the drivable road network (js/road-network.js), so the paint matches where traffic
 // actually drives and stops: dashed lane lines, double yellow centre lines on two-way roads (Lamp: not on residential
@@ -126,13 +127,77 @@ const BIKE = [...BICYCLE, [1.9, 0, 2.8, 0, 0.15], [3.15, 0, 2.75, -0.32, 0.15], 
 const SHARROW = [...BICYCLE,
   [1.7, -0.5, 2.15, 0, 0.22], [2.15, 0, 1.7, 0.5, 0.22], [2.3, -0.5, 2.75, 0, 0.22], [2.75, 0, 2.3, 0.5, 0.22]];
 
+// Lamp: the freeways' overpasses (terrain.js, overpass-data.js) as pieces of their decks [deck, a, b] (a and b its
+// points), and where a strip from (ax, az) to (bx, bz) runs along one up off the ground: its top there, or null. The
+// road on an overpass is painted on its deck (not laid on the ground under it, across the road below), and the road
+// under it runs on painted under it
+function overpassPieces() {
+  const out = [];
+  for (const deck of bridgeDecks()) {
+    if (!deck.overpass) continue;
+    for (let i = 0; i + 1 < deck.points.length; i++) out.push([deck, deck.points[i], deck.points[i + 1]]);
+  }
+  return out;
+}
+function deckUnder(pieces, x, z, dx, dz) {
+  for (const [deck, a, b] of pieces) {
+    const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez || 1;
+    const t = ((x - a[0]) * ex + (z - a[1]) * ez) / l2;
+    if (t < 0 || t > 1) continue;
+    if (Math.hypot(x - a[0] - ex * t, z - a[1] - ez * t) > deck.half) continue;
+    // (across it, the road under it: even at a sharp angle, I-94 under E Ellsworth Rd at 25°)
+    if (dx !== undefined && Math.abs(dx * ex + dz * ez) / Math.sqrt(l2) < 0.96) continue;
+    const top = a[3] + (b[3] - a[3]) * t, ground = a[7] + (b[7] - a[7]) * t;
+    if (top - ground < 0.1) continue; // (at its ends, on the ground: painted as the street is)
+    return top;
+  }
+  return null;
+}
+
 function buildRoadPaint(scene, network, sharedBuilder = null) {
   const builder = sharedBuilder || createRoadPaintChunkBuilder('RoadMarkings');
   const lines = [];
   const bends = new Map();
+  // Lamp: the paint on the overpasses' decks, at their height (not laid on the ground: terrain.js setOnTerrain)
+  const decks = sharedBuilder ? [] : overpassPieces();
+  const deckBuilder = decks.length ? createRoadPaintChunkBuilder('RoadMarkingsOnDecks') : null;
+  let dx0 = Infinity, dx1 = -Infinity, dz0 = Infinity, dz1 = -Infinity;
+  for (const [deck, a] of decks) {
+    dx0 = Math.min(dx0, a[0] - deck.half); dx1 = Math.max(dx1, a[0] + deck.half);
+    dz0 = Math.min(dz0, a[1] - deck.half); dz1 = Math.max(dz1, a[1] + deck.half);
+  }
+  const DECK_STEP = 2;
 
   // Flat strip w wide from a to b, with a dash pattern (period, duty cycle) running along it
   function strip(ax, az, bx, bz, w, col, period = 1, duty = 1, phase = 0, flow = 1) {
+    // (Lamp) where it runs along an overpass up off the ground, in short pieces on its deck
+    if (deckBuilder && Math.max(ax, bx) > dx0 && Math.min(ax, bx) < dx1 && Math.max(az, bz) > dz0 && Math.min(az, bz) < dz1) {
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len > 0.05) {
+        const ux = (bx - ax) / len, uz = (bz - az) / len, n = Math.max(1, Math.ceil(len / DECK_STEP));
+        const P = (k) => [ax + (bx - ax) * k / n, az + (bz - az) * k / n];
+        const on = [];
+        for (let k = 0; k < n; k++) { const [x, z] = P(k + 0.5); on.push(deckUnder(decks, x, z, ux, uz) !== null); }
+        if (on.some(Boolean)) {
+          for (let k0 = 0; k0 < n;) {
+            let k1 = k0 + 1;
+            while (k1 < n && on[k1] === on[k0]) k1++;
+            const [x0, z0] = P(k0), [x1, z1] = P(k1), ph = phase + (len * k0 / n) * flow;
+            if (!on[k0]) builder.strip3D(x0, HEIGHT, z0, x1, HEIGHT, z1, w, col, period, duty, ph, flow);
+            else {
+              for (let k = k0; k < k1; k++) {
+                const [xa, za] = P(k), [xb, zb] = P(k + 1);
+                const ya = deckUnder(decks, xa, za, ux, uz) ?? deckUnder(decks, (xa + xb) / 2, (za + zb) / 2, ux, uz);
+                const yb = deckUnder(decks, xb, zb, ux, uz) ?? ya;
+                deckBuilder.strip3D(xa, ya + HEIGHT, za, xb, yb + HEIGHT, zb, w, col, period, duty, phase + (len * k / n) * flow, flow);
+              }
+            }
+            k0 = k1;
+          }
+          return;
+        }
+      }
+    }
     builder.strip3D(ax, HEIGHT, az, bx, HEIGHT, bz, w, col, period, duty, phase, flow);
   }
 
@@ -441,6 +506,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
   // the stretches [t0, t1] (0 to 1 along a to b) over a carriageway
   const overFreeway = (ax, az, bx, bz) => {
     const out = [];
+    // (Lamp: not where it crosses on an overpass or under one: a grade separation, terrain.js)
     const seen = new Set();
     for (const [x, z] of [[ax, az], [(ax + bx) / 2, (az + bz) / 2], [bx, bz]]) {
       for (const f of fwCells.get(Math.floor(x / FW_CELL) * 65536 + Math.floor(z / FW_CELL)) || []) {
@@ -460,7 +526,11 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
         };
         const sa = (ax - f.sx) * f.dx + (az - f.sz) * f.dz, sb = (bx - f.sx) * f.dx + (bz - f.sz) * f.dz;
         const oa = (ax - f.sx) * f.rx + (az - f.sz) * f.rz, ob = (bx - f.sx) * f.rx + (bz - f.sz) * f.rz;
-        if (clip(sa, sb, -2, f.len + 2) && clip(oa, ob, mid - half, mid + half)) out.push([t0, t1]);
+        if (clip(sa, sb, -2, f.len + 2) && clip(oa, ob, mid - half, mid + half)) {
+          const tm = (t0 + t1) / 2, cx = ax + (bx - ax) * tm, cz = az + (bz - az) * tm;
+          if (decks.length && deckUnder(decks, cx, cz) !== null) continue;
+          out.push([t0, t1]);
+        }
       }
     }
     return out.sort((p, q) => p[0] - q[0]);
@@ -516,6 +586,14 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
 
   const group = builder.build();
   scene.add(group);
+  if (deckBuilder) {
+    const onDecks = deckBuilder.build();
+    onDecks.userData.terrain = 'set';
+    let tris = 0;
+    onDecks.traverse((o) => { o.userData.terrain = 'set'; if (o.isMesh) tris += o.geometry.index.count / 3; });
+    scene.add(onDecks);
+    console.log(`[paint] on the overpasses' decks: ${onDecks.children.length} draws, ${tris} triangles`);
+  }
   return group;
 }
 

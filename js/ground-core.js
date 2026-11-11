@@ -63,7 +63,8 @@ export function onDeck(r, x, z, h, overRoads = false) {
   if (!list) return h;
   for (const { deck, a, b } of list) {
     // (over a road it crosses, the deck isn't the ground: the road runs on under it, terrain.js roadsUnder)
-    if (!overRoads && (a[5] || b[5])) continue;
+    // (Lamp: nor where an overpass stands in open air over the ground, its median and shoulders: [8])
+    if (!overRoads && (a[5] || b[5] || a[8] || b[8])) continue;
     const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez;
     const t = ((x - a[0]) * ex + (z - a[1]) * ez) / l2;
     if (t < -0.2 || t > 1.2) continue;
@@ -487,7 +488,7 @@ export function indexLayer(layer) {
 function deckLayerLift(lift) {
   return lift <= 0.1 ? lift : Math.max(0, 0.1 * (0.5 - lift) / 0.4);
 }
-const BURY = 2.5, BESIDE = 6;
+const BURY = 2.5, BESIDE = 6, OVERPASS_DROP = 0.35;
 // The ground's layers' height at (x, z) on, under or beside a deck, over the ground `h` there (as onDeck finds the deck)
 function deckLayer(r, x, z, h) {
   const list = r.buckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
@@ -496,7 +497,13 @@ function deckLayer(r, x, z, h) {
   // (in the river itself, not on its banks: a dry bank, a trail or a road under a high deck keeps its natural level)
   const inRiver = () => (dug ??= !!(r.digBlocks || r.dig) && digAt(r, x, z) > 0.5);
   for (const { deck, a, b } of list) {
-    if (a[5] || b[5]) continue;
+    if (a[5] || b[5] || a[8] || b[8]) {
+      // (Lamp) under an overpass's open span, off the road passing under it (deck.keep, terrain.js roadsKept), they go
+      // down under the concrete slope paving river.js lays there: its own street's pavement, a median's or a bank's lawn,
+      // not stood across the road under it (a little only, so any edge of theirs the paving doesn't reach just dips)
+      if (deck.keep && overpassBuries(deck, a, b, x, z, h)) return h - OVERPASS_DROP;
+      continue;
+    }
     const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez;
     const t = ((x - a[0]) * ex + (z - a[1]) * ez) / l2;
     if (t < -0.2 || t > 1.2) continue;
@@ -510,6 +517,19 @@ function deckLayer(r, x, z, h) {
     return h + deckLayerLift(lift);
   }
   return beside && inRiver() ? h - BURY : h;
+}
+export function overpassBuries(deck, a, b, x, z, h) {
+  const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez;
+  const t = ((x - a[0]) * ex + (z - a[1]) * ez) / l2;
+  if (t < 0 || t > 1) return false;
+  if (Math.hypot(x - a[0] - ex * t, z - a[1] - ez * t) > deck.half) return false;
+  if (a[3] + (b[3] - a[3]) * t - h < 2) return false;
+  for (const [ax, az, bx, bz, reach] of deck.keep) {
+    const fx = bx - ax, fz = bz - az, m2 = fx * fx + fz * fz || 1;
+    const u = Math.min(1, Math.max(0, ((x - ax) * fx + (z - az) * fz) / m2));
+    if (Math.hypot(x - ax - fx * u, z - az - fz * u) <= reach) return false;
+  }
+  return true;
 }
 function deckLift(g, x, z) {
   const r = g.river;
@@ -542,5 +562,5 @@ export function drapeLayer(g, layer, tolerance) {
 
 // What the cutting depends on, as text, so a change to any of it makes the saved ground layers again (terrain.js)
 export const CORE_SOURCE = [baseHeight, digCell, digAt, levelAt, onDeck, riverbedOf, groundOf, tessellateLayer, drapeLayer,
-  leafOf, onPlane, coreHeight, cutToGround, deckLayerLift, deckLayer, deckLift, indexLayer]
+  leafOf, onPlane, coreHeight, cutToGround, deckLayerLift, deckLayer, overpassBuries, deckLift, indexLayer]
   .map((f) => f.toString()).join('\n');

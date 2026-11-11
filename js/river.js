@@ -3,6 +3,7 @@ import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometr
 import { Fn, attribute, color, float, mix, smoothstep, positionWorld, vertexColor, mx_noise_float, mx_worley_noise_float } from 'three/tsl';
 import { nearDrop } from './cascades.js';
 import { riverbedHeight, riverDepth, waterLevel, bridgeDecks } from './terrain.js';
+import { overpassBuries } from './ground-core.js';
 
 // The Huron River and its ponds sunk into their banks (terrain.js digs the bed from data/river.bin.gz): grassy banks
 // sloping down through mud to the silt of the bed, the water lying flat at the river's level over it, and the bridges
@@ -243,6 +244,7 @@ function buildBridges(group) {
   const fb = { planks: [], beams: [], rails: [], concrete: [] }; // the footbridges' smooth parts (footbridge())
   // the streets' bridges' parts (streetBridge): concrete, the road's asphalt, steel railings and lamp posts, lamps' glass
   const street = { concrete, asphalt: [], steel, glass: [] };
+  const overpasses = { n: 0, tris: 0 }; // (Lamp: the freeways' grade separations among them, for the log)
 
   for (const d of decks) {
     const P = d.points;
@@ -321,7 +323,9 @@ function buildBridges(group) {
       i = j;
     }
     if (d.kind === 0) {
+      const before = concrete.length + street.asphalt.length + steel.length;
       streetBridge(d, P, T, street);
+      if (d.overpass) { overpasses.n++; overpasses.tris += (concrete.length + street.asphalt.length + steel.length - before) / 9; }
       continue;
     }
     // a level deck over a road (terrain.js): a concrete abutment at each end, from the ground up to the deck
@@ -369,6 +373,7 @@ function buildBridges(group) {
     }
   }
 
+  if (overpasses.n) console.log(`[river] ${overpasses.n} freeway overpasses: ${Math.round(overpasses.tris / 1000)}k triangles in the bridges' merged meshes`);
   const mat = (color, rough, metal = 0) => new THREE.MeshStandardNodeMaterial({ color, roughness: rough, metalness: metal, side: THREE.DoubleSide });
   // the lamps' glass lit softly (their light is the streetlights' own, lighting.js; this is only the glow of the globe)
   const glass = new THREE.MeshStandardNodeMaterial({ color: 0xfff1d6, emissive: 0xffd9a0, emissiveIntensity: 0.9, roughness: 0.3 });
@@ -386,7 +391,8 @@ function buildBridges(group) {
     }
     for (const t of tiles.values()) {
       const mesh = meshOf(t, m, name);
-      mesh.castShadow = true;
+      // (Lamp: a street bridge's road doesn't cast its own shadow, which banded it: the deck under it casts the bridge's)
+      mesh.castShadow = name !== 'BridgeRoad';
       group.add(mesh);
     }
   }
@@ -468,15 +474,31 @@ function streetBridge(d, P, T, out) {
   const open = P.map((p, i) => water[i] || p[5] || p[6] || bottom[i] - G[i] > OPEN_AIR);
   const fill = P.map((p, i) => !open[i] && lift[i] > 0.15);
 
+  // (Lamp) a side with no sidewalk (a freeway's, or where the map has none: d.sw, 2 its left, 1 its right) has its road
+  // run out to the parapet, a barrier standing on it
+  const walk = { 1: !!((d.sw ?? 3) & 2), [-1]: !!((d.sw ?? 3) & 1) };
+  const edgeOf = (s) => (walk[s] ? curb : hw - 0.35);
   // the road's surface where it stands over the ground (where it lies on it, the street's own layer is the road)
   for (let i = 0; i + 1 < n; i++) {
     if (Math.max(lift[i], lift[i + 1]) <= 0.1) continue;
-    quad(out.asphalt, at(i, curb, 0), at(i, -curb, 0), at(i + 1, -curb, 0), at(i + 1, curb, 0));
+    quad(out.asphalt, at(i, edgeOf(1), 0), at(i, -edgeOf(-1), 0), at(i + 1, -edgeOf(-1), 0), at(i + 1, edgeOf(1), 0));
   }
-  along(out.concrete, curb, 0.0, curb, 0.2);                 // the curbs
-  along(out.concrete, curb, 0.2, hw - 0.35, 0.2);            // the sidewalks
-  along(out.concrete, hw - 0.35, 0.2, hw - 0.35, 0.9);       // the parapets, inside
-  along(out.concrete, hw - 0.35, 0.9, hw, 0.9);              // their coping
+  for (const s of [1, -1]) {
+    const one = (o0, y0, o1, y1) => {
+      for (let i = 0; i < n - 1; i++) quad(out.concrete, at(i, o0 * s, y0), at(i, o1 * s, y1), at(i + 1, o1 * s, y1), at(i + 1, o0 * s, y0));
+    };
+    if (walk[s]) {
+      one(curb, 0.0, curb, 0.2);                 // the curb
+      one(curb, 0.2, hw - 0.35, 0.2);            // the sidewalk
+      one(hw - 0.35, 0.2, hw - 0.35, 0.9);       // the parapet, inside
+    } else {
+      // a barrier's sloped face off the road (a New Jersey shape), up to its top
+      one(hw - 0.35, 0.0, hw - 0.3, 0.08);
+      one(hw - 0.3, 0.08, hw - 0.2, 0.33);
+      one(hw - 0.2, 0.33, hw - 0.12, 0.9);
+    }
+  }
+  along(out.concrete, hw - 0.35, 0.9, hw, 0.9);              // the coping
   // the deck's faces from the parapets' tops down to its underside, and the underside, where it stands clear of the
   // ground (a fascia over open air; on fill the retaining walls carry the faces on down)
   for (let i = 0; i + 1 < n; i++) {
@@ -560,6 +582,33 @@ function streetBridge(d, P, T, out) {
       const cols = Math.max(2, Math.round((hw * 2) / 6.5)), reach = hw - 1.6;
       for (let k = 0; k < cols; k++) column(out.concrete, i, -reach + (2 * reach * k) / (cols - 1), 0.42, G[i] - 0.4, top - 0.6);
       box(out.concrete, i, hw * 2 - 0.8, 1.1, top - 0.65, top);
+    }
+  }
+
+  // (Lamp) under an overpass's open span, off the road passing under it, the town's ground layers go down out of sight
+  // (ground-core.js overpassBuries): concrete slope paving follows the ground there instead, from the road's edge up the
+  // banks to the abutments, in cells about 2 m square
+  if (d.overpass) {
+    for (let i = 0; i + 1 < n; i++) {
+      const A = d.points[i], B = d.points[i + 1];
+      if (!(A[5] || B[5] || A[8] || B[8])) continue;
+      const along = Math.max(1, Math.ceil((B[2] - A[2]) / 2)), across = Math.max(2, Math.ceil((hw * 2) / 2));
+      const pt = (f, g) => {
+        const x = A[0] + (B[0] - A[0]) * f - (T[i][1] + (T[i + 1][1] - T[i][1]) * f) * (-hw + 2 * hw * g);
+        const z = A[1] + (B[1] - A[1]) * f + (T[i][0] + (T[i + 1][0] - T[i][0]) * f) * (-hw + 2 * hw * g);
+        // (over the layers where they go down, under them where they stay: the road under it keeps its edge)
+        const gy = riverbedHeight(x, z);
+        return [x, gy + (overpassBuries(d, A, B, x, z, gy) ? 0.05 : -0.08), z];
+      };
+      for (let u = 0; u < along; u++) {
+        for (let v = 0; v < across; v++) {
+          // (any of the cell the layers go down under: its middle or a corner)
+          const corners = [pt((u + 0.5) / along, (v + 0.5) / across), pt(u / along, v / across), pt((u + 1) / along, v / across),
+            pt(u / along, (v + 1) / across), pt((u + 1) / along, (v + 1) / across)];
+          if (!corners.some((c) => c[1] > riverbedHeight(c[0], c[2]))) continue;
+          quad(out.concrete, pt(u / along, v / across), pt(u / along, (v + 1) / across), pt((u + 1) / along, (v + 1) / across), pt((u + 1) / along, v / across));
+        }
+      }
     }
   }
 
