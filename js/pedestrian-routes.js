@@ -27,6 +27,8 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt, trails = null
     if (sidewalks.has(e)) return sidewalks.get(e);
     const result = [];
     sidewalks.set(e, result);
+    // (Lamp: none along a freeway or its ramps, which have no sidewalks: road-network.js `freeway`)
+    if (e.freeway) return result;
     // Two walking lines on each side leave room for people to pass or stop together.
     for (const sign of [-1, 1]) {
       for (const inset of [1.7, 2.8]) {
@@ -34,7 +36,8 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt, trails = null
         const a = { x: e.sx + e.rx * off, z: e.sz + e.rz * off };
         const b = { x: a.x + e.dx * e.len, z: a.z + e.dz * e.len };
         const block = blockAt(a.x, a.z);
-        if (!block || blockAt(b.x, b.z) !== block) continue;
+        // (no walking along a road's median: it's crossed at a crosswalk, not walked)
+        if (!block || block.median || blockAt(b.x, b.z) !== block) continue;
         if (!e.general && (!onSidewalk(a.x, a.z) || !onSidewalk(b.x, b.z))) continue;
         const points = clear(a, b, block) ? [a, b] : detour(a, b, block);
         for (let i = 1, previous = null; i < points.length; i++) {
@@ -77,6 +80,7 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt, trails = null
     for (const arm of n.arms || []) {
       if (arm.side < 4 || arm.lead !== arm || n.arms.some((b) => b !== arm && b.lead === arm)) continue;
       const road = arm.in || arm.out;
+      if (road?.freeway) continue; // (Lamp: no crosswalk over a freeway's carriageway or ramp)
       if (!road || road.clx === undefined) continue;
       // how far out along the arm its stop lines are: the crosswalk lies just inside the nearer
       let back = Infinity;

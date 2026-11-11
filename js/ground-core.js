@@ -61,23 +61,31 @@ export const bucketKey = (bx, bz) => bx * 100003 + bz;
 export function onDeck(r, x, z, h, overRoads = false) {
   const list = r.buckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
   if (!list) return h;
-  for (const { deck, a, b } of list) {
-    // (over a road it crosses, the deck isn't the ground: the road runs on under it, terrain.js roadsUnder)
-    // (Lamp: nor where an overpass stands in open air over the ground, its median and shoulders: [8])
-    if (!overRoads && (a[5] || b[5] || a[8] || b[8])) continue;
+  // (Lamp) the piece of deck (x, z) lies along, before one it's only just past the end of (a fifth of a piece either
+  // way, so nothing falls through between pieces turning a corner): taking the first within that reach, a point just
+  // past a joint read the piece before's end height, and the ride went up the deck in 4 m stairs
+  let best = null, bestOver = Infinity, bestU = 0, under = false;
+  for (const seg of list) {
+    const { deck, a, b } = seg;
     const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez;
     const t = ((x - a[0]) * ex + (z - a[1]) * ez) / l2;
     if (t < -0.2 || t > 1.2) continue;
     const u = Math.min(1, Math.max(0, t));
     if (Math.hypot(x - a[0] - ex * u, z - a[1] - ez * u) > deck.half) continue;
-    const s = a[2] + (b[2] - a[2]) * u, top = a[3] + (b[3] - a[3]) * u;
-    const w = Math.min(1, Math.min(s, deck.length - s) / 8);
-    const eased = h + (top - h) * w;
-    if (deck.kind !== 0 || w >= 1) return eased;
-    const end = s < deck.length - s ? deck.points[0] : deck.points[deck.points.length - 1];
-    return Math.max(eased, top - (1 - w) * Math.max(0, end[3] - end[7]));
+    const over = t < 0 ? -t : t > 1 ? t - 1 : 0;
+    // (over a road it crosses, the deck isn't the ground: the road runs on under it, terrain.js roadsUnder)
+    // (Lamp: nor where an overpass stands in open air over the ground, its median and shoulders: [8])
+    if (!overRoads && (a[5] || b[5] || a[8] || b[8])) { if (over === 0) under = true; continue; }
+    if (over < bestOver) { best = seg; bestOver = over; bestU = u; if (over === 0) break; }
   }
-  return h;
+  if (!best || (under && bestOver > 0)) return h;
+  const { deck, a, b } = best, u = bestU;
+  const s = a[2] + (b[2] - a[2]) * u, top = a[3] + (b[3] - a[3]) * u;
+  const w = Math.min(1, Math.min(s, deck.length - s) / 8);
+  const eased = h + (top - h) * w;
+  if (deck.kind !== 0 || w >= 1) return eased;
+  const end = s < deck.length - s ? deck.points[0] : deck.points[deck.points.length - 1];
+  return Math.max(eased, top - (1 - w) * Math.max(0, end[3] - end[7]));
 }
 
 // The ground at (x, z) under any bridge: the river's banks and bed where it's dug out

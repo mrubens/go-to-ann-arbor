@@ -131,16 +131,34 @@ const SHARROW = [...BICYCLE,
 // points), and where a strip from (ax, az) to (bx, bz) runs along one up off the ground: its top there, or null. The
 // road on an overpass is painted on its deck (not laid on the ground under it, across the road below), and the road
 // under it runs on painted under it
+// (in 50 m cells: { cells, near(ax, az, bx, bz) whether a strip's box meets any }, so the rest of the town's paint
+// costs nothing)
+const DECK_CELL = 50;
 function overpassPieces() {
-  const out = [];
+  const cells = new Map();
   for (const deck of bridgeDecks()) {
     if (!deck.overpass) continue;
-    for (let i = 0; i + 1 < deck.points.length; i++) out.push([deck, deck.points[i], deck.points[i + 1]]);
+    for (let i = 0; i + 1 < deck.points.length; i++) {
+      const piece = [deck, deck.points[i], deck.points[i + 1]], [, a, b] = piece, r = deck.half;
+      for (let cx = Math.floor((Math.min(a[0], b[0]) - r) / DECK_CELL); cx <= Math.floor((Math.max(a[0], b[0]) + r) / DECK_CELL); cx++) {
+        for (let cz = Math.floor((Math.min(a[1], b[1]) - r) / DECK_CELL); cz <= Math.floor((Math.max(a[1], b[1]) + r) / DECK_CELL); cz++) {
+          const k = cx * 65536 + cz;
+          if (!cells.has(k)) cells.set(k, []);
+          cells.get(k).push(piece);
+        }
+      }
+    }
   }
-  return out;
+  const near = (ax, az, bx, bz) => {
+    for (let cx = Math.floor(Math.min(ax, bx) / DECK_CELL); cx <= Math.floor(Math.max(ax, bx) / DECK_CELL); cx++) {
+      for (let cz = Math.floor(Math.min(az, bz) / DECK_CELL); cz <= Math.floor(Math.max(az, bz) / DECK_CELL); cz++) if (cells.has(cx * 65536 + cz)) return true;
+    }
+    return false;
+  };
+  return { cells, near, size: cells.size };
 }
-function deckUnder(pieces, x, z, dx, dz) {
-  for (const [deck, a, b] of pieces) {
+function deckUnder(decks, x, z, dx, dz) {
+  for (const [deck, a, b] of decks.cells.get(Math.floor(x / DECK_CELL) * 65536 + Math.floor(z / DECK_CELL)) || []) {
     const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez || 1;
     const t = ((x - a[0]) * ex + (z - a[1]) * ez) / l2;
     if (t < 0 || t > 1) continue;
@@ -159,19 +177,14 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
   const lines = [];
   const bends = new Map();
   // Lamp: the paint on the overpasses' decks, at their height (not laid on the ground: terrain.js setOnTerrain)
-  const decks = sharedBuilder ? [] : overpassPieces();
-  const deckBuilder = decks.length ? createRoadPaintChunkBuilder('RoadMarkingsOnDecks') : null;
-  let dx0 = Infinity, dx1 = -Infinity, dz0 = Infinity, dz1 = -Infinity;
-  for (const [deck, a] of decks) {
-    dx0 = Math.min(dx0, a[0] - deck.half); dx1 = Math.max(dx1, a[0] + deck.half);
-    dz0 = Math.min(dz0, a[1] - deck.half); dz1 = Math.max(dz1, a[1] + deck.half);
-  }
+  const decks = sharedBuilder ? null : overpassPieces();
+  const deckBuilder = decks?.size ? createRoadPaintChunkBuilder('RoadMarkingsOnDecks') : null;
   const DECK_STEP = 2;
 
   // Flat strip w wide from a to b, with a dash pattern (period, duty cycle) running along it
   function strip(ax, az, bx, bz, w, col, period = 1, duty = 1, phase = 0, flow = 1) {
     // (Lamp) where it runs along an overpass up off the ground, in short pieces on its deck
-    if (deckBuilder && Math.max(ax, bx) > dx0 && Math.min(ax, bx) < dx1 && Math.max(az, bz) > dz0 && Math.min(az, bz) < dz1) {
+    if (deckBuilder && decks.near(ax, az, bx, bz)) {
       const len = Math.hypot(bx - ax, bz - az);
       if (len > 0.05) {
         const ux = (bx - ax) / len, uz = (bz - az) / len, n = Math.max(1, Math.ceil(len / DECK_STEP));
@@ -528,7 +541,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
         const oa = (ax - f.sx) * f.rx + (az - f.sz) * f.rz, ob = (bx - f.sx) * f.rx + (bz - f.sz) * f.rz;
         if (clip(sa, sb, -2, f.len + 2) && clip(oa, ob, mid - half, mid + half)) {
           const tm = (t0 + t1) / 2, cx = ax + (bx - ax) * tm, cz = az + (bz - az) * tm;
-          if (decks.length && deckUnder(decks, cx, cz) !== null) continue;
+          if (deckBuilder && deckUnder(decks, cx, cz) !== null) continue;
           out.push([t0, t1]);
         }
       }

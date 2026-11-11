@@ -1686,6 +1686,18 @@ function buildCityGrid(scene, yards = null) {
     geo.dispose();
     return out;
   };
+  // Lamp: whether any edge of a block runs along a freeway
+  const touchesFreeway = (b) => {
+    const P = b.poly, n = P.length;
+    let area = 0;
+    for (let i = 0; i < n; i++) { const p = P[i], q = P[(i + 1) % n]; area += p.x * q.z - q.x * p.z; }
+    const sgn = area > 0 ? 1 : -1;
+    for (let i = 0; i < n; i++) {
+      const p = P[i], q = P[(i + 1) % n], L = Math.hypot(q.x - p.x, q.z - p.z);
+      if (L >= 0.01 && facesFreeway(p, q, -(q.z - p.z) / L * sgn, (q.x - p.x) / L * sgn)) return true;
+    }
+    return false;
+  };
   // Lamp: a block's curb as its faces and top, edge by edge, leaving out the edges along a freeway; null for a block
   // with none along one (extruded whole, as before)
   const curbAlong = (b) => {
@@ -1731,11 +1743,14 @@ function buildCityGrid(scene, yards = null) {
     } else {
       // curb (granite) ring under a sidewalk slab inset by 0.25 m, like the instanced pair below (Lamp: along a freeway,
       // none: its face and top left out there, curbAlong)
-      const curbFaces = b.lawn && b.area > 400 ? curbAlong(b) : null;
+      // (Lamp: and a small lawn by a freeway too, a sliver between a ramp and its carriageway: no curb or sidewalk
+      // along the freeway, the lawn running to the shoulder)
+      const byFreeway = b.lawn && b.area <= 400 && touchesFreeway(b);
+      const curbFaces = b.lawn && (b.area > 400 || byFreeway) ? curbAlong(b) : null;
       if (curbFaces) curbGeos.push(curbFaces);
       else curbGeos.push(withoutBottom(createExtrudedPolygonMesh(b.poly, 0.0, LIFT.curb, curbMat).geometry));
       const inner = offsetPolygonInward(b.poly, 0.25);
-      if (b.lawn && b.area > 400 && ringSlab(b)) { /* only its sidewalk ring */ }
+      if (b.lawn && (b.area > 400 || byFreeway) && ringSlab(b)) { /* only its sidewalk ring */ }
       else if (inner) slabGeos.push(withoutBottom(createExtrudedPolygonMesh(inner, 0.03, SW_TOP - 0.03, sidewalkMat).geometry));
       // rect cover for the consumers that work on rectangles: the lot rects grown back out to the curb
       for (const [x0, x1, z0, z1] of b.rects) {
@@ -1963,6 +1978,13 @@ function buildCityGrid(scene, yards = null) {
   };
   // the lawn down the river's banks (river.js), drawn whole
   if (bankLawn.length) {
+    // (Lamp: each triangle turned to face up, whichever way its block's outline runs: along a freeway some were laid
+    // face down, unseen, and the town's road deck showed through as a grey strip like a sidewalk)
+    for (let i = 0; i + 8 < bankLawn.length; i += 9) {
+      const ax = bankLawn[i + 3] - bankLawn[i], az = bankLawn[i + 5] - bankLawn[i + 2];
+      const bx = bankLawn[i + 6] - bankLawn[i], bz = bankLawn[i + 8] - bankLawn[i + 2];
+      if (az * bx - ax * bz < 0) for (let k = 0; k < 3; k++) [bankLawn[i + 3 + k], bankLawn[i + 6 + k]] = [bankLawn[i + 6 + k], bankLawn[i + 3 + k]];
+    }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(bankLawn, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(bankLawn.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));

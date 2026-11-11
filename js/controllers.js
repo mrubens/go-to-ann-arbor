@@ -5,6 +5,7 @@ import {
   BIG_PARK_BOUNDS,
   getTownBoundsAtZ,
   inTown,
+  freewayAt,
   isTypingInField,
   blockAt,
   streetZ
@@ -1906,13 +1907,17 @@ class ThirdPersonControllerManager {
     const mode = entity?.type || this.activeMode;
     const heli = mode === 'helicopter';
     const m = heli ? 6000 : 0;
-    pos.x = Math.max(TOWN_BOUNDS.minX - m, Math.min(TOWN_BOUNDS.maxX + m, pos.x));
-    pos.z = Math.max(TOWN_BOUNDS.minZ + (heli ? -6000 : 30), Math.min(TOWN_BOUNDS.maxZ + (heli ? m : 800), pos.z)); // (the airport's south of the edge)
+    // (Lamp: a freeway runs on past the town's box, out to the end of its ways in the map's data: inTown has its lanes)
+    const freeway = !heli && freewayAt(pos.x, pos.z, 4);
+    if (!freeway) {
+      pos.x = Math.max(TOWN_BOUNDS.minX - m, Math.min(TOWN_BOUNDS.maxX + m, pos.x));
+      pos.z = Math.max(TOWN_BOUNDS.minZ + (heli ? -6000 : 30), Math.min(TOWN_BOUNDS.maxZ + (heli ? m : 800), pos.z)); // (the airport's south of the edge)
+    }
     // inside Ann Arbor Municipal's fence (airport.js), past the town's edge: that's walked and driven on too
     const field = !heli && onAirfield(pos.x, pos.z);
     if (field) { const kept = (this._lastInTown ??= new Map()), key = entity || this.activeMode, last = kept.get(key); if (last) { last.x = pos.x; last.z = pos.z; } else kept.set(key, { x: pos.x, z: pos.z }); }
     if (!heli && getTownBoundsAtZ && !field) {
-      const shore = getTownBoundsAtZ(pos.z);
+      const shore = freeway ? { westX: -Infinity, eastX: Infinity } : getTownBoundsAtZ(pos.z);
       const minShoreX = shore.westX + 8.0;
       const maxShoreX = shore.eastX - 8.0;
       if (pos.x < minShoreX) {

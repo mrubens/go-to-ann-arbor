@@ -60,6 +60,7 @@ async function readHeights(url) {
     // the bridges' decks once the city's fine ground is in, so each meets the street it carries where it really is
     if (g.river) {
       buildDecks(g, g.river);
+      sideBySide(g.river.bridges);
       console.log(`[terrain] ${g.river.bridges.length} bridges`);
       if (g.river.overpassLog) console.log(`[terrain] ${g.river.overpassLog.length} freeway overpasses: ${g.river.overpassLog.join('; ')}`);
     }
@@ -243,11 +244,12 @@ function buildDecks(g, r) {
     return { kind: b[0], w: b[1], pts };
   }).filter((b) => b.pts.length >= 2);
   // Lamp: and the freeways' grade separations (overpass-data.js), each a street's bridge over the road under it
+  // (lowest layer first: a ramp's bridge on layer 2 clears US-23's on layer 1 over M-14, below)
   const overpasses = OVERPASSES.map((o) => {
     const pts = [];
     for (let i = 0; i + 1 < o.pts.length; i += 2) pts.push([o.pts[i], o.pts[i + 1]]);
     return { kind: 0, w: o.w, pts, overpass: o };
-  });
+  }).sort((a, b) => (a.overpass.layer || 1) - (b.overpass.layer || 1));
   const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 1.5;
   for (let joined = true; joined;) {
     joined = false;
@@ -264,8 +266,10 @@ function buildDecks(g, r) {
   }
   // the ground the decks meet: the city's fine mesh where it's read (the streets as they're drawn), else the 10 m heights
   const gh = (x, z) => (g.core && inCore(g.core, x, z) ? coreHeight(g.core, x, z) : baseHeight(g, x, z));
+  // (Lamp: an overpass's ground is the top of any deck already built under it, so it clears that deck as it would a road)
+  const under = (x, z) => { const h = gh(x, z); return Math.max(h, onDeck(r, x, z, h, true)); };
   for (const b of [...list, ...overpasses]) {
-    let made = b.kind === 0 ? streetDeck(g, r, b, gh) : otherDeck(g, r, b, gh);
+    let made = b.kind === 0 ? streetDeck(g, r, b, b.overpass ? under : gh) : otherDeck(g, r, b, gh);
     // Lamp: a footbridge whose deck crosses the Border to Border Trail too low to pass under (under 3.2 m) ends at the
     // trail's edge instead, its longer part kept (the span over the water): at Broadway the two footbridges' ramps
     // stood across the trail under the arches, a wall the rider was thrown off against
@@ -297,6 +301,46 @@ function buildDecks(g, r) {
           if (!into.has(key)) into.set(key, []);
           into.get(key).push(seg);
         }
+      }
+    }
+  }
+}
+
+// Street decks side by side (Lamp): a divided road's two carriageways on bridges of their own, or a ramp's bridge beside
+// its street's, so close their parapets stood in each other's lanes (M-14's at Barton Dr and over Huron River Dr, 9 m
+// apart). Where another deck at its level lies within reach to one side, that side's parapet is left out (river.js), the
+// two decks one road there: [side, from, to] added to deck.gaps
+function sideBySide(decks) {
+  const streets = decks.filter((d) => d.kind === 0);
+  const box = (d) => {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const p of d.points) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+    return [x0 - d.half, x1 + d.half, z0 - d.half, z1 + d.half];
+  };
+  const boxes = streets.map(box);
+  for (let i = 0; i < streets.length; i++) {
+    const A = streets[i], P = A.points;
+    for (let j = 0; j < streets.length; j++) {
+      if (i === j) continue;
+      const a = boxes[i], b = boxes[j];
+      if (a[1] < b[0] || b[1] < a[0] || a[3] < b[2] || b[3] < a[2]) continue;
+      const B = streets[j], Q = B.points;
+      for (let k = 0; k < P.length; k++) {
+        const k2 = Math.min(P.length - 1, k + 1), k0 = Math.max(0, k - 1);
+        const tl = Math.hypot(P[k2][0] - P[k0][0], P[k2][1] - P[k0][1]) || 1, tx = (P[k2][0] - P[k0][0]) / tl, tz = (P[k2][1] - P[k0][1]) / tl;
+        // the nearest of B's line to this point, and whether it lies beside it (across, not along) at its level
+        let best = null, bd = Infinity;
+        for (let m = 0; m + 1 < Q.length; m++) {
+          const ex = Q[m + 1][0] - Q[m][0], ez = Q[m + 1][1] - Q[m][1], l2 = ex * ex + ez * ez || 1;
+          const u = ((P[k][0] - Q[m][0]) * ex + (P[k][1] - Q[m][1]) * ez) / l2;
+          if (u < 0 || u > 1) continue;
+          const qx = Q[m][0] + ex * u, qz = Q[m][1] + ez * u, d = Math.hypot(P[k][0] - qx, P[k][1] - qz);
+          if (d < bd) { bd = d; best = [qx, qz, Q[m][3] + (Q[m + 1][3] - Q[m][3]) * u]; }
+        }
+        if (!best || bd > A.half + B.half + 1 || Math.abs(best[2] - P[k][3]) > 1.2) continue;
+        const left = (best[0] - P[k][0]) * -tz + (best[1] - P[k][1]) * tx;
+        if (Math.abs(left) < bd * 0.7) continue; // (ahead or behind it, not beside)
+        (A.gaps ??= []).push([Math.sign(left), P[k][2] - 2.5, P[k][2] + 2.5]);
       }
     }
   }
@@ -350,13 +394,15 @@ function streetOf(pts) {
 
 // The line of a street carried on from a bridge's end `end` (heading away along `dir`) for `meters`, along the same
 // street's ways in GEO.roads: the points past the end, in order outward
-function streetOnward(name, end, dir, meters) {
+function streetOnward(name, end, dir, meters, anyName = false) {
   const out = [];
   let at = end, d = dir, left = meters;
   for (let hop = 0; hop < 12 && left > 0.5; hop++) {
     let next = null;
-    for (const road of GEO.roads || []) {
-      if (road[0] !== name) continue;
+    // (Lamp: an overpass's road carried on under another name where its own ends, straight on: US-23's northbound
+    // carriageway north of Washtenaw, which the map names I-94 BL there)
+    for (const pass of anyName ? [0, 1] : [0]) for (const road of next ? [] : GEO.roads || []) {
+      if (pass === 0 ? road[0] !== name : road[0] === name) continue;
       const p = road[road.length - 1];
       if (!Array.isArray(p) || p.length < 4) continue;
       const n = p.length / 2;
@@ -366,7 +412,7 @@ function streetOnward(name, end, dir, meters) {
         const u = Math.max(0, Math.min(1, ((at[0] - ax) * ex + (at[1] - az) * ez) / (l * l)));
         if (Math.hypot(at[0] - ax - ex * u, at[1] - az - ez * u) > 1.5) continue;
         const along = (ex * d[0] + ez * d[1]) / l;
-        if (Math.abs(along) < 0.7) continue;
+        if (Math.abs(along) < (pass ? 0.95 : 0.7)) continue;
         const line = [];
         if (along > 0) { for (let q = k + 1; q < n; q++) line.push([p[q * 2], p[q * 2 + 1]]); }
         else { for (let q = k; q >= 0; q--) line.push([p[q * 2], p[q * 2 + 1]]); }
@@ -442,8 +488,36 @@ function streetDeck(g, r, b, gh) {
       for (let j = 0; j < need.length; j++) top = Math.max(top, need[j] - GRADE * Math.abs(L[i] - L[j]));
       return top;
     });
-    // its crest rounded (raised only, so nothing it clears comes nearer)
-    for (let pass = 0; pass < 4; pass++) {
+    // (Lamp) an overpass never sags between what it clears (over a freeway's median between its carriageways it dipped
+    // 1.2 m at 6% and back, a bump at speed): each point at least the lower of the highest on either side of it
+    if (b.overpass) {
+      const left = [], right = [];
+      for (let i = 0, m = -Infinity; i < H.length; i++) left.push(m = Math.max(m, H[i]));
+      for (let i = H.length - 1, m = -Infinity; i >= 0; i--) right[i] = m = Math.max(m, H[i]);
+      for (let i = 0; i < H.length; i++) H[i] = Math.max(H[i], Math.min(left[i], right[i]));
+    }
+    // (Lamp) an overpass's crest rounded over a highway's vertical curve, some 50 m long, not a kink a car leaves the
+    // road over (raising only can't round a peak): smoothed through, then lifted as a whole as far as the smoothing
+    // brought it under what it must clear, never under the ground
+    if (b.overpass) {
+      const smooth = (A, passes) => {
+        for (let pass = 0; pass < passes; pass++) A = A.map((h, i) => (i === 0 || i === A.length - 1 ? h : (A[i - 1] + h + A[i + 1]) / 3));
+        return A;
+      };
+      const critical = H.map((_, i) => overRoad[i] || overRail[i] || wet[i]);
+      let Hs = smooth(H, 24);
+      // (what the smoothing took off the crest put back as a smooth rise of its own, round where it's needed)
+      for (let round = 0; round < 30; round++) {
+        const short = H.map((h, i) => (critical[i] ? Math.max(0, h - Hs[i]) : 0));
+        if (Math.max(...short) < 0.01) break;
+        const add = smooth(short.map((v) => v * 2), 24);
+        Hs = Hs.map((h, i) => h + add[i]);
+      }
+      for (let i = 0; i < H.length; i++) H[i] = Math.max(Hs[i], G[i]);
+    }
+    // its crest rounded (raised only, so nothing it clears comes nearer) (Lamp: an overpass's sags too, where its
+    // approaches meet the ground)
+    for (let pass = 0; pass < (b.overpass ? 16 : 4); pass++) {
       for (let i = 1; i + 1 < H.length; i++) H[i] = Math.max(H[i], (H[i - 1] + H[i] + H[i + 1]) / 3);
     }
     return { S, L, s, wet, overRoad, overRail, G, H };
@@ -466,7 +540,7 @@ function streetDeck(g, r, b, gh) {
     for (const [lift, atStart] of [[lift0, true], [lift1, false]]) {
       if (lift <= 0.5) continue;
       const e = atStart ? pts[0] : pts.at(-1), f = atStart ? pts[1] : pts.at(-2), l = Math.hypot(e[0] - f[0], e[1] - f[1]) || 1;
-      const more = streetOnward(name, e, [(e[0] - f[0]) / l, (e[1] - f[1]) / l], Math.min(longest, lift / GRADE + 24));
+      const more = streetOnward(name, e, [(e[0] - f[0]) / l, (e[1] - f[1]) / l], Math.min(longest, lift / GRADE + 24), !!b.overpass);
       if (!more.length) continue;
       pts = atStart ? more.reverse().concat(pts) : pts.concat(more);
       grew = true;
@@ -502,15 +576,124 @@ function streetDeck(g, r, b, gh) {
   // stands in open air (its underside 2.2 m over the ground: river.js OPEN_AIR) it isn't the ground under it either
   // (onDeck: the median and shoulders under a street's bridge stay on the ground, as the lanes do)
   const o = b.overpass;
-  const half = o ? b.w / 2 + (o.fw ? 0.6 : 1.5) : b.w / 2 + 1.5;
+  // (Lamp) a freeway's deck as wide as its road along it: an overpass carried on along the road past the bridge's own
+  // way, or a river bridge, met wider lanes there (M-14's 3 lanes onto a 2-lane bridge way) and its parapets stood in them
+  const fw = o ? !!o.fw : (GEO.roads || []).some((r) => r[0] === name && r[4]);
+  const w = fw ? Math.max(b.w, widthAlong(S, name)) : b.w;
+  const half = o ? w / 2 + (o.fw ? 0.6 : 1.5) : w / 2 + 1.5;
   const flip = o && S.length > 1 && o.pts.length >= 4 && (S[1][0] - S[0][0]) * (o.pts[2] - o.pts[0]) + (S[1][1] - S[0][1]) * (o.pts[3] - o.pts[1]) < 0;
   const sw = !o ? 3 : flip ? ((o.sw & 1) << 1) | ((o.sw & 2) >> 1) : o.sw;
-  const deck = { kind: 0, w: b.w, name, level: false, half, length: s, overpass: !!o, freeway: !!o?.fw, sw, over: o?.over || [],
-    keep: o ? roadsKept(S, o.over) : null,
+  const deck = { kind: 0, w, name, level: false, half, length: s, overpass: !!o, freeway: !!o?.fw, sw, over: o?.over || [],
+    keep: o ? roadsKept(S, o.over) : null, gaps: joinGaps(S, L, H, G, name, o?.over || [], half), crossers: roadsNear(S, name, half),
     // [x, z, along, top, over the water, not the ground (a road crosses under: onDeck), a railway under it, the ground,
     // (Lamp) open air under it (not the ground either)]
     points: S.map((p, i) => [p[0], p[1], L[i], H[i], wet[i], overRoad[i], overRail[i], G[i], !!o && !wet[i] && H[i] - G[i] > 3.15]) };
   return { S, deck };
+}
+
+// The road graph's other roads near a street deck's line S (Lamp), as pieces [ax, az, bx, bz, half width]: river.js
+// keeps its abutment seats and its bents' columns out of them (a ramp running by a bridge's end at the ground)
+function roadsNear(S, name, half) {
+  const RG = GEO.roadGraph;
+  if (!RG) return [];
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z] of S) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+  const N = RG.nodes, out = [], pad = half + 10;
+  for (const [a, b, ni, w, , , inner] of RG.links) {
+    if (RG.names[ni] === name) continue;
+    const pts = [N[a * 2], N[a * 2 + 1], ...inner, N[b * 2], N[b * 2 + 1]];
+    for (let k = 0; k + 3 < pts.length; k += 2) {
+      if (Math.max(pts[k], pts[k + 2]) < x0 - pad || Math.min(pts[k], pts[k + 2]) > x1 + pad) continue;
+      if (Math.max(pts[k + 1], pts[k + 3]) < z0 - pad || Math.min(pts[k + 1], pts[k + 3]) > z1 + pad) continue;
+      out.push([pts[k], pts[k + 1], pts[k + 2], pts[k + 3], w / 2]);
+    }
+  }
+  return out;
+}
+
+// The widest the street `name` is along a deck's line S (Lamp): GEO.roads' pieces of it running along the line within 2 m
+function widthAlong(S, name) {
+  // (Lamp: the road graph's links along it, whatever the map names them there: M-14 runs on as US-23;M-14)
+  const RG = GEO.roadGraph, N = RG?.nodes;
+  let best = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z] of S) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+  for (const [a, b, , w, , , inner] of RG?.links || []) {
+    const ax = N[a * 2], az = N[a * 2 + 1], bx = N[b * 2], bz = N[b * 2 + 1];
+    if (!inner.length && (Math.max(ax, bx) < x0 - 3 || Math.min(ax, bx) > x1 + 3 || Math.max(az, bz) < z0 - 3 || Math.min(az, bz) > z1 + 3)) continue;
+    const p = [ax, az, ...inner, bx, bz];
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      if (Math.max(p[i], p[i + 2]) < x0 - 3 || Math.min(p[i], p[i + 2]) > x1 + 3 || Math.max(p[i + 1], p[i + 3]) < z0 - 3 || Math.min(p[i + 1], p[i + 3]) > z1 + 3) continue;
+      const ex = p[i + 2] - p[i], ez = p[i + 3] - p[i + 1], l2 = ex * ex + ez * ez || 1;
+      if (S.some(([x, z], k) => {
+        const u = ((x - p[i]) * ex + (z - p[i + 1]) * ez) / l2;
+        if (u < 0 || u > 1 || Math.hypot(x - p[i] - ex * u, z - p[i + 1] - ez * u) > 2) return false;
+        const q = S[Math.min(S.length - 1, k + 1)], o = S[Math.max(0, k - 1)], tx = q[0] - o[0], tz = q[1] - o[1];
+        return Math.abs(tx * ex + tz * ez) / ((Math.hypot(tx, tz) || 1) * Math.sqrt(l2)) > 0.9; // (running along it)
+      })) best = Math.max(best, w);
+    }
+  }
+  return best;
+}
+
+// A road graph link's bounds [x0, x1, z0, z1], kept (Lamp)
+const LINK_BOXES = new WeakMap();
+function linkBox(RG, a, b, inner) {
+  let box = LINK_BOXES.get(inner);
+  if (!box) {
+    const N = RG.nodes;
+    box = [Math.min(N[a * 2], N[b * 2]), Math.max(N[a * 2], N[b * 2]), Math.min(N[a * 2 + 1], N[b * 2 + 1]), Math.max(N[a * 2 + 1], N[b * 2 + 1])];
+    for (let k = 0; k + 1 < inner.length; k += 2) {
+      box[0] = Math.min(box[0], inner[k]); box[1] = Math.max(box[1], inner[k]); box[2] = Math.min(box[2], inner[k + 1]); box[3] = Math.max(box[3], inner[k + 1]);
+    }
+    LINK_BOXES.set(inner, box);
+  }
+  return box;
+}
+
+// Where another road joins a street's deck at its level (Lamp): a ramp or a side street meeting it near an end, where
+// the deck was carried on along its street. Its parapet is left open there on that side, so the road runs on onto it
+// (Ann Arbor-Saline's ramps by I-94 ran into a wall): [[side (1 its left, -1 its right), from, to (metres along)]]
+function joinGaps(S, L, H, G, name, over, half) {
+  const RG = GEO.roadGraph;
+  if (!RG || S.length < 2) return [];
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z] of S) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+  const N = RG.nodes, gaps = [];
+  // (x, z) on the deck's line: [index of its piece, metres along, metres to its left], or null off it
+  const onLine = (x, z) => {
+    let best = null, bd = Infinity;
+    for (let i = 0; i + 1 < S.length; i++) {
+      const [ax, az] = S[i], ex = S[i + 1][0] - ax, ez = S[i + 1][1] - az, l = Math.hypot(ex, ez) || 1;
+      const u = ((x - ax) * ex + (z - az) * ez) / (l * l);
+      if (u < -0.01 || u > 1.01) continue;
+      const left = ((x - ax) * -ez + (z - az) * ex) / l; // (at(i, o) is (x - tz o, z + tx o): left of its way)
+      if (Math.abs(left) < bd) { bd = Math.abs(left); best = [i, L[i] + (L[i + 1] - L[i]) * Math.max(0, Math.min(1, u)), left]; }
+    }
+    return best;
+  };
+  for (const [a, b, ni, w, , , inner] of RG.links) {
+    const nm = RG.names[ni];
+    if (nm === name || over.includes(nm)) continue;
+    const box = linkBox(RG, a, b, inner);
+    if (box[1] < x0 - half || box[0] > x1 + half || box[3] < z0 - half || box[2] > z1 + half) continue;
+    const pts = [N[a * 2], N[a * 2 + 1], ...inner, N[b * 2], N[b * 2 + 1]];
+    // along the road in 1 m steps: where it passes from outside the deck to inside it, across one side
+    let prev = null;
+    for (let k = 0; k + 3 < pts.length; k += 2) {
+      const l = Math.hypot(pts[k + 2] - pts[k], pts[k + 3] - pts[k + 1]), n = Math.max(1, Math.ceil(l));
+      for (let q = 0; q <= n; q++) {
+        const x = pts[k] + (pts[k + 2] - pts[k]) * q / n, z = pts[k + 1] + (pts[k + 3] - pts[k + 1]) * q / n;
+        const at = onLine(x, z), inside = !!at && Math.abs(at[2]) <= half;
+        if (prev && inside !== prev.inside && (at || prev.at)) {
+          const [i, s, left] = inside ? at : prev.at;
+          // (at the deck's level there, not passing under it)
+          if (H[i] - G[i] < 1.5) gaps.push([Math.sign(left) || 1, s - w / 2 - 2, s + w / 2 + 2]);
+        }
+        prev = { inside, at };
+      }
+    }
+  }
+  return gaps;
 }
 
 // The roads passing under an overpass (Lamp), as pieces [ax, az, bx, bz, reach] near its line `S`: the town's ground
@@ -641,6 +824,7 @@ function trailCut(pts, deck, gh) {
 // GEO.roads' segments that runs across the bridge (more than 35° off its line, so the bridge's own street isn't one).
 // With the street's own `line` (Lamp): only a road that passes under it, not one meeting it at grade (a road whose way
 // has a node on the street's line, a junction, is the street's own crossing at its level)
+const ROAD_BOXES = new WeakMap();
 function roadsUnder(S, line = null, under = null) {
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
   for (const [x, z] of S) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
@@ -656,6 +840,14 @@ function roadsUnder(S, line = null, under = null) {
   for (const road of GEO.roads || []) {
     const w = road[1] || 8, pts = road[road.length - 1];
     if (!Array.isArray(pts)) continue;
+    // (Lamp: a road nowhere near it skipped by its bounds, kept)
+    let rb = ROAD_BOXES.get(road);
+    if (!rb) {
+      rb = [Infinity, -Infinity, Infinity, -Infinity];
+      for (let i = 0; i + 1 < pts.length; i += 2) { rb[0] = Math.min(rb[0], pts[i]); rb[1] = Math.max(rb[1], pts[i]); rb[2] = Math.min(rb[2], pts[i + 1]); rb[3] = Math.max(rb[3], pts[i + 1]); }
+      ROAD_BOXES.set(road, rb);
+    }
+    if (rb[1] < x0 - 30 || rb[0] > x1 + 30 || rb[3] < z0 - 30 || rb[2] > z1 + 30) continue;
     if (line) {
       // (and one that only comes up to it, a T junction, doesn't cross it: its way must pass right across the line)
       // (Lamp: an overpass's roads under it, overpass-data.js, never meet it: a point of theirs near its line is a bend)
@@ -795,7 +987,7 @@ function deckTop(x, z) {
 // street an overpass carries rides on its deck, and traffic on the road under it (another street) under it
 function streetDeckTop(x, z, name) {
   const list = grid?.river?.buckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
-  if (!list || !name) return null;
+  if (!list || name == null) return null;
   for (const { deck, a, b } of list) {
     if (deck.kind !== 0 || deck.name !== name) continue;
     const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez || 1;
