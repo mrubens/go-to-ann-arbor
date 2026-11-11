@@ -27,7 +27,7 @@ import {
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION, PERSON_BONES } from './pedestrians.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
 import { bryantParkLawn } from './landmarks.js';
-import { groundHeight, groundTilt, nearestWater, riverDepth, riverFlow, stadiumGround, waterLevel, footbridgeTop, riverbedHeight } from './terrain.js';
+import { groundHeight, groundTilt, nearestWater, riverDepth, riverFlow, stadiumGround, waterLevel, footbridgeTop, riverbedHeight, deckTop } from './terrain.js';
 import { WATER_RIPPLES, waterDisturb } from './tsl-materials.js';
 import { cascadeCurrent, cascadeDepth, cascadeWaveLift, inCascades, onWeirRocks, pondDraw } from './cascades.js';
 import { polygonContact, polygonContains } from './building-collision.js';
@@ -51,7 +51,7 @@ const KAYAK_LAUNCH = { x: 210, z: -1150 };
 // The Huron's own pace: about half a metre a second out in the middle at its usual 500 cfs (riverScale follows the
 // gauge), which is the city livery's Argo to Gallup, 3.7 miles in about an hour and a half, Cascades and all. Only the
 // Argo Cascades run quick (cascades.js cascadeCurrent), so they're the thrill of the trip.
-const KAYAK_CURRENT = 0.5;
+const KAYAK_CURRENT = 0.7;
 // How still the river is at (x, z), 0-1: 1 on the ponds behind the dams (Argo Pond, Gallup's above Geddes Dam, Barton
 // Pond), whose water lies level, and on the last slack reach into Gallup, where it barely falls; 0 where the river
 // runs. Read from how far the water's level falls along the flow within about 180 m up and down the river.
@@ -1760,6 +1760,12 @@ class ThirdPersonControllerManager {
     const at = y ?? this.entities?.[mode]?.position.y;
     let deck = groundHeight(x, z);
     if (mode !== 'kayak' && Number.isFinite(at) && deck > at + 1) deck = Math.min(deck, riverbedHeight(x, z));
+    // and over a road a bridge crosses (where the deck isn't the ground: the road runs on under it), someone up on the
+    // deck stays on it
+    if (mode !== 'kayak' && Number.isFinite(at)) {
+      const top = deckTop(x, z);
+      if (top > deck + 1 && at > top - 1.5) deck = top;
+    }
     const base = deck + (mode !== 'kayak' && onAirfield(x, z) ? PAVE + 0.04 : 0);
     let ground = Math.max(base, mode === 'kayak' ? -Infinity : this.rampTop(x, z, Number.isFinite(at) ? at : Infinity));
     // on wheels, the bleachers are one slope up from their front row, driven up and flown off (bleachers.js ramp)
@@ -3321,6 +3327,8 @@ class ThirdPersonControllerManager {
     // and the bridges' piers standing in the river (river.js pierPush), bumped as a dock is
     const pier = this._pierOut ??= { x: 0, z: 0 };
     const hit = this.livery?.collide(k.position.x, k.position.z, k.heading, k.boat, k.speed) || this.docks?.collide(k.position.x, k.position.z, k.heading)
+      // and the kayakers and tubers out on the river (river-people.js)
+      || this.riverPeople?.collide?.(k.position.x, k.position.z, k.heading, k.boat, k.speed)
       || (pierPush(k.position.x, k.position.z, 1.0, pier) && Math.hypot(pier.x, pier.z) > 1e-6 ? pier : null);
     if (!hit) return;
     const l = Math.hypot(hit.x, hit.z), m = Math.min(l, 0.6) / l;
@@ -3421,10 +3429,11 @@ class ThirdPersonControllerManager {
     else if (wet < 0.2 && k._bladeIn) { k._bladeIn = false; this.kayakRipple(k, bladeX, bladeZ, 0.6); }
 
     // Only a blade in the water moves the kayak: each pull surges it on, and the hull's drag (rising with the square
-    // of its speed) slows it between strokes: a touring paddler's 1.9 m/s or so (4 mph) through the water, about
-    // 2.6 in a sprint
-    const pull = Math.abs(throttle) > 0.05 ? wet * Math.sign(throttle) * 1.9 * (0.6 + 0.4 * Math.abs(throttle)) * (1 + 0.75 * sprint) : 0;
-    k.speed += (pull - 0.25 * k.speed * Math.abs(k.speed) - 0.2 * k.speed) * dt;
+    // of its speed) slows it between strokes: about 3 m/s (6-7 mph) through the water, about 4 (9 mph) in a sprint
+    // (quicker than a touring paddler's 2: the person found that too slow to enjoy)
+    const pull = Math.abs(throttle) > 0.05 ? wet * Math.sign(throttle) * 5.6 * (0.6 + 0.4 * Math.abs(throttle)) * (1 + 0.75 * sprint) : 0;
+    // (a sleek hull: it glides on between strokes)
+    k.speed += (pull - 0.12 * k.speed * Math.abs(k.speed) - 0.1 * k.speed) * dt;
     // a turn is a sweep stroke: stronger while a blade is in
     const turnTarget = turn * (0.6 + 0.5 * wet) * (0.95 + Math.min(1, Math.abs(k.speed) / 2) * 0.45);
     k.turnVel += (turnTarget - k.turnVel) * Math.min(1, dt * 3.2);

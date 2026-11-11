@@ -332,6 +332,42 @@ function splash(ctx, seed) {
   }, 0.5);
 }
 
+// A paddle stroke: the blade's catch (a soft wet "thup" as it goes in), the swish of water past it as it's pulled
+// back, and its exit: a light spill off the blade and a few drips falling back. Nothing tonal but the drips, and
+// those small and quiet, so it reads as water rather than bubbles
+function paddleStroke(ctx, seed) {
+  const random = randomSource(seed);
+  const k = (f) => 1 - Math.exp(-TAU * f / ctx.sampleRate);
+  const k250 = k(250), k900 = k(900), k1800 = k(1800), k3500 = k(3500), k7000 = k(7000);
+  let a = 0, b = 0, c = 0, d = 0, e = 0, wob = 0;
+  const pull = 0.5 + random() * 0.12, out = 0.08 + pull;
+  const drips = Array.from({ length: 3 + Math.floor(random() * 3) }, () => ({
+    time: out + 0.06 + random() * 0.38, freq: 1400 + random() * 1600, level: 0.05 + random() * 0.08 }));
+  const thup = 140 + random() * 50;
+  return makeBuffer(ctx, out + 0.55, (t) => {
+    const noise = random() * 2 - 1;
+    a += (noise - a) * k250; b += (noise - b) * k900; c += (noise - c) * k1800; d += (noise - d) * k3500; e += (noise - e) * k7000;
+    // the catch: a short low-mid burst with a dull body under it
+    const catchEnv = (1 - Math.exp(-t * 900)) * Math.exp(-t * 38);
+    const catchSound = ((c - a) * 1.4 + Math.sin(TAU * thup * t) * 0.35 * Math.exp(-t * 60)) * catchEnv;
+    // the pull: water rushing past the blade, swelling then easing, rough with turbulence
+    wob += ((random() * 2 - 1) - wob) * k(18);
+    const u = (t - 0.02) / pull;
+    const pullEnv = u > 0 && u < 1 ? Math.sin(Math.PI * u) ** 1.5 * (0.75 + wob * 1.6) : 0;
+    const pullSound = ((d - b) * 0.9 + (b - a) * 0.5) * pullEnv * 0.55;
+    // the exit: a brief bright spill of water off the blade
+    const x = t - out;
+    const exitSound = x > 0 ? (e - c) * (1 - Math.exp(-x * 400)) * Math.exp(-x * 22) * 0.7 : 0;
+    // and drips: tiny rising plinks
+    let dripSound = 0;
+    for (const dr of drips) {
+      const v = t - dr.time;
+      if (v > 0 && v < 0.06) dripSound += Math.sin(TAU * dr.freq * v * (1 + v * 8)) * Math.exp(-v * 90) * dr.level;
+    }
+    return catchSound + pullSound + exitSound + dripSound;
+  }, 0.5);
+}
+
 // A car door shutting: a dull thump and a latch click
 function door(ctx) {
   const random = randomSource(61);
@@ -591,6 +627,7 @@ export function createEventResources(ctx, resources) {
   lazy(out.crashes, 'metal', () => Array.from({ length: 3 }, (_, i) => crashMetal(ctx, i + 401)));
   lazy(out.crashes, 'debris', () => Array.from({ length: 3 }, (_, i) => crashDebris(ctx, i + 501)));
   lazy(out, 'splashes', () => Array.from({ length: 4 }, (_, i) => splash(ctx, i + 701)));
+  lazy(out, 'paddles', () => Array.from({ length: 5 }, (_, i) => paddleStroke(ctx, i + 751)));
   lazy(out, 'door', () => door(ctx));
   lazy(out, 'busChime', () => busChime(ctx));
   lazy(out, 'clang', () => [clang(ctx, 1701), clang(ctx, 1702)]);
@@ -619,7 +656,7 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   const random = randomSource(options.seed);
   const start = Math.max(ctx.currentTime, finite(options.when, ctx.currentTime));
   const intensity = clamp(finite(options.intensity, 1));
-  const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, plunge: 0.9, door: 0.45, buschime: 0.22, thud: 0.5,
+  const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, paddle: 0.42, plunge: 0.9, door: 0.45, buschime: 0.22, thud: 0.5,
     chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55, snort: 0.4,
     coo: 0.22, caw: 0.36, chirp: 0.16 };
   if (!Object.hasOwn(levels, kind) || intensity === 0) return { endTime: start, dispose() {} };
@@ -711,6 +748,8 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
     }
   } else if (kind === 'splash') {
     play(resources.splashes[Math.floor(random() * resources.splashes.length)], start, 0.9 + random() * 0.2);
+  } else if (kind === 'paddle') {
+    play(resources.paddles[Math.floor(random() * resources.paddles.length)], start, 0.94 + random() * 0.12, 0.6 + 0.4 * intensity);
   } else if (kind === 'plunge') {
     // a car or bike hitting the water: the paddle's splash slowed into a deep whump, a crash of spray over it, and the
     // thrown water pattering back down a moment later

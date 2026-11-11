@@ -1,4 +1,5 @@
 import { polygonContains, polygonBoxOverlaps } from './building-collision.js';
+import { namedFront } from './shop-types.js';
 
 function boxCorners(x, z, w, d, cs, sn) {
   return [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]].map(([u, v]) =>
@@ -97,8 +98,14 @@ function addBuildingDetails(b, detail, { masonry, rand, neighbours }) {
       const bays = Math.max(1, Math.round(e.length / 7.5)), bay = e.length / bays;
       for (let k = 0; k < bays; k++) {
         const u = (k + 0.5) * bay - e.length / 2, x = e.x - e.nz * u, z = e.z + e.nx * u;
-        detail.awnings.push({ x: x + e.nx * 0.75, y: 3.05, z: z + e.nz * 0.75, w: 1.5, h: 0.12, d: bay - 0.7,
-          ry: Math.atan2(-e.nz, e.nx), tilt: -0.32, colorIdx, seen: true });
+        const awning = { x: x + e.nx * 0.75, y: 3.05, z: z + e.nz * 0.75, w: 1.5, h: 0.12, d: bay - 0.7,
+          ry: Math.atan2(-e.nz, e.nx), tilt: -0.32, colorIdx, seen: true };
+        // its valance: a flap of the same canvas hanging from its street edge, where the shop's name is lettered
+        // (shop-signs.js, which finds the awning by `canopy`)
+        const out = 0.75 + 0.75 * Math.cos(0.32), drop = 0.75 * Math.sin(0.32);
+        awning.canopy = { out, top: 3.05 - drop + 0.05, height: 0.4 };
+        detail.awnings.push(awning, { x: x + e.nx * out, y: 3.05 - drop + 0.05 - 0.2, z: z + e.nz * out, w: 0.03, h: 0.4, d: bay - 0.7,
+          ry: awning.ry, tilt: 0, colorIdx, seen: true });
       }
     }
   }
@@ -115,6 +122,8 @@ function addBuildingDetails(b, detail, { masonry, rand, neighbours }) {
       const ry = Math.atan2(sn, cs);
       let item;
       if (!detail.scaffoldSheds.length && rand() < 0.06) {
+        // Lamp: never over a named business's front: a shed hides its sign
+        if (namedFront(e.x, e.z, e.nx, e.nz, e.length / 2 + 1)) continue;
         item = { x: x + e.nx * 2, y: 0.22, z: z + e.nz * 2, w: 3.8, d, ry };
         detail.scaffoldSheds.push(item);
       } else {

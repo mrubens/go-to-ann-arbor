@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Fn, attribute, color, float, mix, smoothstep, positionWorld, vertexColor, mx_noise_float, mx_worley_noise_float } from 'three/tsl';
 import { nearDrop } from './cascades.js';
 import { riverbedHeight, riverDepth, waterLevel, bridgeDecks } from './terrain.js';
@@ -31,11 +31,13 @@ function subdivide(geometry, tooBig) {
 const longest = (a, b, c) => Math.max((a[0] - b[0]) ** 2 + (a[2] - b[2]) ** 2, (b[0] - c[0]) ** 2 + (b[2] - c[2]) ** 2,
   (c[0] - a[0]) ** 2 + (c[2] - a[2]) ** 2);
 
-function meshOf(pos, material, name, colors = null, wet = null) {
-  const g = new THREE.BufferGeometry();
+function meshOf(pos, material, name, colors = null, wet = null, smooth = false) {
+  let g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   if (colors) g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   if (wet) g.setAttribute('wet', new THREE.Float32BufferAttribute(wet, 1));
+  // (the banks shaded smooth across their triangles, not each one a flat facet: their corners joined first)
+  if (smooth) g = mergeVertices(g, 0.01);
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, material);
   m.name = name;
@@ -48,6 +50,11 @@ function meshOf(pos, material, name, colors = null, wet = null) {
 // mud a few meters across, faint ripples the current leaves in it, and now and then a small stone sunk in it
 function riverbedMaterial() {
   const mat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.98 });
+  // pushed back a hair in depth, so along the flat shallows, where the bank lies within centimetres of the water's
+  // surface, the water wins cleanly instead of the two flickering through each other
+  mat.polygonOffset = true;
+  mat.polygonOffsetFactor = 2;
+  mat.polygonOffsetUnits = 4;
   mat.colorNode = Fn(() => {
     const p = positionWorld.xz;
     const wet = attribute('wet', 'float');
@@ -146,7 +153,7 @@ function buildRiver(group, geos, waterMat) {
       for (let k = 0; k < 9; k++) { tp.push(bankPos[i + k]); tc.push(bankCol[i + k]); }
       for (let k = 0; k < 3; k++) tw.push(bankWet[i / 3 + k]);
     }
-    for (const [tp, tc, tw] of tiles.values()) river.add(meshOf(tp, bankMat, 'RiverBanks', tc, tw));
+    for (const [tp, tc, tw] of tiles.values()) river.add(meshOf(tp, bankMat, 'RiverBanks', tc, tw, true));
   }
   if (waterPos.length) {
     // in tiles, so only what's in view is drawn
@@ -234,6 +241,8 @@ function buildBridges(group) {
   if (!decks.length) return colliders;
   const concrete = [], steel = [], wood = [], rail = [];
   const fb = { planks: [], beams: [], rails: [], concrete: [] }; // the footbridges' smooth parts (footbridge())
+  // the streets' bridges' parts (streetBridge): concrete, the road's asphalt, steel railings and lamp posts, lamps' glass
+  const street = { concrete, asphalt: [], steel, glass: [] };
 
   for (const d of decks) {
     const P = d.points;
@@ -263,16 +272,7 @@ function buildBridges(group) {
     const hw = d.half;
     const under = d.kind === 2 ? -0.45 : -1.1; // the deck's underside, under its top
     if (d.kind === 0) {
-      const curb = d.w / 2;
-      along(concrete, curb, 0.0, curb, 0.2);              // the curbs
-      along(concrete, curb, 0.2, hw - 0.3, 0.2);          // the sidewalks
-      along(concrete, hw - 0.3, 0.2, hw - 0.3, 1.05);     // the parapets
-      along(concrete, hw - 0.3, 1.05, hw, 1.05);
-      along(concrete, hw, 1.05, hw, under);               // and the deck's face below them
-      along(concrete, -hw, under, hw, under, false);      // its underside
-      along(concrete, -curb, -0.06, curb, -0.06, false);  // the deck under the road
-      // a steel railing on the parapets
-      along(steel, hw - 0.2, 1.05, hw - 0.2, 1.12);
+      // (a street's bridge is drawn whole by streetBridge, below)
     } else if (d.kind === 1) {
       along(concrete, -hw, -0.15, hw, -0.15, false);      // the deck under the ballast
       along(steel, hw, -0.15, hw, under);
@@ -281,6 +281,23 @@ function buildBridges(group) {
       along(steel, hw - 0.1, -0.15, hw - 0.1, 1.5);
       along(steel, hw - 0.1, 1.5, hw + 0.25, 1.5);
       along(steel, hw + 0.25, 1.5, hw + 0.25, under);
+      // (Lamp) the girders' stiffeners every 2 m down their outer faces, and a flange along their foot, so they read
+      // as riveted plate girders, not one dark slab
+      along(steel, hw + 0.25, under, hw + 0.45, under);
+      along(steel, hw + 0.25, 1.5, hw + 0.4, 1.5);
+      for (let s = 1; s < d.length - 0.5; s += 2) {
+        let i = 0;
+        while (i + 2 < P.length && P[i + 1][2] < s) i++;
+        const f = Math.max(0, Math.min(1, (s - P[i][2]) / ((P[i + 1][2] - P[i][2]) || 1)));
+        const x = P[i][0] + (P[i + 1][0] - P[i][0]) * f, z = P[i][1] + (P[i + 1][1] - P[i][1]) * f, y = P[i][3] + (P[i + 1][3] - P[i][3]) * f;
+        for (const sd of [1, -1]) {
+          const g = new THREE.BoxGeometry(0.16, 1.5 - under, 0.1).toNonIndexed();
+          g.translate(sd * (hw + 0.33), y + (1.5 + under) / 2, 0);
+          g.rotateY(Math.atan2(T[i][0], T[i][1]));
+          g.translate(x, 0, z);
+          steel.push(...g.attributes.position.array);
+        }
+      }
     } else {
       footbridge(d, fb);
     }
@@ -303,8 +320,12 @@ function buildBridges(group) {
       }
       i = j;
     }
+    if (d.kind === 0) {
+      streetBridge(d, P, T, street);
+      continue;
+    }
     // a level deck over a road (terrain.js): a concrete abutment at each end, from the ground up to the deck
-    if (d.level && d.kind !== 2) {
+    if (d.level && d.kind === 1) {
       for (const i of [0, P.length - 1]) {
         const gnd = riverbedHeight(P[i][0], P[i][1]);
         if (P[i][3] + under - gnd > 0.6) pier(concrete, i, hw * 2 + 0.6, 2.4, gnd - 0.6, P[i][3] + 0.05);
@@ -349,8 +370,11 @@ function buildBridges(group) {
   }
 
   const mat = (color, rough, metal = 0) => new THREE.MeshStandardNodeMaterial({ color, roughness: rough, metalness: metal, side: THREE.DoubleSide });
+  // the lamps' glass lit softly (their light is the streetlights' own, lighting.js; this is only the glow of the globe)
+  const glass = new THREE.MeshStandardNodeMaterial({ color: 0xfff1d6, emissive: 0xffd9a0, emissiveIntensity: 0.9, roughness: 0.3 });
   for (const [pos, m, name] of [[concrete, mat(0xb3ada3, 0.9), 'BridgeConcrete'], [steel, mat(0x4d5a5e, 0.6, 0.3), 'BridgeSteel'],
-    [wood, mat(0x8a7356, 0.9), 'BridgeDecks'], [rail, mat(0x2f3436, 0.5, 0.4), 'BridgeRailings']]) {
+    [wood, mat(0x8a7356, 0.9), 'BridgeDecks'], [rail, mat(0x2f3436, 0.5, 0.4), 'BridgeRailings'],
+    [street.asphalt, mat(0x3b3c3e, 0.92), 'BridgeRoad'], [street.glass, glass, 'BridgeLamps']]) {
     if (!pos.length) continue;
     // in 700 m squares as the banks are, so a square out of view or far off (meshOf's cullDistance) isn't drawn
     const tiles = new Map();
@@ -387,6 +411,209 @@ function buildBridges(group) {
     }
   }
   return colliders;
+}
+
+// A street's bridge (Lamp), as terrain.js shapes its deck (streetDeck): a concrete deck a metre deep with its road, curbs,
+// sidewalks, parapets and a steel rail along them, standing over open air wherever there's room under it (the water, a
+// road or railway it crosses, and the bank down to the water), on piers in the water and bents of columns on land; and
+// on fill where it's lower over the ground, the fill held between the deck's faces carried down to the ground as
+// retaining walls, each end of the open span seated on a concrete abutment across the deck (a bank seat set into the
+// bank, the river's banks sloping under the span in front of it). The town's ground layers stay on the ground under it
+// (ground-core.js deckLayerLift), so nothing but the bridge stands over the water. Broadway's bridge (rebuilt in 2003)
+// spans on arches, its faces arched between the piers, with lamp posts along its parapets.
+const DECK_DEPTH = 0.95; // the deck's underside under its top
+const OPEN_AIR = 2.2;    // under a deck this far over the ground or more it's open, lower it's on fill
+function streetBridge(d, P, T, out) {
+  const hw = d.half, curb = d.w / 2, n = P.length, arched = d.name === 'Broadway St';
+  // its top as it's driven (ground-core.js onDeck): over its first and last 8 m coming down to meet the ground at its ends
+  P = P.map((p) => {
+    const w = Math.min(1, Math.min(p[2], d.length - p[2]) / 8), end = p[2] < d.length - p[2] ? d.points[0] : d.points.at(-1);
+    const q = p.slice();
+    q[3] = p[3] - (1 - w) * Math.max(0, end[3] - end[7]);
+    return q;
+  });
+  // world points: across the deck by `o` (to the left), `y` over its top or at the world height `wy`
+  const at = (i, o, y) => [P[i][0] - T[i][1] * o, P[i][3] + y, P[i][1] + T[i][0] * o];
+  const atW = (i, o, wy) => [P[i][0] - T[i][1] * o, wy, P[i][1] + T[i][0] * o];
+  const quad = (list, a, b, c, e) => list.push(...a, ...b, ...c, ...a, ...c, ...e);
+  // a strip along the deck from point i0 to i1, between offset o0 at height y0 and o1 at y1 (over its top), both sides
+  const along = (list, o0, y0, o1, y1, both = true, i0 = 0, i1 = n - 1) => {
+    for (const s of both ? [1, -1] : [1]) {
+      for (let i = i0; i < i1; i++) quad(list, at(i, o0 * s, y0), at(i, o1 * s, y1), at(i + 1, o1 * s, y1), at(i + 1, o0 * s, y0));
+    }
+  };
+  // a box standing across the deck at point i: `across` wide, `thick` along it, from world y0 up to y1
+  const box = (list, i, across, thick, y0, y1, shift = 0) => {
+    if (y1 - y0 < 0.05) return;
+    const g = new THREE.BoxGeometry(across, y1 - y0, thick).toNonIndexed();
+    g.translate(shift, 0, 0);
+    g.rotateY(Math.atan2(T[i][0], T[i][1]));
+    g.translate(P[i][0], (y0 + y1) / 2, P[i][1]);
+    list.push(...g.attributes.position.array);
+  };
+  // a round column at point i, `o` across the deck, from world y0 to y1
+  const column = (list, i, o, r, y0, y1) => {
+    if (y1 - y0 < 0.05) return;
+    const g = new THREE.CylinderGeometry(r, r * 1.08, y1 - y0, 14).toNonIndexed();
+    const [x, , z] = atW(i, o, 0);
+    g.translate(x, (y0 + y1) / 2, z);
+    list.push(...g.attributes.position.array);
+  };
+
+  const G = P.map((p) => p[7]);
+  const bottom = P.map((p) => p[3] - DECK_DEPTH);
+  const water = P.map((p) => riverDepth(p[0], p[1]) > 0.05);
+  const lift = P.map((p, i) => p[3] - G[i]);
+  // open under it (the water, a road or railway it crosses, or room enough), on fill, or on the ground (its ends)
+  const open = P.map((p, i) => water[i] || p[5] || p[6] || bottom[i] - G[i] > OPEN_AIR);
+  const fill = P.map((p, i) => !open[i] && lift[i] > 0.15);
+
+  // the road's surface where it stands over the ground (where it lies on it, the street's own layer is the road)
+  for (let i = 0; i + 1 < n; i++) {
+    if (Math.max(lift[i], lift[i + 1]) <= 0.1) continue;
+    quad(out.asphalt, at(i, curb, 0), at(i, -curb, 0), at(i + 1, -curb, 0), at(i + 1, curb, 0));
+  }
+  along(out.concrete, curb, 0.0, curb, 0.2);                 // the curbs
+  along(out.concrete, curb, 0.2, hw - 0.35, 0.2);            // the sidewalks
+  along(out.concrete, hw - 0.35, 0.2, hw - 0.35, 0.9);       // the parapets, inside
+  along(out.concrete, hw - 0.35, 0.9, hw, 0.9);              // their coping
+  // the deck's faces from the parapets' tops down to its underside, and the underside, where it stands clear of the
+  // ground (a fascia over open air; on fill the retaining walls carry the faces on down)
+  for (let i = 0; i + 1 < n; i++) {
+    if (Math.max(lift[i], lift[i + 1]) <= 0.15) continue;
+    for (const s of [1, -1]) quad(out.concrete, at(i, hw * s, 0.9), at(i, hw * s, -DECK_DEPTH), at(i + 1, hw * s, -DECK_DEPTH), at(i + 1, hw * s, 0.9));
+    quad(out.concrete, at(i, -hw, -DECK_DEPTH), at(i, hw, -DECK_DEPTH), at(i + 1, hw, -DECK_DEPTH), at(i + 1, -hw, -DECK_DEPTH));
+    // a drip groove's shadow line along each face, a hand under the coping
+    for (const s of [1, -1]) quad(out.concrete, at(i, (hw + 0.04) * s, 0.72), at(i, (hw + 0.04) * s, 0.62), at(i + 1, (hw + 0.04) * s, 0.62), at(i + 1, (hw + 0.04) * s, 0.72));
+  }
+  // a steel railing on the parapets: a top rail, and posts every 2.5 m
+  along(out.steel, hw - 0.18, 1.12, hw - 0.18, 1.18);
+  along(out.steel, hw - 0.18, 1.12, hw - 0.12, 1.12);
+  for (let k = 0; k <= d.length / 2.5; k++) {
+    const s = k * 2.5;
+    let i = 0;
+    while (i + 2 < n && P[i + 1][2] < s) i++;
+    const f = Math.max(0, Math.min(1, (s - P[i][2]) / ((P[i + 1][2] - P[i][2]) || 1)));
+    for (const side of [1, -1]) {
+      const g = new THREE.BoxGeometry(0.06, 0.28, 0.06).toNonIndexed();
+      const x = P[i][0] + (P[i + 1][0] - P[i][0]) * f - T[i][1] * (hw - 0.15) * side, z = P[i][1] + (P[i + 1][1] - P[i][1]) * f + T[i][0] * (hw - 0.15) * side;
+      g.translate(x, P[i][3] + (P[i + 1][3] - P[i][3]) * f + 1.04, z);
+      out.steel.push(...g.attributes.position.array);
+    }
+  }
+
+  // the fill's retaining walls: the faces carried down to the ground, and a footing's lip along their foot
+  for (let i = 0; i + 1 < n; i++) {
+    if (!(fill[i] || fill[i + 1]) || open[i] && open[i + 1]) continue;
+    for (const s of [1, -1]) {
+      quad(out.concrete, at(i, hw * s, -DECK_DEPTH), atW(i, hw * s, G[i] - 0.4), atW(i + 1, hw * s, G[i + 1] - 0.4), at(i + 1, hw * s, -DECK_DEPTH));
+    }
+  }
+
+  // Where it's open: a bank seat at each end of each open run, and between them piers in the water and bents on land
+  const supports = []; // { i, kind: 'seat' | 'pier' | 'bent' }
+  const kept = (i) => !P[i][5] && !P[i][6];
+  for (let i0 = 0; i0 < n;) {
+    if (!open[i0]) { i0++; continue; }
+    let i1 = i0;
+    while (i1 + 1 < n && open[i1 + 1]) i1++;
+    const a = Math.max(0, i0 - 1), b = Math.min(n - 1, i1 + 1);
+    supports.push({ i: a, kind: 'seat', way: 1 });
+    const span = P[b][2] - P[a][2], wet = water.slice(i0, i1 + 1).some(Boolean);
+    const each = wet ? 27 : 20, count = span > (wet ? 36 : 26) ? Math.round(span / each) : 1;
+    for (let k = 1; k < count; k++) {
+      const s = P[a][2] + (span * k) / count;
+      let i = a;
+      while (i < b && P[i][2] < s) i++;
+      // never in a road or on a railway it crosses: the nearest point either way that isn't
+      let best = -1;
+      for (let m = 0; m <= 3 && best < 0; m++) for (const c of [i - m, i + m]) if (best < 0 && c > a && c < b && kept(c)) best = c;
+      if (best >= 0 && !supports.some((q) => q.i === best)) supports.push({ i: best, kind: water[best] ? 'pier' : 'bent' });
+    }
+    supports.push({ i: b, kind: 'seat', way: -1 });
+    i0 = i1 + 1;
+  }
+  supports.sort((p, q) => p.i - q.i);
+  for (const sp of supports) {
+    const i = sp.i, top = bottom[i];
+    // the lowest ground about it (a seat stands on the foot of the bank before it, a pier on the bed)
+    let foot = G[i];
+    for (const j of [i - 1, i + 1]) if (j >= 0 && j < n) foot = Math.min(foot, G[j]);
+    if (sp.kind === 'seat') {
+      if (top - foot < 0.3) continue;
+      // the seat across the deck, with a bearing shelf, and short wing walls back into the bank
+      box(out.concrete, i, hw * 2 + 0.5, 1.3, foot - 0.6, top);
+      box(out.concrete, i, hw * 2 + 0.5, 1.7, top - 0.35, top);
+      if (water[i] || riverDepth(P[i][0], P[i][1]) > 0.02 || foot < (waterLevel(P[i][0], P[i][1]) ?? -Infinity) + 0.6) {
+        addPier({ x: P[i][0], z: P[i][1], ux: T[i][0], uz: T[i][1], across: hw + 0.25, along: 0.85 });
+      }
+    } else if (sp.kind === 'pier' || arched) {
+      // a wall pier with rounded noses on a footing in the bed, under a cap beam
+      const bed = sp.kind === 'pier' ? riverbedHeight(P[i][0], P[i][1]) - 0.5 : G[i] - 0.4;
+      const across = Math.max(2, hw * 2 - 3.2), thick = 1.1;
+      box(out.concrete, i, across, thick, bed, top - 0.55);
+      for (const s of [1, -1]) column(out.concrete, i, s * across / 2, thick / 2, bed, top - 0.55);
+      box(out.concrete, i, hw * 2 - 0.6, 1.5, top - 0.6, top);
+      if (sp.kind === 'pier') addPier({ x: P[i][0], z: P[i][1], ux: T[i][0], uz: T[i][1], across: across / 2 + thick / 2, along: thick / 2 });
+    } else {
+      // a bent: round columns under a cap beam
+      const cols = Math.max(2, Math.round((hw * 2) / 6.5)), reach = hw - 1.6;
+      for (let k = 0; k < cols; k++) column(out.concrete, i, -reach + (2 * reach * k) / (cols - 1), 0.42, G[i] - 0.4, top - 0.6);
+      box(out.concrete, i, hw * 2 - 0.8, 1.1, top - 0.65, top);
+    }
+  }
+
+  // Broadway's arches: each span between its supports arched, the faces coming down to the arch's ring from the deck,
+  // and the arch's soffit across under it; open to the water, the road and the railway under it
+  if (arched) {
+    // a point `s` metres along: its place, top and frame, between the deck's points
+    const pos = (s) => {
+      let i = 0;
+      while (i + 2 < n && P[i + 1][2] < s) i++;
+      const f = Math.max(0, Math.min(1, (s - P[i][2]) / ((P[i + 1][2] - P[i][2]) || 1)));
+      return { x: P[i][0] + (P[i + 1][0] - P[i][0]) * f, z: P[i][1] + (P[i + 1][1] - P[i][1]) * f, y: P[i][3] + (P[i + 1][3] - P[i][3]) * f - DECK_DEPTH,
+        g: G[i] + (G[i + 1] - G[i]) * f, tx: T[i][0], tz: T[i][1] };
+    };
+    const side = (q, o, y) => [q.x - q.tz * o, y, q.z + q.tx * o];
+    for (let k = 0; k + 1 < supports.length; k++) {
+      const a = supports[k], b = supports[k + 1];
+      if (!open.slice(a.i + 1, b.i).some(Boolean)) continue;
+      const sa = P[a.i][2] + 0.75, sb = P[b.i][2] - 0.75, span = sb - sa;
+      if (span < 6) continue;
+      const mid = pos((sa + sb) / 2);
+      const floor = Math.max(mid.g, waterLevel(mid.x, mid.z) ?? -Infinity);
+      const rise = Math.min(span * 0.32, Math.max(0, (mid.y - floor) * 0.6));
+      if (rise < 0.8) continue;
+      const steps = Math.max(8, Math.ceil(span / 1.5));
+      const ring = (u) => { const q = pos(sa + span * u), t = 2 * u - 1; return { q, y: q.y - 0.35 - rise * t * t }; };
+      for (let m = 0; m < steps; m++) {
+        const A = ring(m / steps), B = ring((m + 1) / steps);
+        for (const s of [1, -1]) {
+          // the spandrel's face, from the ring up to the deck's underside, a little proud of the fascia
+          quad(out.concrete, side(A.q, (hw + 0.02) * s, A.q.y), side(A.q, (hw + 0.02) * s, A.y), side(B.q, (hw + 0.02) * s, B.y), side(B.q, (hw + 0.02) * s, B.q.y));
+          // the arch's ring, standing out from the face
+          quad(out.concrete, side(A.q, (hw + 0.14) * s, A.y + 0.55), side(A.q, (hw + 0.14) * s, A.y), side(B.q, (hw + 0.14) * s, B.y), side(B.q, (hw + 0.14) * s, B.y + 0.55));
+          quad(out.concrete, side(A.q, (hw + 0.02) * s, A.y), side(A.q, (hw + 0.14) * s, A.y), side(B.q, (hw + 0.14) * s, B.y), side(B.q, (hw + 0.02) * s, B.y));
+        }
+        // the soffit across under it
+        quad(out.concrete, side(A.q, -hw, A.y), side(A.q, hw, A.y), side(B.q, hw, B.y), side(B.q, -hw, B.y));
+      }
+    }
+    // lamp posts along the parapets, 24 m apart on each side and staggered: a pole on a base, a globe under a cap
+    for (let s = 6; s < d.length - 4; s += 12) {
+      const q = pos(s), o = ((Math.round(s / 12) % 2) ? 1 : -1) * (hw - 0.18), top = q.y + DECK_DEPTH;
+      if (top - q.g < 0.5) continue;
+      const [x, , z] = side(q, o, 0);
+      const pole = new THREE.CylinderGeometry(0.07, 0.11, 5.2, 10).toNonIndexed().translate(x, top + 0.9 + 2.6, z);
+      out.steel.push(...pole.attributes.position.array);
+      const cap = new THREE.CylinderGeometry(0.28, 0.16, 0.25, 10).toNonIndexed().translate(x, top + 6.45, z);
+      out.steel.push(...cap.attributes.position.array);
+      const globe = new THREE.CylinderGeometry(0.2, 0.14, 0.5, 10).toNonIndexed().translate(x, top + 6.1, z);
+      out.glass.push(...globe.attributes.position.array);
+      const base = new THREE.CylinderGeometry(0.2, 0.24, 0.6, 10).toNonIndexed().translate(x, top + 0.9 + 0.3, z);
+      out.steel.push(...base.attributes.position.array);
+    }
+  }
 }
 
 // Every part merged alike: indexed, with positions and normals only

@@ -315,7 +315,7 @@ function buildAnimals(group) {
     }
     // the kayaks and tubes on the river
     for (const q of ctx.paddlers || []) {
-      if ((q.x - cx) ** 2 + (q.z - cz) ** 2 > 200 * 200 || q.heading == null) continue;
+      if (q.out === false || (q.x - cx) ** 2 + (q.z - cz) ** 2 > 200 * 200 || q.heading == null) continue;
       const sp = q.speed || 1;
       threats.push({ x: q.x, y: q.y, z: q.z, vx: Math.sin(q.heading) * sp, vz: Math.cos(q.heading) * sp, speed: sp, r: 1.6, loud: false, air: false });
     }

@@ -44,6 +44,11 @@ const state = hot(import.meta).keep('shopTypeState', () => ({ types: null, varia
 state.bays ??= [];
 state.hour ??= 12;
 export const shopBays = () => state.bays;
+// every building's outline as it stands (buildings.js's colliders with a `polygon`), so a room is never set where a
+// neighbouring building's walls run through it (shop-interiors.js)
+state.outlines ??= [];
+export const setShopOutlines = (list) => { state.outlines = list.filter((c) => c.polygon); };
+export const shopOutlines = () => state.outlines;
 export const shopHour = () => state.hour;
 export const noteShopHour = (h) => { state.hour = h; };
 // a business's own number (the bay texture's g), and the side its door is on in bay `col` (as createStorefront has it)
@@ -83,6 +88,39 @@ export function setShopTypes(data) {
     if (!state.grid.has(k)) state.grid.set(k, []);
     state.grid.get(k).push(i);
   }
+}
+
+// is a named business's sign on the front through (x, z) with the outward normal (nx, nz), within `half` metres along
+// it? (building-details.js: no scaffold shed goes up over a named shopfront)
+export function namedFront(x, z, nx, nz, half) {
+  if (!state.grid || !state.types) return false;
+  const list = GEO.signs.list;
+  for (let cx = Math.floor((x - half - 2) / CELL); cx <= Math.floor((x + half + 2) / CELL); cx++) {
+    for (let cz = Math.floor((z - half - 2) / CELL); cz <= Math.floor((z + half + 2) / CELL); cz++) {
+      for (const i of state.grid.get(cx + ',' + cz) || []) {
+        if (!state.types[i]) continue;
+        const rx = list[i * 7] - x, rz = list[i * 7 + 1] - z, deg = (list[i * 7 + 2] * Math.PI) / 180;
+        if (Math.abs(rx * -nz + rz * nx) < half && Math.abs(rx * nx + rz * nz - 0.18) < 1.2 && Math.sin(deg) * nx + Math.cos(deg) * nz > 0.8) return true;
+      }
+    }
+  }
+  return false;
+}
+// the canvas awnings as they were hung (building-details.js, lifted onto their ground by buildings.js): a business
+// under one has its name on the awning's valance, not on a board behind it (shop-signs.js)
+state.awnings ??= [];
+export const setShopAwnings = (list) => { state.awnings = list; };
+export function awningOver(x, z, nx, nz) {
+  let best = null, bestD = 9;
+  for (const a of state.awnings) {
+    if (Math.abs(a.x - x) > 9 || Math.abs(a.z - z) > 9) continue;
+    const ax = Math.cos(a.ry), az = -Math.sin(a.ry); // the way it faces
+    if (ax * nx + az * nz < 0.9) continue;
+    const rx = x - (a.x - ax * 0.75), rz = z - (a.z - az * 0.75); // from where it meets the wall
+    const along = Math.abs(rx * -az + rz * ax), out = Math.abs(rx * ax + rz * az);
+    if (out < 1.2 && along < Math.min(bestD, a.d / 2 + 0.35)) { best = a; bestD = along; }
+  }
+  return best;
 }
 
 export const signType = (i) => (state.types ? state.types[i] : 0);
@@ -141,7 +179,8 @@ export function shopWallRow(a, b, record = null, polygon = null) {
     if (bay < 0) continue;
     owner[bay] = f.i;
     const c = (bay + 0.5) * width;
-    state.placed.set(f.i, { x: a.x + ux * c + nx * 0.18, z: a.y + uz * c + nz * 0.18, w: Math.min(list[f.i * 7 + 3], Math.max(width - 0.7, 2)) });
+    state.placed.set(f.i, { x: a.x + ux * c + nx * 0.18, z: a.y + uz * c + nz * 0.18, w: Math.min(list[f.i * 7 + 3], Math.max(width - 0.7, 2)),
+      ground: record ? record.ground : undefined }); // (the ground its building, and so its shopfront, stands on)
   }
   const row = state.nextRow++;
   const data = shopBayMap.image.data;

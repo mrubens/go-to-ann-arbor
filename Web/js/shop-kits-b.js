@@ -6,28 +6,32 @@ import { H0, D0, HT, SLOT, C, BRIGHTS, MUTED, CLOTHES, shadeHex, chair, stool, t
 
 const PI = Math.PI, E = PI / 2, W = -PI / 2, S = PI, N = 0;
 
-function apparel(K) {
-  K.shell({ skirting: 0x8a8376 });
-  // rails of clothes along both walls, a shelf of folded things over each
-  const wallRail = (x, z0, z1, ry) => K.group(x, (z0 + z1) / 2, ry, () => {
-    const w = z1 - z0;
+// --- what a clothes shop is fitted with (apparel() lays them out three ways)
+// a rail of clothes along a wall, a shelf of folded things over it: `w` long, its middle at (x, z) on the wall, looking `ry`
+function wallRail(K, x, z, ry, w) {
+  K.group(x, z, ry, () => {
     garments(K, -w / 2 + 0.15, w / 2 - 0.15, 1.62, 0.3, { step: 0.07 });
-    for (const sx of [-w / 2 + 0.05, 0, w / 2 - 0.05]) K.rod(sx, 1.62, 0.02, sx, 1.62, 0.3, 0.012, C.chrome);
+    const n = w > 4.5 ? 4 : 2;
+    for (let i = 0; i <= n; i++) { const sx = -w / 2 + 0.05 + (w - 0.1) * i / n; K.rod(sx, 1.62, 0.02, sx, 1.62, 0.3, 0.012, C.chrome); }
     K.box(0, 1.95, 0.2, w, 0.03, 0.4, 0xd9d4c8);
-    for (let x = -w / 2 + 0.25; x < w / 2 - 0.2; x += 0.42) {
-      const n = 2 + Math.floor(K.rand() * 4);
-      for (let k = 0; k < n; k++) K.box(x, 1.98 + k * 0.045, 0.2, 0.3, 0.042, 0.32, K.pick(CLOTHES), { faces: 'ftrl' });
+    for (let sx = -w / 2 + 0.25; sx < w / 2 - 0.2; sx += 0.42) {
+      const m = 2 + Math.floor(K.rand() * 4);
+      for (let k = 0; k < m; k++) K.box(sx, 1.98 + k * 0.045, 0.2, 0.3, 0.042, 0.32, K.pick(CLOTHES), { faces: 'ftrl' });
     }
   }, { stretch: true });
-  wallRail(H0, 0.5, 4.3, W);
-  wallRail(-H0, 1.9, 4.5, E);
-  // a rack along the room and a round one
-  K.group(-0.2, 3.25, 0, () => {
-    garments(K, -0.8, 0.8, 1.45, 0, { step: 0.07, long: 0.85, short: 0.6 });
-    for (const sx of [-0.88, 0.88]) { K.rod(sx, 0, 0, sx, 1.45, 0, 0.016, C.chrome); K.box(sx, 0, 0, 0.05, 0.03, 0.5, C.chrome); }
-    K.shadow(0, 0, 2.1, 0.8);
+}
+// a rack standing on the floor, `w` long
+function rack(K, x, z, ry, w = 1.76) {
+  const e = w / 2;
+  K.group(x, z, ry, () => {
+    garments(K, -e + 0.08, e - 0.08, 1.45, 0, { step: 0.07, long: 0.85, short: 0.6 });
+    for (const sx of [-e, e]) { K.rod(sx, 0, 0, sx, 1.45, 0, 0.016, C.chrome); K.box(sx, 0, 0, 0.05, 0.03, 0.5, C.chrome); }
+    K.shadow(0, 0, w + 0.34, 0.8);
   });
-  K.group(-1.25, 1.95, 0, () => {
+}
+// a round one: clothes hung all the way round a ring
+function roundRack(K, x, z) {
+  K.group(x, z, 0, () => {
     K.cyl(0, 0, 0, 0.3, 0.03, C.chrome, { seg: 10 });
     K.cyl(0, 0.03, 0, 0.02, 1.42, C.chrome, { seg: 5, open: true });
     K.cyl(0, 1.44, 0, 0.5, 0.02, C.chrome, { seg: 14, open: true });
@@ -37,45 +41,124 @@ function apparel(K) {
     }
     K.shadow(0, 0, 1.3, 1.3);
   });
-  // a table of folded shirts
-  K.group(0.9, 1.75, 0, () => {
-    K.box(0, 0.74, 0, 1.4, 0.05, 0.8, C.oak);
-    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) K.box(sx * 0.62, 0, sz * 0.32, 0.06, 0.74, 0.06, C.oak, { faces: 'fbrl' });
-    K.shadow(0, 0, 1.7, 1.1);
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 2; j++) {
+}
+// a table of folded shirts, `w` by `d`
+function foldTable(K, x, z, w = 1.4, d = 0.8) {
+  K.group(x, z, 0, () => {
+    K.box(0, 0.74, 0, w, 0.05, d, C.oak);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) K.box(sx * (w / 2 - 0.08), 0, sz * (d / 2 - 0.08), 0.06, 0.74, 0.06, C.oak, { faces: 'fbrl' });
+    K.shadow(0, 0, w + 0.3, d + 0.3);
+    const nx = Math.floor((w - 0.04) / 0.34), nz = Math.floor((d - 0.04) / 0.38);
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
       const n = 2 + Math.floor(K.rand() * 4), col = K.pick(CLOTHES);
-      for (let k = 0; k < n; k++) K.box(-0.5 + i * 0.34, 0.79 + k * 0.045, -0.19 + j * 0.38, 0.28, 0.042, 0.32, k % 2 ? shadeHex(col, 0.85) : col);
+      for (let k = 0; k < n; k++) K.box((i - (nx - 1) / 2) * 0.34, 0.79 + k * 0.045, (j - (nz - 1) / 2) * 0.38, 0.28, 0.042, 0.32, k % 2 ? shadeHex(col, 0.85) : col);
     }
   });
-  // dummies in the window, on a low stand
-  K.group(2.05, 0.6, 0, () => { K.box(0, 0, 0, 2.5, 0.16, 0.8, 0xd9d4c8); });
-  mannequin(K, 1.2, 0.6, S + 0.25, { top: 0x8a1f24, legs: 0x22242c });
-  mannequin(K, 2.1, 0.55, S, { top: 0xd9b99a, legs: 0x2c3e50, skirt: true });
-  mannequin(K, 2.95, 0.6, S - 0.3, { top: 0x2e6f6a, legs: 0x51473d });
-  // the back: a tall mirror, two fitting rooms behind curtains, the till
-  K.group(0.3, D0, 0, () => {
-    K.box(0, 0.25, -0.03, 0.8, 1.95, 0.05, C.oak);
-    K.plane(0, 1.22, -0.06, 0.68, 1.82, 'S', 0xcfdfe4, { glow: 0.35 });
-    K.plane(-0.12, 1.5, -0.064, 0.1, 1.0, 'S', 0xeef6f8, { glow: 0.45, ry: 0 });
+}
+// piles of folded things on a shelf (what `shelves` stocks its boards with)
+function folded(K, x0, x1, y, depth, level, room) {
+  for (let x = x0 + 0.17; x < x1 - 0.12; x += 0.36) {
+    const n = 1 + Math.floor(K.rand() * Math.min(5, room / 0.05)), col = K.pick(CLOTHES);
+    for (let k = 0; k < n; k++) K.box(x, y + k * 0.045, depth / 2, 0.3, 0.042, depth - 0.08, k % 2 ? shadeHex(col, 0.85) : col, { faces: 'ftrl' });
+  }
+}
+// three dummies in the window on a low stand, its middle at (x, z)
+function dummies(K, x, z) {
+  K.group(x, z, 0, () => { K.box(0, 0, 0, 2.5, 0.16, 0.8, 0xd9d4c8); });
+  mannequin(K, x - 0.85, z, S + 0.25, { top: 0x8a1f24, legs: 0x22242c });
+  mannequin(K, x + 0.05, z - 0.05, S, { top: 0xd9b99a, legs: 0x2c3e50, skirt: true });
+  mannequin(K, x + 0.9, z, S - 0.3, { top: 0x2e6f6a, legs: 0x51473d });
+}
+// a tall mirror on a wall at (x, z), looking `ry`
+function wallMirror(K, x, z, ry) {
+  K.group(x, z, ry, () => {
+    K.box(0, 0.25, 0.03, 0.8, 1.95, 0.05, C.oak);
+    K.plane(0, 1.22, 0.06, 0.68, 1.82, 'N', 0xcfdfe4, { glow: 0.35 });
+    K.plane(0.12, 1.5, 0.064, 0.1, 1.0, 'N', 0xeef6f8, { glow: 0.45 });
   });
-  K.group(-2.2, D0 - 0.5, 0, () => {
-    K.box(0, 0, 0, 0.05, 2.2, 1.0, 0xd9d4c8); K.box(-1.1, 0, 0, 0.05, 2.2, 1.0, 0xd9d4c8); K.box(1.1, 0, 0, 0.05, 2.2, 1.0, 0xd9d4c8);
-    K.rod(-1.1, 2.1, -0.48, 1.1, 2.1, -0.48, 0.015, C.chrome);
+}
+// two fitting rooms behind curtains, their backs to a wall, the middle of them at (x, z) on it, opening `ry`
+function fittingRooms(K, x, z, ry) {
+  K.group(x, z, ry, () => {
+    for (const px of [-1.1, 0, 1.1]) K.box(px, 0, 0.5, 0.05, 2.2, 1.0, 0xd9d4c8);
+    K.rod(-1.1, 2.1, 0.98, 1.1, 2.1, 0.98, 0.015, C.chrome);
     for (const cx of [-0.55, 0.55]) for (let i = 0; i < 7; i++) {
-      K.box(cx - 0.36 + i * 0.12, 0.12, -0.48 + (i % 2) * 0.04, 0.12, 1.96, 0.03, 0xffffff, { slot: SLOT.accent, k: i % 2 ? 1.25 : 0.85, faces: 'fbrl' });
+      K.box(cx - 0.36 + i * 0.12, 0.12, 0.98 - (i % 2) * 0.04, 0.12, 1.96, 0.03, 0xffffff, { slot: SLOT.accent, k: i % 2 ? 1.25 : 0.85, faces: 'fbrl' });
     }
   });
-  counter(K, 1.5, 3.1, 4.35, 0.6, 1.0, { front: 0xffffff, slot: SLOT.accent, top: C.oak });
-  till(K, 2.6, 1.0, 4.65);
-  K.box(1.8, 1.0, 4.6, 0.3, 0.2, 0.2, 0xe3d5c0);
+}
+
+function apparel(K, v = 0) {
+  K.shell({ skirting: 0x8a8376 });
+  const desk = { front: 0xffffff, slot: SLOT.accent, top: C.oak };
+  const cubby = { frame: 0xd9d4c8, back: 0xcfc8ba, y0: 0.3, fill: folded };
+  if (v === 1) {
+    // the boutique: one long rail right across the back, a big table of folded things in the middle, shelves of them
+    // down the right, the fitting rooms beyond those, the cash desk just inside the door
+    wallRail(K, -0.65, D0, S, 5.5);
+    fittingRooms(K, H0, 4.35, W);
+    K.group(H0, 1.85, W, () => shelves(K, 2.4, 2.0, 0.38, 4, cubby), { stretch: true });
+    foldTable(K, 0.1, 2.75, 2.1, 0.95);
+    foldTable(K, 2.0, 1.75, 0.9, 0.7);
+    rack(K, 0.0, 4.05, 0);
+    // a chair to wait in by the fitting rooms
+    armchair(K, 1.6, 3.9, E, { spot: { prio: 6 } });
+    dummies(K, 0.6, 0.6);
+    wallMirror(K, -H0, 4.4, E);
+    counter(K, 2.1, 3.6, -2.2, 0.55, 1.0, { ...desk, alongZ: true, flip: -1 });
+    till(K, -2.48, 1.0, 3.2, W);
+    K.box(-2.48, 1.0, 2.4, 0.2, 0.2, 0.3, 0xe3d5c0);
+    K.spot(-3.12, 2.85, E, 'counter', { role: 'staff', h: 1.0, roam: 0.3 });
+    K.spot(-1.72, 2.85, W, 'counter', { h: 1.0 });
+    K.spot(0.1, 1.95, N, 'lean');
+    K.spot(-1.6, 4.5, N, 'browse');
+    K.spot(2.7, 2.55, E, 'browse');
+  } else if (v === 2) {
+    // round racks about the floor and the cash desk an island among them; a rail down the left wall, shelves of
+    // folded things and the fitting rooms across the back, prints and the mirror on the right
+    wallRail(K, -H0, 3.4, E, 3.0);
+    fittingRooms(K, 1.5, D0, S);
+    K.group(-1.4, D0, S, () => shelves(K, 2.2, 2.0, 0.38, 4, cubby), { stretch: true });
+    roundRack(K, -1.75, 2.75);
+    roundRack(K, 2.45, 2.6);
+    foldTable(K, 2.3, 0.95, 1.4, 0.7);
+    dummies(K, -0.55, 0.6);
+    wallMirror(K, H0, 4.1, W);
+    picture(K, H0, 1.75, 1.45, 0.8, 1.2, 'W', { frame: C.black, art: [0xe3d5c0, 0x8a1f24, 0x2c3e50], rnd: K.rand });
+    picture(K, H0, 1.75, 2.6, 0.8, 1.2, 'W', { frame: C.black, art: [0x2c3e50, 0xd9b99a, 0xecf0f1], rnd: K.rand });
+    counter(K, -0.5, 1.0, 2.5, 0.55, 1.0, desk);
+    till(K, 0.6, 1.0, 2.8);
+    K.box(-0.2, 1.0, 2.75, 0.3, 0.2, 0.2, 0xe3d5c0);
+    K.spot(0.25, 3.5, S, 'counter', { role: 'staff', h: 1.0, roam: 0.3 });
+    K.spot(0.25, 1.95, N, 'counter', { h: 1.0 });
+    K.spot(-2.55, 4.0, W, 'browse');
+    K.spot(1.4, 2.3, E, 'browse');
+    K.spot(2.75, 4.1, E, 'stand');
+    K.spot(1.3, 0.95, E, 'lean');
+    K.spot(-1.4, 4.7, N, 'browse');
+  } else {
+    // rails of clothes along both walls; a rack, a round one and a table of folded shirts between them; the dummies
+    // in the window; the back: a tall mirror, the fitting rooms, the till
+    wallRail(K, H0, 2.4, W, 3.8);
+    wallRail(K, -H0, 3.2, E, 2.6);
+    rack(K, -0.2, 3.25, 0);
+    roundRack(K, -1.25, 1.95);
+    foldTable(K, 0.9, 1.75);
+    dummies(K, 2.05, 0.6);
+    wallMirror(K, 0.3, D0, S);
+    fittingRooms(K, -2.2, D0, S);
+    counter(K, 1.5, 3.1, 4.35, 0.6, 1.0, desk);
+    till(K, 2.6, 1.0, 4.65);
+    K.box(1.8, 1.0, 4.6, 0.3, 0.2, 0.2, 0xe3d5c0);
+    K.spot(2.4, 5.05, S, 'counter', { role: 'staff', h: 1.0, roam: 0.3 });
+    K.spot(2.75, 2.5, E, 'browse');
+    K.spot(0.9, 2.45, S, 'lean');
+    K.spot(-0.2, 2.7, N, 'browse');
+    K.spot(-2.8, 3.3, W, 'browse');
+    K.spot(1.9, 3.8, N, 'counter', { h: 1.0 });
+  }
   trackSpots(K, -2.4, 2.8, 2.0, 5);
   trackSpots(K, -2.4, 2.8, 3.8, 5);
-  K.spot(2.4, 5.05, S, 'counter', { role: 'staff', h: 1.0, roam: 0.3 });
-  K.spot(2.75, 2.5, E, 'browse');
-  K.spot(0.9, 2.45, S, 'lean');
-  K.spot(-0.2, 2.7, N, 'browse');
-  K.spot(-2.8, 3.3, W, 'browse');
-  K.spot(1.9, 3.8, N, 'counter', { h: 1.0 });
 }
 
 // a counter-height case with a glass top: little bright things on dark velvet
@@ -145,112 +228,253 @@ function jewelry_gift(K) {
   K.spot(-2.8, 3.5, W, 'browse');
 }
 
-function grocery(K) {
-  K.shell({ skirting: 0x7a7a74 });
-  const packs = goods(BRIGHTS, { size: 0.17, tall: 0.24 });
-  // gondolas down the room: goods both sides, an end facing the window
-  for (const gx of [0.55, 2.2]) {
-    for (const ry of [E, W]) K.group(gx, 3.05, ry, () => shelves(K, 2.8, 1.55, 0.3, 4, { frame: 0xd9dcd8, back: 0xc4c8c4, y0: 0.14, fill: packs }), { stretch: true });
-    K.group(gx, 1.62, S, () => shelves(K, 0.62, 1.55, 0.28, 4, { frame: 0xd9dcd8, back: 0xc4c8c4, y0: 0.14, fill: goods([0xd9862a, 0xc0392b, 0xf1c40f], { size: 0.17 }) }));
-    K.group(gx, 1.5, 0, () => K.plane(0, 1.7, 0.1, 0.62, 0.22, 'S', 0xffffff, { slot: SLOT.accent }));
-    K.shadow(gx, 3.0, 1.1, 3.4, 0.66);
-  }
-  // coolers along the back wall, lit all night
-  K.group(0, 0, 0, () => {
-    K.box(0, 0, D0 - 0.3, 6.6, 2.15, 0.6, 0x3a3f44);
-    K.plane(0, 2.28, D0 - 0.61, 6.6, 0.24, 'S', 0xffffff, { slot: SLOT.accent });
+// --- what a grocer's is fitted with (grocery() lays them out three ways)
+// a gondola `len` long, its middle at (x, z): goods both sides, down the room (its end to the window) or along the
+// glass (its end to the door's side), a sign over the end
+function gondola(K, x, z, len, packs, { alongX = false, h = 1.55, levels = 4 } = {}) {
+  const fit = { frame: 0xd9dcd8, back: 0xc4c8c4, y0: 0.14 };
+  for (const ry of alongX ? [N, S] : [E, W]) K.group(x, z, ry, () => shelves(K, len, h, 0.3, levels, { ...fit, fill: packs }), { stretch: true });
+  K.group(alongX ? x - len / 2 - 0.03 : x, alongX ? z : z - len / 2 - 0.03, alongX ? W : S, () => {
+    shelves(K, 0.62, h, 0.28, levels, { ...fit, fill: goods([0xd9862a, 0xc0392b, 0xf1c40f], { size: 0.17 }) });
+    K.plane(0, h + 0.15, 0.02, 0.62, 0.22, 'N', 0xffffff, { slot: SLOT.accent });
+  });
+  K.shadow(x, z, alongX ? len + 0.6 : 1.1, alongX ? 1.1 : len + 0.6, 0.66);
+}
+// `n` cooler doors in a row along a wall, lit all night: the middle of the row at (x, z) on the wall, looking `ry`
+function coolers(K, x, z, ry, n) {
+  const w = n * 0.94 + 0.02;
+  K.group(x, z, ry, () => {
+    K.box(0, 0, 0.3, w, 2.15, 0.6, 0x3a3f44);
+    K.plane(0, 2.28, 0.61, w, 0.24, 'N', 0xffffff, { slot: SLOT.accent });
+    for (let i = 0; i < n; i++) {
+      K.group((i - (n - 1) / 2) * 0.94, 0.61, 0, () => {
+        K.plane(0, 1.12, 0, 0.84, 1.95, 'N', 0xdff2ff, { glow: 2 });
+        for (let r = 0; r < 5; r++) {
+          K.plane(0, 0.22 + r * 0.38, 0.004, 0.84, 0.025, 'N', 0x8a9298);
+          const col = K.pick(BRIGHTS), two = K.pick(BRIGHTS);
+          for (let b = 0; b < 6; b++) K.plane(-0.33 + b * 0.132, 0.36 + r * 0.38, 0.006, 0.1, 0.24, 'N', b < 3 ? col : two, { glow: 2 });
+        }
+        K.box(-0.4, 0.9, 0.02, 0.025, 0.5, 0.03, C.chrome);
+      });
+    }
   }, { stretch: true });
-  for (let i = 0; i < 7; i++) {
-    K.group(-2.82 + i * 0.94, D0 - 0.61, 0, () => {
-      K.plane(0, 1.12, 0, 0.84, 1.95, 'S', 0xdff2ff, { glow: 2 });
-      for (let r = 0; r < 5; r++) {
-        K.plane(0, 0.22 + r * 0.38, -0.004, 0.84, 0.025, 'S', 0x8a9298);
-        const col = K.pick(BRIGHTS), two = K.pick(BRIGHTS);
-        for (let b = 0; b < 6; b++) K.plane(-0.33 + b * 0.132, 0.36 + r * 0.38, -0.006, 0.1, 0.24, 'S', b < 3 ? col : two, { glow: 2 });
-      }
-      K.box(0.4, 0.9, -0.02, 0.025, 0.5, 0.03, C.chrome);
-    });
-  }
-  // the checkout by the door
-  K.group(-1.95, 2.75, 0, () => {
+}
+// the checkout: a belt along its own z, sweets down the customers' side (+x), whoever works it on the other
+function checkout(K, x, z, ry) {
+  K.group(x, z, ry, () => {
     K.box(0, 0, 0, 0.62, 0.92, 1.7, 0xffffff, { slot: SLOT.accent });
     K.box(0, 0.92, 0, 0.68, 0.035, 1.76, 0x2a2c30);
     K.box(0.02, 0.957, -0.25, 0.44, 0.006, 0.9, 0x16181a);
     K.shadow(0, 0, 1.0, 2.0);
-    // sweets at the till
     for (let r = 0; r < 3; r++) for (let i = 0; i < 5; i++) K.box(0.36, 0.25 + r * 0.22, -0.6 + i * 0.13, 0.08, 0.12, 0.11, K.pick(BRIGHTS), { faces: 'rtfb' });
+    till(K, 0, 0.957, 0.5, W);
+    K.spot(-0.8, 0.15, E, 'counter', { role: 'staff', h: 0.95 });
+    K.spot(0.65, 0.15, W, 'counter', { h: 0.95 });
   });
-  till(K, -1.95, 0.957, 3.25, E);
-  // fruit and vegetables in the window
-  K.group(2.55, 0.85, 0, () => {
+}
+// fruit and vegetables in crates on a stepped stand, shown to the window
+function produce(K, x, z) {
+  K.group(x, z, 0, () => {
     K.box(0, 0, 0.15, 1.6, 0.5, 0.9, 0x7a5a3c);
     K.box(0, 0.5, 0.42, 1.6, 0.3, 0.36, 0x7a5a3c);
     const fruit = [0xd9862a, 0xb0291f, 0x7ab02a, 0xf1c40f, 0xb0291f, 0x5a8a2a, 0xe6b422, 0x8a3a8a];
     for (let c = 0; c < 4; c++) for (let row = 0; row < 2; row++) {
-      const col = fruit[(c + row * 4) % fruit.length], y = row ? 0.8 : 0.5, z = row ? 0.42 : -0.05;
-      K.box(-0.6 + c * 0.4, y, z, 0.38, 0.05, 0.34, 0x5a4026);
-      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) K.sph(-0.71 + c * 0.4 + i * 0.11, y + 0.085 + ((i + j) % 2) * 0.03, z - 0.1 + j * 0.1, 0.055, col, { ws: 5, hs: 3 });
+      const col = fruit[(c + row * 4) % fruit.length], y = row ? 0.8 : 0.5, cz = row ? 0.42 : -0.05;
+      K.box(-0.6 + c * 0.4, y, cz, 0.38, 0.05, 0.34, 0x5a4026);
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) K.sph(-0.71 + c * 0.4 + i * 0.11, y + 0.085 + ((i + j) % 2) * 0.03, cz - 0.1 + j * 0.1, 0.055, col, { ws: 5, hs: 3 });
     }
     K.shadow(0, 0.1, 1.9, 1.3);
   });
-  K.group(-H0, 4.2, E, () => shelves(K, 1.6, 1.9, 0.3, 5, { frame: 0xd9dcd8, back: 0xc4c8c4, fill: packs }));
-  for (const x of [-1.6, 0.55, 2.4]) strip(K, x, 0.8, 4.6);
-  K.spot(-2.75, 2.9, E, 'counter', { role: 'staff', h: 0.95 });
-  K.spot(-1.3, 2.9, W, 'counter', { h: 0.95 });
-  K.spot(1.35, 3.0, E, 'browse');
-  K.spot(-0.6, 4.55, N, 'browse');
-  K.spot(1.4, 1.2, E, 'lean');
-  K.spot(-0.25, 2.6, E, 'browse');
 }
 
-function salon(K) {
-  K.shell();
-  // stations along the right wall: a mirror ringed with bulbs, a shelf, a chair
-  const stations = [1.25, 2.85, 4.45];
-  stations.forEach((z, i) => {
-    K.group(H0, z, W, () => {
-      K.box(0, 0.95, 0.03, 0.86, 1.3, 0.05, C.woodD);
-      K.plane(0, 1.6, 0.06, 0.74, 1.18, 'N', 0xd3e4ea, { glow: 0.4 });
-      K.plane(0.12, 1.75, 0.064, 0.1, 0.7, 'N', 0xf0f8fa, { glow: 0.5 });
-      for (let b = 0; b < 5; b++) K.sph(-0.32 + b * 0.16, 2.3, 0.08, 0.035, C.bulb, { glow: 1, ws: 5, hs: 3 });
-      K.box(0, 0.84, 0.16, 0.9, 0.04, 0.3, C.woodD);
-      bottleRow(K, -0.35, 0.3, 0.88, 0.18, { step: 0.11, h: 0.16, palette: [0xe84393, 0x7ad0f4, 0xf4f1ea, 0x2c3e50, 0x9af4b0] });
-    });
-    // the chair: a deep seat on a chrome post, a footrest
-    K.group(H0 - 1.05, z, E, () => {
-      K.cyl(0, 0, 0, 0.3, 0.03, C.chrome, { seg: 12 });
-      K.cyl(0, 0.03, 0, 0.05, 0.36, C.chrome, { seg: 6, open: true });
-      K.box(0, 0.38, 0.02, 0.54, 0.13, 0.52, 0xffffff, { slot: SLOT.accent });
-      K.box(0, 0.5, -0.24, 0.52, 0.56, 0.1, 0xffffff, { slot: SLOT.accent, k: 0.9, rx: -0.1 });
-      for (const s of [-1, 1]) K.box(s * 0.3, 0.62, 0, 0.06, 0.04, 0.4, C.chrome);
-      K.box(0, 0.14, 0.42, 0.34, 0.03, 0.12, C.chrome);
-      K.shadow(0, 0, 0.9, 0.9);
-      K.spot(0, 0.04, 0, 'sit', { h: 0.52, pair: i, prio: 1 + i });
-      K.spot(0, -0.62, 0, 'work', { role: 'staff', pair: i });
-    });
+function grocery(K, v = 0) {
+  K.shell({ skirting: 0x7a7a74 });
+  const packs = goods(BRIGHTS, { size: 0.17, tall: 0.24 });
+  const wall = { frame: 0xd9dcd8, back: 0xc4c8c4, fill: packs };
+  if (v === 1) {
+    // the aisles along the glass (a low gondola in front, a taller one behind), the coolers down the right wall,
+    // the checkout at the back on the left, shelves along the back, the fruit in the middle of the window
+    gondola(K, 0.3, 2.3, 2.8, packs, { alongX: true, h: 1.25, levels: 3 });
+    gondola(K, 0.3, 3.8, 2.8, packs, { alongX: true });
+    coolers(K, H0, 3.3, W, 4);
+    K.group(0.6, D0, S, () => shelves(K, 4.2, 1.9, 0.3, 5, wall), { stretch: true });
+    K.group(-H0, 2.9, E, () => shelves(K, 1.8, 1.9, 0.3, 5, wall));
+    checkout(K, -2.45, 4.45, E);
+    produce(K, 0.6, 0.72);
+    for (const z of [1.4, 3.05, 4.7]) strip(K, z, -2.6, 2.6, undefined, true);
+    K.spot(2.4, 3.0, E, 'browse');
+    K.spot(0.9, 3.05, N, 'browse');
+    K.spot(1.75, 0.8, W, 'lean');
+    K.spot(-2.7, 2.9, W, 'browse');
+    K.spot(1.4, 4.65, N, 'browse');
+    K.spot(-0.6, 1.6, N, 'browse');
+  } else if (v === 2) {
+    // the checkout an island facing the street, a gondola behind whoever works it and another down the room; the
+    // coolers on the left wall past the door, shelves right round the back and the right, two stands of fruit
+    coolers(K, -H0, 3.95, E, 3);
+    K.group(0.25, D0, S, () => shelves(K, 5.6, 1.9, 0.3, 5, wall), { stretch: true });
+    K.group(H0, 3.3, W, () => shelves(K, 3.4, 1.9, 0.3, 5, wall), { stretch: true });
+    checkout(K, -0.6, 1.9, E);
+    gondola(K, -0.5, 3.5, 2.2, packs, { alongX: true });
+    gondola(K, 1.95, 3.2, 2.4, packs);
+    produce(K, 0.95, 0.72);
+    produce(K, 2.6, 0.72);
+    for (const x of [-1.6, 0.55, 2.4]) strip(K, x, 0.8, 4.6);
+    K.spot(-2.4, 3.9, W, 'browse');
+    K.spot(2.75, 3.4, E, 'browse');
+    K.spot(1.0, 1.75, S, 'lean');
+    K.spot(0.2, 4.6, N, 'browse');
+    K.spot(1.2, 3.0, E, 'browse');
+  } else {
+    // gondolas down the room, the coolers along the back wall, the checkout by the door, the fruit in the window
+    for (const gx of [0.55, 2.2]) gondola(K, gx, 3.05, 2.8, packs);
+    coolers(K, 0, D0, S, 7);
+    checkout(K, -1.95, 2.75, 0);
+    produce(K, 2.55, 0.85);
+    K.group(-H0, 4.2, E, () => shelves(K, 1.6, 1.9, 0.3, 5, wall));
+    for (const x of [-1.6, 0.55, 2.4]) strip(K, x, 0.8, 4.6);
+    K.spot(1.35, 3.0, E, 'browse');
+    K.spot(-0.6, 4.55, N, 'browse');
+    K.spot(1.4, 1.2, E, 'lean');
+    K.spot(-0.25, 2.6, E, 'browse');
+  }
+}
+
+// --- what a hairdresser's is fitted with (salon() lays them out three ways)
+const POTIONS = [0xe84393, 0x7ad0f4, 0xf4f1ea, 0x2c3e50, 0x9af4b0];
+// a station's mirror ringed with bulbs and the shelf under it, on a wall (or a partition) at (x, z), looking `ry`
+function salonMirror(K, x, z, ry) {
+  K.group(x, z, ry, () => {
+    K.box(0, 0.95, 0.03, 0.86, 1.3, 0.05, C.woodD);
+    K.plane(0, 1.6, 0.06, 0.74, 1.18, 'N', 0xd3e4ea, { glow: 0.4 });
+    K.plane(0.12, 1.75, 0.064, 0.1, 0.7, 'N', 0xf0f8fa, { glow: 0.5 });
+    for (let b = 0; b < 5; b++) K.sph(-0.32 + b * 0.16, 2.3, 0.08, 0.035, C.bulb, { glow: 1, ws: 5, hs: 3 });
+    K.box(0, 0.84, 0.16, 0.9, 0.04, 0.3, C.woodD);
+    bottleRow(K, -0.35, 0.3, 0.88, 0.18, { step: 0.11, h: 0.16, palette: POTIONS });
   });
-  // a basin to wash at, at the back on the left
-  K.group(-H0 + 0.35, 4.6, E, () => {
+}
+// the chair before it, whoever sits there looking `ry` (at the mirror): a deep seat on a chrome post, a footrest.
+// The stylist stands behind; `i` ties the two, so there's a stylist only when someone is in the chair
+function stylingChair(K, x, z, ry, i) {
+  K.group(x, z, ry, () => {
+    K.cyl(0, 0, 0, 0.3, 0.03, C.chrome, { seg: 12 });
+    K.cyl(0, 0.03, 0, 0.05, 0.36, C.chrome, { seg: 6, open: true });
+    K.box(0, 0.38, 0.02, 0.54, 0.13, 0.52, 0xffffff, { slot: SLOT.accent });
+    K.box(0, 0.5, -0.24, 0.52, 0.56, 0.1, 0xffffff, { slot: SLOT.accent, k: 0.9, rx: -0.1 });
+    for (const s of [-1, 1]) K.box(s * 0.3, 0.62, 0, 0.06, 0.04, 0.4, C.chrome);
+    K.box(0, 0.14, 0.42, 0.34, 0.03, 0.12, C.chrome);
+    K.shadow(0, 0, 0.9, 0.9);
+    K.spot(0, 0.04, 0, 'sit', { h: 0.52, pair: i, prio: 1 + i });
+    K.spot(0, -0.62, 0, 'work', { role: 'staff', pair: i });
+  });
+}
+// a basin to wash at, its back 10 cm off a wall, looking `ry`; `seat`: a chair tipped back to it (and who sits there)
+function washBasin(K, x, z, ry, seat = null) {
+  K.group(x, z, ry, () => {
     K.box(0, 0, 0, 0.6, 0.8, 0.5, C.woodD);
     K.box(0, 0.8, 0.02, 0.56, 0.16, 0.46, 0xf4f1ea);
     K.box(0, 0.93, 0.04, 0.42, 0.04, 0.32, 0x16181a);
     K.rod(0, 0.96, -0.18, 0, 1.12, -0.05, 0.015, C.chrome);
+    if (seat) {
+      K.box(0, 0, 0.66, 0.32, 0.3, 0.32, C.char);
+      K.box(0, 0.3, 0.66, 0.5, 0.12, 0.5, 0xffffff, { slot: SLOT.accent });
+      K.box(0, 0.4, 0.4, 0.5, 0.55, 0.09, 0xffffff, { slot: SLOT.accent, k: 0.9, rx: -0.3 });
+      K.shadow(0, 0.6, 0.8, 0.9);
+      if (seat.prio != null) K.spot(0, 0.66, 0, 'sit', { h: 0.42, ...seat });
+    }
   });
-  // somewhere to wait, the desk, things to buy behind it
-  K.group(-H0 + 0.3, 2.75, E, () => {
-    bench(K, 1.7, { slot: SLOT.accent, col: 0xffffff, depth: 0.5, back: 0.9 });
-    K.spot(-0.4, 0.05, 0, 'read', { h: 0.45, prio: 2 });
-    K.spot(0.45, 0.05, 0, 'sit', { h: 0.45, prio: 6 });
+}
+// a low table of magazines
+function magTable(K, x, z, w = 0.5, d = 0.8) {
+  K.group(x, z, 0, () => {
+    K.box(0, 0, 0, w, 0.42, d, C.woodD);
+    K.box(0.02, 0.42, d * 0.12, 0.28, 0.012, 0.2, 0xe84393, { ry: 0.3 });
+    K.box(-0.05, 0.42, -d * 0.25, 0.28, 0.012, 0.2, 0x7ad0f4, { ry: -0.2 });
   });
-  K.group(-2.3, 2.75, 0, () => { K.box(0, 0, 0, 0.5, 0.42, 0.8, C.woodD); K.box(0.02, 0.42, 0.1, 0.28, 0.012, 0.2, 0xe84393, { ry: 0.3 }); K.box(-0.05, 0.42, -0.2, 0.28, 0.012, 0.2, 0x7ad0f4, { ry: -0.2 }); });
-  counter(K, -1.3, 0.5, 4.3, 0.55, 1.05, { front: 0xffffff, slot: SLOT.accent, top: 0xe8e4da });
-  till(K, -0.2, 1.05, 4.58);
-  K.group(-0.4, D0, S, () => shelves(K, 2.2, 1.3, 0.2, 3, { frame: 0xe8e4da, y0: 0.05, sides: false, fill: (k, x0, x1, y, d) =>
-    bottleRow(k, x0 + 0.05, x1 - 0.05, y, d - 0.08, { step: 0.1, h: 0.2, palette: [0xe84393, 0x7ad0f4, 0xf4f1ea, 0x2c3e50, 0x9af4b0, 0xf1c40f] }) }), { y: 1.1 });
-  plant(K, 0.1, 0.55, 1.4);
-  for (const z of stations) pendant(K, 1.4, z, 2.2, { shade: 0xe8e4da, r: 0.2 });
-  ceilingPanel(K, -1.5, 2.6, 1.2, 0.6);
-  K.spot(-0.5, 4.95, S, 'counter', { role: 'staff', h: 1.05 });
+}
+// shelves of things to buy, up on a wall
+function potions(K, x, z, ry, w) {
+  K.group(x, z, ry, () => shelves(K, w, 1.3, 0.2, 3, { frame: 0xe8e4da, y0: 0.05, sides: false, fill: (k, x0, x1, y, d) =>
+    bottleRow(k, x0 + 0.05, x1 - 0.05, y, d - 0.08, { step: 0.1, h: 0.2, palette: [...POTIONS, 0xf1c40f] }) }), { y: 1.1 });
+}
+
+function salon(K, v = 0) {
+  K.shell();
+  const desk = { front: 0xffffff, slot: SLOT.accent, top: 0xe8e4da }, lamp = { shade: 0xe8e4da, r: 0.2 };
+  const seats = { slot: SLOT.accent, col: 0xffffff, depth: 0.5, back: 0.9 };
+  if (v === 1) {
+    // stations along both walls, the desk an island facing the door between them, a bench to wait on under the
+    // window, two basins with their chairs across the back
+    [[1, 2.0], [-1, 2.7], [1, 3.7], [-1, 4.3]].forEach(([s, z], i) => {
+      salonMirror(K, s * H0, z, s > 0 ? W : E);
+      stylingChair(K, s * (H0 - 1.05), z, s > 0 ? E : W, i);
+      pendant(K, s * 1.7, z, 2.2, lamp);
+    });
+    counter(K, -0.9, 0.7, 1.9, 0.55, 1.05, desk);
+    till(K, 0.2, 1.05, 2.18);
+    washBasin(K, -0.5, D0 - 0.35, S, { prio: 8 });
+    washBasin(K, 0.6, D0 - 0.35, S, {});
+    potions(K, 2.4, D0, S, 1.8);
+    picture(K, -2.3, 1.8, D0, 1.1, 0.8, 'S', { frame: C.woodD, art: [0xe8e4da, 0xe84393, 0x2c3e50], rnd: K.rand });
+    K.group(1.6, 0.42, N, () => {
+      bench(K, 2.2, seats);
+      K.spot(-0.4, 0.05, 0, 'read', { h: 0.45, prio: 2 });
+      K.spot(0.45, 0.05, 0, 'sit', { h: 0.45, prio: 6 });
+    });
+    magTable(K, 3.05, 0.6, 0.5, 0.5);
+    plant(K, -0.4, 0.6, 1.4);
+    ceilingPanel(K, -0.1, 2.4, 1.2, 0.6);
+    K.spot(-0.1, 2.9, S, 'counter', { role: 'staff', h: 1.05 });
+    K.spot(-0.1, 1.4, N, 'counter', { h: 1.05, prio: 7 });
+  } else if (v === 2) {
+    // the stations back to back on a partition down the middle of the room, mirrors both sides of it; the desk
+    // inside the door on the left wall, armchairs to wait in at the window, the basins across the back
+    K.group(0, 0, 0, () => {
+      K.box(0.6, 0, 2.7, 0.12, 2.42, 2.1, 0xffffff, { slot: SLOT.accent, k: 0.8 });
+      K.box(0.6, 2.42, 2.7, 0.2, 0.04, 2.18, C.woodD);
+    }, { stretch: true });
+    [[1, 2.15], [-1, 3.25], [1, 3.25], [-1, 2.15]].forEach(([s, z], i) => {
+      salonMirror(K, 0.6 + s * 0.06, z, s > 0 ? E : W);
+      stylingChair(K, 0.6 + s * 1.11, z, s > 0 ? W : E, i);
+      pendant(K, 0.6 + s * 1.3, z, 2.3, lamp);
+    });
+    counter(K, 2.0, 3.3, -2.3, 0.5, 1.05, { ...desk, alongZ: true, flip: -1 });
+    till(K, -2.55, 1.05, 2.95, W);
+    washBasin(K, 0.05, D0 - 0.35, S, { prio: 8 });
+    washBasin(K, 1.15, D0 - 0.35, S, {});
+    potions(K, -H0, 4.4, E, 1.6);
+    picture(K, H0, 1.7, 2.2, 1.0, 1.3, 'W', { frame: C.woodD, art: [0xe8e4da, 0xe84393, 0x2c3e50], rnd: K.rand });
+    picture(K, H0, 1.7, 3.8, 1.0, 1.3, 'W', { frame: C.woodD, art: [0x2c3e50, 0x7ad0f4, 0xf4f1ea], rnd: K.rand });
+    armchair(K, 1.2, 0.7, N, { spot: { pose: 'read', prio: 2 } });
+    armchair(K, 2.6, 0.7, N, { spot: { prio: 6 } });
+    magTable(K, 1.9, 0.65, 0.5, 0.5);
+    plant(K, 0.2, 0.6, 1.4);
+    ceilingPanel(K, -2.5, 2.65, 0.6, 1.2);
+    K.spot(-3.14, 2.65, E, 'counter', { role: 'staff', h: 1.05 });
+    K.spot(-1.8, 2.65, W, 'counter', { h: 1.05, prio: 7 });
+  } else {
+    // stations along the right wall; a basin at the back on the left, a bench to wait on along the left wall, the
+    // desk at the back with things to buy behind it
+    const stations = [1.25, 2.85, 4.45];
+    stations.forEach((z, i) => {
+      salonMirror(K, H0, z, W);
+      stylingChair(K, H0 - 1.05, z, E, i);
+    });
+    washBasin(K, -H0 + 0.35, 4.6, E);
+    K.group(-H0 + 0.3, 2.75, E, () => {
+      bench(K, 1.7, seats);
+      K.spot(-0.4, 0.05, 0, 'read', { h: 0.45, prio: 2 });
+      K.spot(0.45, 0.05, 0, 'sit', { h: 0.45, prio: 6 });
+    });
+    magTable(K, -2.3, 2.75);
+    counter(K, -1.3, 0.5, 4.3, 0.55, 1.05, desk);
+    till(K, -0.2, 1.05, 4.58);
+    potions(K, -0.4, D0, S, 2.2);
+    plant(K, 0.1, 0.55, 1.4);
+    for (const z of stations) pendant(K, 1.4, z, 2.2, lamp);
+    ceilingPanel(K, -1.5, 2.6, 1.2, 0.6);
+    K.spot(-0.5, 4.95, S, 'counter', { role: 'staff', h: 1.05 });
+  }
 }
 
 function bank(K) {
@@ -335,7 +559,7 @@ function medical(K) {
       K.spot(cx, 0.04, 0, i === 1 ? 'read' : 'sit', { h: 0.46, prio: (i * 2 + (x < 0 ? 1 : 0)) % 5 });
     }
     for (const s of [-1, 1]) { K.box(s * (n * 0.28 - 0.1), 0, 0, 0.04, 0.38, 0.04, C.chrome); K.box(s * (n * 0.28 - 0.1), 0, 0, 0.05, 0.03, 0.5, C.chrome); }
-    K.shadow(0, 0.05, n * 0.6 + 0.2, 0.9, 0.7);
+    K.shadow(0, 0.1, n * 0.6 + 0.2, 0.8, 0.7);
   });
   row(H0 - 0.33, 1.9, W, 4);
   row(-H0 + 0.33, 3.0, E, 3);
@@ -367,8 +591,9 @@ function bike_sports(K) {
     K.group(x, z, 0, () => { K.box(-0.52, 0, 0, 0.3, 0.03, 0.34, 0x2a2a2c); K.box(-0.52, 0.03, 0.06, 0.03, 0.3, 0.03, 0x2a2a2c); K.shadow(0, 0, 1.9, 0.6, 0.7); });
   });
   // more hung along the back wall, over a rack of wheels
-  [[-1.2, 5], [0.7, 3], [2.5, 6]].forEach(([x, c]) => bike(K, x, 1.55, D0 - 0.16, 0, paint[c], { rz: 0.12 }));
-  K.group(0, 0, 0, () => K.box(0.6, 1.45, D0 - 0.1, 5.6, 0.05, 0.16, 0x55595e), { stretch: true });
+  // (far enough off the wall for their handlebars, on a rail that deep)
+  [[-1.2, 5], [0.7, 3], [2.5, 6]].forEach(([x, c]) => bike(K, x, 1.55, D0 - 0.27, 0, paint[c], { rz: 0.12 }));
+  K.group(0, 0, 0, () => K.box(0.6, 1.45, D0 - 0.13, 5.6, 0.05, 0.24, 0x55595e), { stretch: true });
   for (let i = 0; i < 6; i++) K.group(-1.6 + i * 0.75, D0 - 0.12, 0, () => {
     K.cyl(0, 0.38, 0, 0.34, 0.035, 0x121214, { seg: 14, open: true, center: true, rx: E });
     K.cyl(0, 0.38, 0, 0.31, 0.02, 0xb8bcc0, { seg: 14, open: true, center: true, rx: E });
@@ -513,12 +738,13 @@ function theatre(K) {
     for (let i = 0; i < 4; i++) K.plane(-0.21 + i * 0.14, 1.44, -0.228, 0.1, 0.16, 'S', BRIGHTS[(i * 3 + 1) % 12], { glow: 0.8 });
   });
   for (let i = 0; i < 4; i++) K.cyl(1.6 + i * 0.12, 1.05, 4.2, 0.05, 0.16, i % 2 ? 0xb0291f : 0xf4f1ea, { seg: 6, r2: 0.065 });
-  // the box office at the back on the left
+  // the box office at the back on the left: a desk in front, a side each end, whoever sells the tickets inside it
   K.group(-2.3, D0 - 0.4, 0, () => {
-    K.box(0, 0, 0, 1.5, 1.05, 0.8, 0x3a2020); K.box(0, 1.05, -0.3, 0.5, 0.02, 0.2, C.brass);
-    K.box(0, 2.15, 0, 1.6, 0.3, 0.86, 0x3a2020); K.plane(0, 2.3, -0.435, 1.3, 0.2, 'S', 0xffe6a0, { glow: 1 });
+    K.box(0, 0, -0.25, 1.5, 1.05, 0.3, 0x3a2020); K.box(0, 1.05, -0.3, 0.5, 0.02, 0.2, C.brass);
+    for (const sx of [-0.72, 0.72]) K.box(sx, 0, 0.14, 0.06, 1.05, 0.5, 0x3a2020);
+    K.box(0, 2.15, -0.03, 1.6, 0.3, 0.8, 0x3a2020); K.plane(0, 2.3, -0.435, 1.3, 0.2, 'S', 0xffe6a0, { glow: 1 });
     for (const sx of [-0.73, 0.73]) K.box(sx, 1.05, -0.38, 0.05, 1.1, 0.06, C.brass);
-    K.spot(0, 0.1, S, 'counter', { role: 'staff', h: 1.02 });
+    K.spot(0, 0.15, S, 'counter', { role: 'staff', h: 1.02 });
   });
   // posters in lit cases along both walls
   const poster = (x, z, face, i) => picture(K, x, 1.65, z, 0.95, 1.35, face, { frame: C.brass, glow: 0.8,
@@ -589,4 +815,6 @@ function service(K) {
   K.spot(-1.2, 1.55, N, 'counter', { h: 1.02, prio: 3 });
 }
 
+// how many layouts each has (shop-kits.js VARIANTS): its function is called with (K, v)
+export const VARIANTS_B = { apparel: 3, grocery: 3, salon: 3 };
 export const KITS_B = { apparel, jewelry_gift, grocery, salon, bank, medical, bike_sports, dispensary, gallery, theatre, service };

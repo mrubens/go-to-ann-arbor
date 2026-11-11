@@ -34,7 +34,7 @@ import {
 import { GEO } from './city-geodata.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { createBuildingFootprints } from './building-footprints.js';
-import { beginShopBays, shopBayStats } from './shop-types.js';
+import { beginShopBays, shopBayStats, setShopOutlines, setShopAwnings } from './shop-types.js';
 import { buildHouses, streamHouses, shopLook } from './houses.js';
 import { TIER } from './device-tier.js';
 import { groundStreamCenter } from './terrain.js';
@@ -518,6 +518,8 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
   // A building that isn't one of shopfronts (a one-storey shop or strip mall, an office block) still gets one on a
   // wall a named business's sign hangs on (`signFronts`): not the University's or the city's, nor a house-colored block
   beginShopBays();
+  setShopOutlines(colliders);
+  setShopAwnings(allBlocks.flatMap((d) => d.awnings.filter((a) => a.canopy)));
   surveyedBuckets.forEach((items, i) => {
     if (!items.length) return;
     for (const r of items) r.signFronts = !r.storefronts && r.kind !== 5 && r.kind !== 6 && (i < 5 || i > 7) && r.height >= 3.1;

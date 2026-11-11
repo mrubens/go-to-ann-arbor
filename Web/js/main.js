@@ -83,6 +83,7 @@ import { buildMtbTrails } from './mtb-trails.js';
 import { buildBikeRoutes } from './bike-routes.js';
 import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
+import { createStars } from './sky-stars.js';
 import { waterDisturb, setShopHour } from './tsl-materials.js';
 import { refreshSeason } from './seasons.js';
 import { buildRoadWork } from './road-work.js';
@@ -335,6 +336,15 @@ async function initApp() {
   const airportPart = live.keep('airport', () => cityPart((g) => createAirport(g)), { inputs: [heights], from: ['js/airport.js', 'js/airport-data.js'] });
   // Lamp: the moon in its real phase (moon.js)
   const moonPart = live.keep('moon', () => cityPart((g) => createMoon(g)), { from: ['js/moon.js'] });
+  // the stars where they really are over Ann Arbor at the game's time (sky-stars.js)
+  const starsPart = live.keep('stars', () => cityPart((g) => createStars(g)), { from: ['js/sky-stars.js', 'js/star-catalog.js'] });
+  // how dark the sky is round a camera: the town's glow washes out the faint stars downtown, less out in the country
+  // or high up (0 downtown, 1 dark)
+  const starsAt = (cam) => {
+    const p = cam.position, away = Math.hypot(p.x, p.z);
+    const dark = Math.max(Math.min(1, Math.max(0, (away - 2500) / 4000)), Math.min(1, Math.max(0, (p.y - 150) / 600)));
+    return { night: lightingSystem.uNightFactor.value, cover: lightingSystem.sky.cloudCoverage.value, dark, time: performance.now() / 1000 };
+  };
   await showLoadingStage('Laying out the hills of Washtenaw County...');
   const outskirtsPart = live.keep('outskirts', () => cityPart((g) => buildOutskirts(g), { cull: setupSceneCulling, still: true }),
     { inputs: [heights, grid], from: ['js/outskirts.js'] });
@@ -610,7 +620,7 @@ async function initApp() {
   const animalsPart = live.keep('animals', () => cityPart((g) => (XBOX ? { update() {} } : buildAnimals(g))), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
   // the rooms behind the shopfronts' glass, near the player: furniture and people (shop-interiors.js)
   const shopRoomsPart = live.keep('shopRooms', () => cityPart((g) => createShopInteriors(g)), { inputs: [blocks], from: ['js/shop-interiors.js', 'js/shop-kits.js', 'js/shop-kits-b.js', 'js/shop-kits-c.js', 'js/shop-kit-core.js', 'js/shop-types.js'] });
-  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
+  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -668,8 +678,8 @@ async function initApp() {
       if (!(cartsStale || closuresStale) || dateWatch.toldStale) return;
       dateWatch.toldStale = true;
       const what = cartsStale && closuresStale ? 'carts and road closures' : cartsStale ? 'curb carts' : 'road closures';
+      // (only logged: the player isn't told; the next time the game opens has them)
       log(`[date] today's ${what} differ from the ones built: a reload brings them`);
-      showNotice(`It's a new day in Ann Arbor: reload for today's ${what}`, 6);
     });
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) watchDate(true); });
@@ -687,6 +697,7 @@ async function initApp() {
   controllerManager.parkedCars = parkedCars;
   controllerManager.kayakLaunches = kayakLaunches;
   controllerManager.livery = liveryPart.made;
+  controllerManager.riverPeople = riverPeoplePart.made;
   controllerManager.docks = docksPart.made;
   controllerManager.seats = seatSpots;
   controllerManager.skatePark = skatePart.made;
@@ -916,6 +927,9 @@ async function initApp() {
   };
   // the safety corridor cruiser's one line ('Warning: 47 in a 35'), where the place label sits
   trafficSystem.setNotice?.((text, secs) => showNotice(text, secs));
+  // a big car jump's numbers as it lands, under the cinematic view (cameras.js updateJumpCam)
+  cameraSystem.onJumpStats = ({ air, distanceFt, heightFt }) =>
+    showNotice(`${air.toFixed(1)} s airtime · ${Math.round(distanceFt)} ft · ${Math.round(heightFt)} ft high`, 3.5);
   // someone knocked down by the player's car or bike: a thump there and a jolt in the hands
   const _thudAt = { x: 0, y: 0, z: 0 };
   // (who: 0 the first player, 1 the second in split screen)
@@ -2107,6 +2121,7 @@ async function initApp() {
     });
   });
 
+
   const openMapBtn = document.getElementById('btn-open-map');
   if (openMapBtn) openMapBtn.addEventListener('click', () => mapSystem.toggleFullMap(true));
 
@@ -2676,6 +2691,7 @@ async function initApp() {
       }
     }
     moonPart.made.update(cameraSystem.camera);
+    starsPart.made.update(cameraSystem.camera, starsAt(cameraSystem.camera));
     mark('trains & parked');
     animalCtx.player = controllerManager.getActiveEntity();
     animalCtx.mode = controllerManager.activeMode;
@@ -2692,7 +2708,11 @@ async function initApp() {
     const kayak = controllerManager.entities.kayak;
     if (kayak.strokes !== heardStrokes) {
       heardStrokes = kayak.strokes;
-      if (controllerManager.activeMode === 'kayak') audioSystem.cue('splash', kayak.position, 0.8);
+      // on the side the blade went in, a little stronger the harder it's pulled
+      if (controllerManager.activeMode === 'kayak' && kayak.boat !== 'paddleboat') {
+        const side = kayak.strokeSide || 0, h = kayak.heading;
+        audioSystem.cue('paddle', { x: kayak.position.x + Math.cos(h) * side * 0.9, y: kayak.position.y, z: kayak.position.z - Math.sin(h) * side * 0.9 }, Math.min(1, 0.5 + Math.abs(kayak.speed) * 0.12));
+      }
     }
     // white water off the bow in the Argo Cascades (controllers.js kayakSpray)
     for (const s of kayak.sprays?.splice(0) || []) {
@@ -2813,6 +2833,7 @@ async function initApp() {
         { scene, camera: cam2, before: () => {
           updateSceneCulling(cam2.position);
           moonPart.made.update(cam2);
+          starsPart.made.update(cam2, starsAt(cam2));
           precipitation.update(cam2, elapsed);
           if (lightingSystem.uUnder) lightingSystem.uUnder.value = underAt(cam2.position);
           airportPart.made.update?.(0, cam2.position);
@@ -2820,6 +2841,7 @@ async function initApp() {
         } }
       ]);
       moonPart.made.update(cameraSystem.camera);
+      starsPart.made.update(cameraSystem.camera, starsAt(cameraSystem.camera));
     } else renderPipeline.render();
     gpuTime.end();
     mark('render');

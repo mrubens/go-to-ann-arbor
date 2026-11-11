@@ -28,7 +28,7 @@ import {
   createBusWheelMaterial,
   createLoftedBusMaterial
 } from './bus.js';
-import { groundHeight, groundTilt } from './terrain.js';
+import { groundHeight, groundTilt, deckTop } from './terrain.js';
 import { MOTO_SPECS, HELMET_OF, HELMET_PAINTS, buildMotoGeometry, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
 import { speedLimitAt } from './speed-limits.js';
@@ -879,7 +879,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     // Lamp: the ambulance on a run takes the shortest way to the hospital; the corridor's cruiser the way to the player
     if (v.goal && toHospital) { const m = hospitalMove(v, fromLane); if (m) return m; }
     // (a turn its own lane can make first: it goes straight through junctions, with no time to change lanes)
-    if (v.chase) { const m = chaseMove(v, true) || chaseMove(v, fromLane); if (m) return m; }
+    if (v.chase) { const m = chaseMove(v, true); if (m) return m; }
     if (v.route) {
       const next = v.route.edges[v.ri + 1];
       const m = next && e.moves.find((o) => o.to === next);
@@ -2147,7 +2147,14 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // the view test just read); the slope under it (terrain.js) only for one that's drawn
   function seen(v, r) {
     const shown = !hasView || visible(v.x, v.z, r);
-    v._gy = hasView ? lastGround : groundHeight(v.x, v.z);
+    let gy = hasView ? lastGround : groundHeight(v.x, v.z);
+    // over a road its street's bridge crosses, the deck isn't the ground (terrain.js): one already up on the bridge
+    // stays on its deck, one on the road under it drives on under
+    if (v._gy !== undefined && v._gy > gy + 1) {
+      const top = deckTop(v.x, v.z);
+      if (top > gy + 1 && Math.abs(v._gy - top) < 1.5) gy = top;
+    }
+    v._gy = gy;
     return shown;
   }
   function settle(v, rotY, length, width) {
@@ -2621,7 +2628,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     v.isPolice = true;
     v.baseV0 ??= v.v0;
     v.v0 = v.baseV0 * 1.7;
-    v.move = chaseMove(v, fromLane) || v.move;
+    v.move = chaseMove(v, true) || v.move;
   }
   // a cruiser put on a road behind the player, 90-220 m back and going their way, out of sight where it can be
   function placeBehind(v) {
