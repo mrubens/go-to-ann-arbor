@@ -1,5 +1,6 @@
 // Lamp: the Huron River's flow now, from the USGS gauge "Huron River at Ann Arbor" (site 04174500, the US Geological
-// Survey's instantaneous values service, a US government work in the public domain), asked for when the city opens and
+// Survey's Water Data API, latest-continuous values, a US government work in the public domain; it replaces the old
+// waterservices.usgs.gov service, which USGS is shutting down in early 2027), asked for when the city opens and
 // every 15 minutes. The kayak's current follows it: faster after rain, lazier when the river is low. Offline, or when
 // the service doesn't answer, the river runs at its usual flow.
 
@@ -14,11 +15,10 @@ function currentScale(cfs) {
 
 async function fetchRiverFlow() {
   try {
-    const res = await fetch(`https://waterservices.usgs.gov/nwis/iv/?sites=${SITE}&format=json&parameterCd=00060`, { signal: AbortSignal.timeout(8000) });
+    const url = `https://api.waterdata.usgs.gov/ogcapi/v1/collections/latest-continuous/items?monitoring_location_id=USGS-${SITE}&parameter_code=00060&f=json`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return USUAL;
-    const series = (await res.json())?.value?.timeSeries?.[0];
-    const values = series?.values?.[0]?.value || [];
-    const cfs = Number(values[values.length - 1]?.value);
+    const cfs = Number((await res.json())?.features?.[0]?.properties?.value);
     if (!Number.isFinite(cfs) || cfs < 0) return USUAL;
     return { cfs, scale: currentScale(cfs), live: true };
   } catch {

@@ -29,7 +29,7 @@ import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './veh
 import { bryantParkLawn } from './landmarks.js';
 import { groundHeight, groundTilt, nearestWater, riverDepth, riverFlow, stadiumGround, waterLevel, footbridgeTop, riverbedHeight } from './terrain.js';
 import { WATER_RIPPLES, waterDisturb } from './tsl-materials.js';
-import { cascadeCurrent, cascadeDepth, inCascades, onWeirRocks, pondDraw } from './cascades.js';
+import { cascadeCurrent, cascadeDepth, cascadeWaveLift, inCascades, onWeirRocks, pondDraw } from './cascades.js';
 import { polygonContact, polygonContains } from './building-collision.js';
 import { onAirfield, buildStairTruck, PAVE } from './airport.js';
 import { pierPush } from './river.js';
@@ -37,6 +37,7 @@ import { pedalBoatGeometry } from './gallup-livery.js';
 import { vehicleContact, resolveVehicleContact } from './vehicle-physics.js';
 import { STADIUM, bowlSurface, carSurface, radiiAt } from './stadium-shape.js';
 import { hot, log, rumble } from '../lamp-game.js';
+import { roadCondition, surfaceAt, SURFACE } from './road-feel.js';
 import { dumpTruckGeo, excavatorGeo, truckWheelGeo, TRUCK_WHEELS } from './road-work.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MOTO_SPECS, HELMET_OF, buildMotoGeometry, buildMotoWheel, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
@@ -47,7 +48,33 @@ import { MOTO_SPECS, HELMET_OF, buildMotoGeometry, buildMotoWheel, buildHelmetGe
 const SPAWN_Z = 100;
 // The kayak sets out on Argo Pond, by the canoe livery, and the river carries it on down towards Gallup Park
 const KAYAK_LAUNCH = { x: 210, z: -1150 };
-const KAYAK_CURRENT = 1.5; // m/s, out in the middle at an ordinary flow (riverScale)
+// The Huron's own pace: about half a metre a second out in the middle at its usual 500 cfs (riverScale follows the
+// gauge), which is the city livery's Argo to Gallup, 3.7 miles in about an hour and a half, Cascades and all. Only the
+// Argo Cascades run quick (cascades.js cascadeCurrent), so they're the thrill of the trip.
+const KAYAK_CURRENT = 0.5;
+// How still the river is at (x, z), 0-1: 1 on the ponds behind the dams (Argo Pond, Gallup's above Geddes Dam, Barton
+// Pond), whose water lies level, and on the last slack reach into Gallup, where it barely falls; 0 where the river
+// runs. Read from how far the water's level falls along the flow within about 180 m up and down the river.
+const STILL_STEP = 30, STILL_STEPS = 6;
+const stillFlow = { x: 0, z: 0 };
+function riverStillness(x, z) {
+  if (!riverFlow(x, z, stillFlow)) return 0;
+  const walk = (dir) => {
+    let px = x, pz = z, run = 0;
+    for (let i = 0; i < STILL_STEPS; i++) {
+      if (!riverFlow(px, pz, stillFlow)) break;
+      const nx = px + stillFlow.x * STILL_STEP * dir, nz = pz + stillFlow.z * STILL_STEP * dir;
+      if (riverDepth(nx, nz) < 0.3) break;
+      px = nx; pz = nz; run += STILL_STEP;
+    }
+    return { level: waterLevel(px, pz), run };
+  };
+  const up = walk(-1), down = walk(1), run = up.run + down.run;
+  if (run < 90 || up.level == null || down.level == null) return 0;
+  const fall = (up.level - down.level) / run * 1000; // metres a kilometre: the river's 1 or more, a pond's 0
+  const t = Math.max(0, Math.min(1, (0.6 - fall) / 0.4));
+  return t * t * (3 - 2 * t);
+}
 // The player's own car: a maize sports car with GO BLU plates
 const OWN_CAR = { kind: 'sports', hex: 0xffcb05, style: 0 };
 const isOwnCar = (look) => look.kind === OWN_CAR.kind && look.hex === OWN_CAR.hex;
@@ -75,13 +102,14 @@ const CAR_HANDLING = {
   suv: { mass: 1910, speed: 50.1, acceleration: 5.2, powerSpeed: 20, drag: 0.000267, brake: 9.7, grip: 8.6, cornering: 9, wheelbase: 2.8, steer: 8, roll: 0.016 }, // 112 mph and 60 in 5.7 s, a RAV4 plug-in hybrid
   minivan: { mass: 2000, speed: 51.4, acceleration: 4.2, powerSpeed: 21.7, drag: 0.000285, brake: 9.3, grip: 8.4, cornering: 8.5, wheelbase: 3.03, steer: 7.5, roll: 0.015 }, // 115 mph and 60 in 6.9 s, an Odyssey
   pickup: { mass: 2650, speed: 50.1, acceleration: 7.8, powerSpeed: 22.8, drag: 0.000306, brake: 8.6, grip: 7.8, cornering: 7.6, wheelbase: 3.7, steer: 7, roll: 0.017, pitch: 0.034 }, // 112 mph and 60 in 3.6 s, an F-150 Raptor R
-  // the electric cars: heavy, with all their pull from a standstill
+  // the electric cars: heavy, with all their pull from a standstill, and lifting off slows them hard as the motor
+  // regenerates (coast: one-pedal driving, about 0.2 g)
   // the electric performance sedan: a tri-motor's shove off the line (60 mph in about two seconds) and 200 mph flat out, a Model S Plaid
-  tesla: { mass: 2160, speed: 89.4, acceleration: 13.1, powerSpeed: 23.7, drag: 0.000136, brake: 11.2, grip: 14, cornering: 14, wheelbase: 2.96, steer: 12, roll: 0.008, pitch: 0.018 },
-  ioniq: { mass: 2200, speed: 72, acceleration: 8.6, powerSpeed: 22.1, drag: 0.000196, brake: 11.5, grip: 9.6, cornering: 9.6, wheelbase: 3.0, steer: 8.5, roll: 0.013 }, // 161 mph and 60 in 3.25 s, an Ioniq 5 N
-  r1s: { mass: 3200, speed: 58.1, acceleration: 11.2, powerSpeed: 18.7, drag: 0.000197, brake: 9.9, grip: 9, cornering: 9, wheelbase: 3.08, steer: 8, roll: 0.013 }, // 130 mph and 60 in 2.6 s, a quad-motor Rivian R1S
-  r1t: { mass: 3150, speed: 58.1, acceleration: 11.8, powerSpeed: 18, drag: 0.00021, brake: 10.1, grip: 8.6, cornering: 8.2, wheelbase: 3.45, steer: 7.5, roll: 0.013, pitch: 0.028 }, // 130 mph and 60 in 2.5 s, a quad-motor Rivian R1T
-  cybertruck: { mass: 3100, speed: 58.1, acceleration: 13.1, powerSpeed: 13.7, drag: 0.000242, brake: 8.9, grip: 8.4, cornering: 7.8, wheelbase: 3.81, steer: 8, roll: 0.012, pitch: 0.026 }, // 130 mph and 60 in 2.6 s, the Cybertruck Cyberbeast
+  tesla: { coast: 1.8, mass: 2160, speed: 89.4, acceleration: 13.1, powerSpeed: 23.7, drag: 0.000136, brake: 11.2, grip: 14, cornering: 14, wheelbase: 2.96, steer: 12, roll: 0.008, pitch: 0.018 },
+  ioniq: { coast: 1.8, mass: 2200, speed: 72, acceleration: 8.6, powerSpeed: 22.1, drag: 0.000196, brake: 11.5, grip: 9.6, cornering: 9.6, wheelbase: 3.0, steer: 8.5, roll: 0.013 }, // 161 mph and 60 in 3.25 s, an Ioniq 5 N
+  r1s: { coast: 1.8, mass: 3200, speed: 58.1, acceleration: 11.2, powerSpeed: 18.7, drag: 0.000197, brake: 9.9, grip: 9, cornering: 9, wheelbase: 3.08, steer: 8, roll: 0.013 }, // 130 mph and 60 in 2.6 s, a quad-motor Rivian R1S
+  r1t: { coast: 1.8, mass: 3150, speed: 58.1, acceleration: 11.8, powerSpeed: 18, drag: 0.00021, brake: 10.1, grip: 8.6, cornering: 8.2, wheelbase: 3.45, steer: 7.5, roll: 0.013, pitch: 0.028 }, // 130 mph and 60 in 2.5 s, a quad-motor Rivian R1T
+  cybertruck: { coast: 1.8, mass: 3100, speed: 58.1, acceleration: 13.1, powerSpeed: 13.7, drag: 0.000242, brake: 8.9, grip: 8.4, cornering: 7.8, wheelbase: 3.81, steer: 8, roll: 0.012, pitch: 0.026 }, // 130 mph and 60 in 2.6 s, the Cybertruck Cyberbeast
   van: { mass: 2800, speed: 44.7, acceleration: 4.3, powerSpeed: 16.9, drag: 0.000343, brake: 8.2, grip: 7.2, cornering: 7, wheelbase: 3.6, steer: 6.5, roll: 0.02, pitch: 0.036 }, // 100 mph and 60 in 7.5 s, a high-roof Transit with the twin-turbo V6
   // motorcycles (motorcycles.js): light, quick off the line, leaning into bends
   // the sport bike turns on a dime: sticky tires, a quick wheel and a wide lock
@@ -108,6 +136,8 @@ const CAR_HANDLING = {
 // person chose this over the real skidpad figures, which felt too tough to steer)
 // the road work's and the airport's machines, for their size against walls and other cars: [half width, half length]
 // (every kind the player drives keeps its own size on its entity, boxW and boxL, which traffic.js reads too)
+// the electric kinds (audio-sources.js gives them a motor's whine, not an engine)
+const ELECTRIC_CARS = new Set(['tesla', 'ioniq', 'r1s', 'r1t', 'cybertruck']);
 const MACHINE_BOX = { dumptruck: [1.3, 4.6], excavator: [1.45, 2.4], stairtruck: [1.25, 5.3] };
 let paintSlots = 0; // each player's car materials their own (createCarEntity)
 const MACHINES = { dumptruck: 'Dump Truck', excavator: 'Excavator', stairtruck: 'Airstairs' };
@@ -192,11 +222,29 @@ const BIKE_SHAPES = new Map();
 // The walking camera, which the fall and the bus change for a while and give back
 const WALK_CAMERA = { d: 4.8, h: 2.4, y: -0.35 };
 
+// The player's road bike, with a strong rider's power (about 4 W/kg): about 21 mph on the flat, 14 mph up a 4.5% grade
+// and 9 mph up Broadway's 9%; freewheeling down a 6% hill it runs to about 24 mph, pedalling down it about 30. The
+// slope's pull is updateCyclist's; it freewheels without slowing itself (coast 0), and its brakes stop it at about 0.6 g
 const BICYCLE_DRIVE = {
-  speed: 12.5, reverseSpeed: 4.5, acceleration: 9, // about 28 mph flat out on a road bike
-  powerSpeed: 10.5, // Above 38 km/h, rider power limits acceleration.
-  rolling: 0.08, drag: 0.004, coast: 0.45, brake: 10.5
+  speed: 14, reverseSpeed: 4.5, acceleration: 2.5,
+  powerSpeed: 1.7, // Above 6 km/h, rider power limits acceleration.
+  rolling: 0.06, drag: 0.0045, coast: 0, brake: 6.5
 };
+// Its gears, as wheel turns per turn of the cranks (a compact double's spread), shifted for it to keep the cadence near
+// 90 rpm while pedalling (updateCyclist); each shift a derailleur's click (audio-system.js ride)
+const BIKE_GEARS = [1.15, 1.35, 1.55, 1.8, 2.05, 2.35, 2.65, 3.0, 3.4, 3.85, 4.3];
+const BIKE_WHEEL = 2 * Math.PI * 0.35; // m the 35 cm wheel rolls each turn
+
+// The triggers' own motors, where the controller and the browser have them (Chromium's 'trigger-rumble': an Xbox
+// controller in Edge or the Xbox's web view); elsewhere nothing (lamp-game.js rumble has only the two big motors)
+function triggerRumble(left, right, seconds) {
+  try {
+    const pad = [...(navigator.getGamepads?.() || [])].find((g) => g?.connected);
+    const act = pad?.vibrationActuator;
+    if (!act?.effects?.includes?.('trigger-rumble')) return;
+    act.playEffect('trigger-rumble', { duration: seconds * 1000, leftTrigger: left, rightTrigger: right, strongMagnitude: 0, weakMagnitude: 0 }).catch(() => {});
+  } catch { /* none */ }
+}
 
 function driveSpeed(speed, throttle, dt, drive) {
   // Turning can project tiny sideways motion back into speed after braking to zero.
@@ -404,7 +452,8 @@ class ThirdPersonControllerManager {
       left: false,
       right: false,
       up: false,
-      down: false
+      down: false,
+      lookBack: false // held: the follow view looks behind (cameras.js)
     };
 
     this.entities = {
@@ -471,7 +520,8 @@ class ThirdPersonControllerManager {
       left: ['KeyA', 'ArrowLeft'],
       right: ['KeyD', 'ArrowRight'],
       up: ['Space', 'KeyE'],
-      down: ['KeyQ', 'KeyC']
+      down: ['KeyQ', 'KeyC'],
+      lookBack: ['KeyX']
     };
     const actionsByCode = new Map(Object.entries(bindings).flatMap(([action, codes]) => codes.map((code) => [code, action])));
     this._pressedCodes = new Set();
@@ -879,6 +929,8 @@ class ThirdPersonControllerManager {
     return {
       type: 'car',
       label: kindName[look.kind] || 'Car',
+      // an electric car has one fixed reduction gear: no gear or revs shown (main.js)
+      gears: ELECTRIC_CARS.has(look.kind) ? false : undefined,
       // its own size against walls and other cars: the body's widest and its length bumper to bumper (cars.js)
       boxW: spec.halfWidth ? Math.max(...spec.halfWidth.map((p) => p[1])) : 0.86,
       boxL: Number.isFinite(spec.zFront - spec.zRear) ? (spec.zFront - spec.zRear) / 2 : 2.18,
@@ -1910,8 +1962,81 @@ class ThirdPersonControllerManager {
     }
   }
 
+  // The player's car's drive as the road is now (road-feel.js): in the rain and in snow the brakes and the pull off the
+  // line lose the most, cornering grip only a little; brick that's wet is a touch slicker still. Dry, the car's own
+  roadDrive(c, D) {
+    const road = roadCondition();
+    const brick = road.wet > 0 && c.surface === SURFACE.brick ? 1 : 0;
+    if (road.brake >= 1 && road.grip >= 1 && !brick) return D;
+    const W = this._roadDrive ??= {};
+    if (W._of !== D) { Object.assign(W, D); W._of = D; }
+    W.brake = D.brake * road.brake * (brick ? 0.9 : 1);
+    W.grip = D.grip * road.grip * (brick ? 0.94 : 1);
+    W.acceleration = D.acceleration * road.pull;
+    return W;
+  }
+
+  // What the player feels of a hit in their car (`dv` m/s of its speed taken by it): a rumble as hard as the hit, and
+  // a short shake of the follow view (cameras.js reads `jolt`, 0 to 1). A scrape along a wall gives many small ones a
+  // step apart: only a harder one than the last, or the next after a moment, is felt again
+  feelHit(dv) {
+    if (this.activeMode !== 'car' || !(dv > 1.2)) return;
+    const s = Math.min(1, (dv - 1.2) / 11), now = performance.now();
+    if (now - (this._hitAt || 0) < 150 && s < (this._hitS || 0) * 1.5) return;
+    this._hitAt = now; this._hitS = s;
+    rumble(0, Math.min(1, 0.3 + s * 0.7), Math.min(1, 0.2 + s * 0.6), 0.12 + s * 0.28);
+    this.jolt = Math.max(this.jolt || 0, 0.15 + s * 0.85);
+  }
+
+  // A shove from outside the car's own drive between one frame and the next (a car of traffic running into it,
+  // traffic.js): felt as a hit
+  feelShove(c) {
+    const vx = Math.sin(c.heading) * c.speed + (c.vx || 0), vz = Math.cos(c.heading) * c.speed + (c.vz || 0);
+    const f = this._felt ??= { at: -Infinity, x: 0, z: 0, vx: 0, vz: 0 }, now = performance.now();
+    if (now - f.at < 120 && Math.hypot(c.position.x - f.x, c.position.z - f.z) < 3) this.feelHit(Math.hypot(vx - f.vx, vz - f.vz));
+    f.at = now; f.x = c.position.x; f.z = c.position.z;
+    // (as the car's drive leaves it this frame, read at the start of the next: see the end of updateCar)
+    f.pending = true;
+  }
+
+  // The road under the player's car or bike, felt each frame: its surface (road-feel.js) and wetness for the sound
+  // and the spray (`surface`, `roadWet`: audio-system.js ride, skid-effects.js), and through a controller the bricks'
+  // fine fast drumming, the crunch of gravel and dirt, a boardwalk's planks and the tail sliding; and where the
+  // controller has trigger motors (an Xbox pad in Edge or the Xbox's web view) the right trigger buzzes with a
+  // wheelspin off the line and the left with the brakes' anti-lock under hard braking
+  feelRoad(e, dt, throttle) {
+    const road = roadCondition();
+    e.roadWet = road.wet;
+    e.surface = e.airborne ? 0 : surfaceAt(e.position.x, e.position.z);
+    if (e === this.entities.car) {
+      // the car's own way, for feelShove next frame
+      const f = this._felt;
+      if (f?.pending) {
+        f.vx = Math.sin(e.heading) * e.speed + (e.vx || 0); f.vz = Math.cos(e.heading) * e.speed + (e.vz || 0);
+        f.x = e.position.x; f.z = e.position.z; f.pending = false;
+      }
+    }
+    this._feelClock = (this._feelClock || 0) - dt;
+    if (this._feelClock > 0) return;
+    this._feelClock = 0.1;
+    const v = Math.abs(e.speed), bike = e.type === 'cyclist' || e.bike;
+    const s = Math.min(1, v / (bike ? 9 : 16));
+    if (v > 1.5 && e.surface) {
+      // a bike's bars buzz more than a car's wheel
+      const k = bike ? 1.4 : 1;
+      if (e.surface === SURFACE.brick) rumble(0, Math.min(1, (0.05 + 0.12 * s) * k), Math.min(1, (0.16 + 0.3 * s) * k), 0.12);
+      else if (e.surface === SURFACE.boards) rumble(0, Math.min(1, 0.1 * s * k), Math.min(1, (0.08 + 0.2 * s) * k), 0.11);
+      else rumble(0, Math.min(1, (0.1 + 0.22 * s) * k), Math.min(1, (0.04 + 0.1 * s) * k), 0.12);
+    } else if (e.skid > 0.3) rumble(0, 0.05 + 0.15 * e.skid, 0.12 + 0.3 * e.skid, 0.11);
+    if (e !== this.entities.car || e.bike || e.airborne) return;
+    const launching = throttle > 0.8 && v < 9 && (e.drive?.acceleration > 6 || road.pull < 0.85);
+    const abs = e.speed * throttle < 0 && Math.abs(throttle) > 0.6 && v > 4;
+    if (launching || abs) triggerRumble(abs ? 0.35 + 0.3 * road.snow : 0, launching ? 0.3 + 0.3 * (1 - s) : 0, 0.12);
+  }
+
   // The car's suspension and body thrown by an impact of `dv` m/s along the normal (nx, nz)
   carImpactKick(car, sin, cos, nx, nz, dv) {
+    if (car === this.entities.car) this.feelHit(dv);
     const kick = Math.min(12, dv);
     car.pitchVel = (car.pitchVel || 0) + (sin * nx + cos * nz) * kick * 0.18;
     car.rollVel = (car.rollVel || 0) - (cos * nx - sin * nz) * kick * 0.24;
@@ -2766,7 +2891,8 @@ class ThirdPersonControllerManager {
   updateCar(dt) {
     if (dt <= 0) return;
     const c = this.entities.car;
-    const D = c.drive || (c.drive = carDrive(this.carLook?.kind));
+    const D = this.roadDrive(c, c.drive || (c.drive = carDrive(this.carLook?.kind)));
+    this.feelShove(c);
 
     let throttle = 0;
     if (this.keys.forward) throttle = this.keys.forward;
@@ -2902,6 +3028,7 @@ class ThirdPersonControllerManager {
       }
     }
     c.chassisPivot.position.y = c.heaveY;
+    this.feelRoad(c, dt, throttle);
     // how hard the back tires are sliding (skid-effects.js): locked by the handbrake, or the tail slipping sideways
     c.skid = c.airborne ? 0 : Math.max(0, Math.min(1, Math.max(lockedNow * Math.min(1, Math.abs(c.speed) / 6),
       (Math.hypot(c.vx, c.vz) - 1.5) / 4)));
@@ -3089,6 +3216,11 @@ class ThirdPersonControllerManager {
   updateCyclist(dt) {
     if (dt <= 0) return;
     const b = this.entities.cyclist;
+    // the brakes as the road lets them work: longer stops in the rain and longer still in snow (road-feel.js)
+    const road = roadCondition();
+    const BICYCLE = this._bikeDrive ??= { ...BICYCLE_DRIVE };
+    BICYCLE.brake = BICYCLE_DRIVE.brake * road.brake;
+    BICYCLE.acceleration = BICYCLE_DRIVE.acceleration * (1 - 0.5 * (1 - road.pull));
 
     const handbrake = b.speed > 0 ? +this.keys.up : 0;
     let throttle = 0;
@@ -3098,7 +3230,7 @@ class ThirdPersonControllerManager {
 
     // Pause briefly at zero after braking from forward travel so holding S stops cleanly before backing up
     if (b.speed > 0 && throttle < 0) {
-      b.speed = driveSpeed(b.speed, throttle, dt, BICYCLE_DRIVE);
+      b.speed = driveSpeed(b.speed, throttle, dt, BICYCLE);
       if (b.speed < 0.05) {
         b.speed = 0;
         if (!handbrake) b._brakeHold = 0.25;
@@ -3108,16 +3240,27 @@ class ThirdPersonControllerManager {
       b.speed = 0;
     } else {
       b._brakeHold = 0;
-      b.speed = driveSpeed(b.speed, throttle, dt, BICYCLE_DRIVE);
+      b.speed = driveSpeed(b.speed, throttle, dt, BICYCLE);
+    }
+
+    // the hill's pull along the way it's going: slower up it, quicker down it (from the ground a bike length ahead and
+    // behind). Riding on it only: standing still the rider has a foot down, and it never rolls them backwards
+    if (b.speed > 0.3) {
+      const s = Math.sin(b.heading), c = Math.cos(b.heading), x = b.position.x, z = b.position.z;
+      const rise = this.getGroundHeight(x + s * 0.8, z + c * 0.8, 'cyclist') - this.getGroundHeight(x - s * 0.8, z - c * 0.8, 'cyclist');
+      // (a curb or a step under one wheel isn't a hill)
+      if (Math.abs(rise) < 0.4) b.speed = Math.max(0, b.speed - 9.8 * Math.sin(Math.atan2(rise, 1.6)) * dt);
     }
 
     let turnInput = 0;
     if (this.keys.left) turnInput = this.keys.left;
     if (this.keys.right) turnInput = -this.keys.right;
 
+    let turnRate = 0;
     if (Math.abs(b.speed) > 0.15) {
       const dirSign = b.speed >= 0 ? 1 : -1;
-      b.heading += turnInput * 2.15 * dirSign * dt;
+      turnRate = turnInput * 2.15 * dirSign;
+      b.heading += turnRate * dt;
     }
 
     const prevX = b.position.x;
@@ -3138,7 +3281,8 @@ class ThirdPersonControllerManager {
     }
     b.position.y = this.getGroundHeight(b.position.x, b.position.z, 'cyclist');
 
-    const targetLean = -turnInput * Math.min(1.0, Math.abs(b.speed) / 9.0) * 0.34;
+    // leaning as far as the turn it's making needs, at its speed (and none when it isn't turning)
+    const targetLean = Math.max(-0.42, Math.min(0.42, -Math.atan(b.speed * turnRate / 9.8)));
     b.leanAngle += (targetLean - b.leanAngle) * Math.min(1, dt * 9);
     b.leanPivot.rotation.z = b.leanAngle;
 
@@ -3146,9 +3290,20 @@ class ThirdPersonControllerManager {
     b.frontWheel.rotation.x += wheelDelta;
     b.rearWheel.rotation.x += wheelDelta;
 
-    // The cranks turn with the rear wheel through the gears while pedalling (~110 rpm at cruising speed) and
-    // freewheel otherwise; the rider's feet follow the pedals (see poseCharacters)
-    if (throttle > 0 && wheelDelta > 0) b.pedalPhase += wheelDelta / 3.2;
+    // The cranks turn with the rear wheel through the gear it's in while pedalling and freewheel otherwise; the rider's
+    // feet follow the pedals (see poseCharacters). The gears shift for the rider: up past about 100 rpm, down under
+    // about 75, one at a time while pedalling (a derailleur needs the chain turning), each shift a click (b.shifts);
+    // stopped, it's left in a low gear to start off in again
+    b.gear ??= 2;
+    b.shiftWait = Math.max(0, (b.shiftWait || 0) - dt);
+    const cadence = (Math.max(0, b.speed) / BIKE_WHEEL / BIKE_GEARS[b.gear]) * 60;
+    if (b.speed < 0.5) b.gear = Math.min(b.gear, 1);
+    else if (throttle > 0 && !b.shiftWait && (cadence > 100 || (cadence < 75 && b.speed > 2.5))) {
+      const next = Math.max(0, Math.min(BIKE_GEARS.length - 1, b.gear + (cadence > 100 ? 1 : -1)));
+      if (next !== b.gear) { b.gear = next; b.shiftWait = 0.4; b.shifts = (b.shifts || 0) + 1; }
+    }
+    if (throttle > 0 && wheelDelta > 0) b.pedalPhase += wheelDelta / BIKE_GEARS[b.gear];
+    this.feelRoad(b, dt, throttle);
     b.crankPivot.rotation.x = b.pedalPhase;
     for (const pedal of b.pedals) pedal.rotation.x = -b.pedalPhase;
   }
@@ -3194,7 +3349,7 @@ class ThirdPersonControllerManager {
     const turnTarget = turn * 0.55 * Math.min(1, 0.25 + Math.abs(k.speed) / 1.2) * Math.sign(k.speed || 1);
     k.turnVel += (turnTarget - k.turnVel) * Math.min(1, dt * 2.2);
     const flow = this._flow ??= { x: 0, z: 0 };
-    const m = riverFlow(k.position.x, k.position.z, flow) ? KAYAK_CURRENT * this.riverScale * 0.4 * riverDepth(k.position.x, k.position.z) : 0;
+    const m = riverFlow(k.position.x, k.position.z, flow) ? KAYAK_CURRENT * this.riverScale * 0.4 * riverDepth(k.position.x, k.position.z) * (1 - 0.92 * this.kayakStill(k, dt)) : 0;
     k.driftX += (flow.x * m - k.driftX) * Math.min(1, dt);
     k.driftZ += (flow.z * m - k.driftZ) * Math.min(1, dt);
     const h = k.heading + k.turnVel * dt;
@@ -3234,7 +3389,13 @@ class ThirdPersonControllerManager {
     k.strokeAmp += ((effort > 0.05 ? 1 : 0) - k.strokeAmp) * Math.min(1, dt * 4);
     const entry = (phase) => Math.floor((phase - 0.15 * Math.PI) / Math.PI);
     const before = entry(k.stroke);
-    if (effort > 0.05) k.stroke += dt * Math.PI * 2 * 0.72 * (0.6 + 0.4 * effort) * (throttle < 0 ? -1 : 1);
+    // a sprint: held hard forward, the first few seconds of it come harder and quicker, till the paddler's breath runs
+    // out; easing off (or stopping) gets it back
+    k.burst ??= 1;
+    if (throttle > 0.95) k.burst = Math.max(0, k.burst - dt / 6);
+    else if (throttle < 0.6) k.burst = Math.min(1, k.burst + dt / 8);
+    const sprint = throttle > 0.95 ? Math.min(1, k.burst * 3) : 0;
+    if (effort > 0.05) k.stroke += dt * Math.PI * 2 * 0.72 * (0.6 + 0.4 * effort) * (1 + 0.35 * sprint) * (throttle < 0 ? -1 : 1);
     const s = Math.sin(k.stroke), as = Math.abs(s);
     const deep = as < 0.7 ? (as / 0.7) ** 2 * (3 - 2 * as / 0.7) : 1; // held down through the pull
     const roll = k.strokeAmp * 0.84 * Math.sign(s) * deep;
@@ -3260,17 +3421,20 @@ class ThirdPersonControllerManager {
     else if (wet < 0.2 && k._bladeIn) { k._bladeIn = false; this.kayakRipple(k, bladeX, bladeZ, 0.6); }
 
     // Only a blade in the water moves the kayak: each pull surges it on, and the hull's drag (rising with the square
-    // of its speed) slows it between strokes, to about 5 m/s flat out
-    const pull = Math.abs(throttle) > 0.05 ? wet * Math.sign(throttle) * 4.2 * (0.6 + 0.4 * Math.abs(throttle)) : 0;
-    k.speed += (pull - 0.11 * k.speed * Math.abs(k.speed) - 0.18 * k.speed) * dt;
+    // of its speed) slows it between strokes: a touring paddler's 1.9 m/s or so (4 mph) through the water, about
+    // 2.6 in a sprint
+    const pull = Math.abs(throttle) > 0.05 ? wet * Math.sign(throttle) * 1.9 * (0.6 + 0.4 * Math.abs(throttle)) * (1 + 0.75 * sprint) : 0;
+    k.speed += (pull - 0.25 * k.speed * Math.abs(k.speed) - 0.2 * k.speed) * dt;
     // a turn is a sweep stroke: stronger while a blade is in
-    const turnTarget = turn * (0.6 + 0.5 * wet) * (0.95 + Math.min(1, Math.abs(k.speed) / 3) * 0.45);
+    const turnTarget = turn * (0.6 + 0.5 * wet) * (0.95 + Math.min(1, Math.abs(k.speed) / 2) * 0.45);
     k.turnVel += (turnTarget - k.turnVel) * Math.min(1, dt * 3.2);
 
     // the current, strongest out in the middle of the river, carries the kayak along, and where it runs faster at
     // one end than the other (a bend, the edge of the channel) it turns the kayak too
     const flow = this._flow ??= { x: 0, z: 0 };
-    const current = (x, z) => riverFlow(x, z, flow) ? KAYAK_CURRENT * this.riverScale * (0.35 + 0.65 * riverDepth(x, z)) : 0;
+    // (all but stilled on the ponds and the slack water into Gallup)
+    const slack = 1 - 0.92 * this.kayakStill(k, dt);
+    const current = (x, z) => riverFlow(x, z, flow) ? KAYAK_CURRENT * this.riverScale * slack * (0.35 + 0.65 * riverDepth(x, z)) : 0;
     let cx = 0, cz = 0;
     {
       const m = current(k.position.x, k.position.z);
@@ -3282,9 +3446,12 @@ class ThirdPersonControllerManager {
     else { cx += (still.x - cx) * still.weight; cz += (still.z - cz) * still.weight; }
     // in the Argo Cascades: their own current, down the channel and quick through each chute, and rough below it
     const rapid = this._rapid ??= { x: 0, z: 0, rough: 0, weight: 0 };
-    if (!cascadeCurrent(k.position.x, k.position.z, rapid)) rapid.rough = rapid.weight = 0;
+    if (!cascadeCurrent(k.position.x, k.position.z, rapid)) { rapid.rough = rapid.weight = 0; rapid.drop = -1; }
     else { cx += (rapid.x - cx) * rapid.weight; cz += (rapid.z - cz) * rapid.weight; }
-    const follow = Math.min(1, dt * (0.9 + 1.6 * rapid.rough));
+    // the wind pushes it a little downwind, well under the current (windDrift, m/s, from outdoors.js)
+    if (this.windDrift) { cx += this.windDrift.x * (1 - rapid.weight); cz += this.windDrift.z * (1 - rapid.weight); }
+    const follow = Math.min(1, dt * (0.9 + 2.4 * rapid.rough));
+    this.kayakDrop(k, rapid, sh, ch);
     k.driftX += (cx - k.driftX) * follow;
     k.driftZ += (cz - k.driftZ) * follow;
     {
@@ -3346,6 +3513,12 @@ class ThirdPersonControllerManager {
     } else if (afloat(k.position.x, nz, heading)) {
       k.position.z = nz; k.speed *= 1 - Math.min(1, dt * 2); k.driftX = 0;
     } else {
+      // nosed into a weir's rocks above its drop: the water pouring for the chute carries the kayak along the rocks
+      // to it, as long as that frees the hull no less
+      if (rapid.drop >= 0 && rapid.ds < 0 && Math.abs(rapid.lat) > 0.5 && onWeirRocks(k.position.x + sh * 1.7, k.position.z + ch * 1.7)) {
+        const toward = -Math.sign(rapid.lat), px = k.position.x - rapid.tz * toward * 1.1 * dt, pz = k.position.z + rapid.tx * toward * 1.1 * dt;
+        if (freed(px, pz, heading)) { k.position.x = px; k.position.z = pz; }
+      }
       // nosed into the bank: stop, and ease back out towards deeper water
       if (Math.abs(k.speed) > 0.8) this.reportCollision(k, groundCollider, 'ground', nx, k.position.y + 0.2, nz, 0, 1, 0, Math.abs(k.speed) * 0.4);
       k.speed *= 0.3;
@@ -3376,12 +3549,70 @@ class ThirdPersonControllerManager {
     const pitch = bowY != null && sternY != null ? Math.atan((sternY - bowY) / 2.4) : 0;
     k.pitch = (k.pitch ?? 0) + (pitch - (k.pitch ?? 0)) * Math.min(1, dt * 6);
     const r = rapid.rough;
-    if (r > 0.05) k.turnVel += Math.sin(elapsed * 5.3) * Math.sin(elapsed * 2.1 + 1) * r * 2.2 * dt;
-    k.tiltPivot.position.y = Math.sin(elapsed * 1.7) * 0.015 + r * Math.sin(elapsed * 7.1) * 0.06;
+    if (r > 0.05) k.turnVel += Math.sin(elapsed * 5.3) * Math.sin(elapsed * 2.1 + 1) * r * 3.2 * dt;
+    // riding the tongue's standing waves: up each crest and nosing through it, the bow and stern on different waves
+    const liftB = cascadeWaveLift(k.position.x + sh * 1.2, k.position.z + ch * 1.2, elapsed);
+    const liftS = cascadeWaveLift(k.position.x - sh * 1.2, k.position.z - ch * 1.2, elapsed);
+    const lift = (liftB + liftS) / 2, wavePitch = Math.atan((liftS - liftB) / 2.4);
+    k.wave = (k.wave ?? 0) + (wavePitch - (k.wave ?? 0)) * Math.min(1, dt * 10);
+    // and a crest slapping the bow: spray
+    const crest = liftB > 0.13 && liftB > (k._liftB ?? 0) ? 1 : 0;
+    if (crest && !k._crest && through + Math.hypot(k.driftX, k.driftZ) > 1.5) {
+      this.kayakSpray(k, k.position.x + sh * 1.7, k.position.z + ch * 1.7, 0.25 + liftB * 2);
+      rumble(0, 0.25, 0.45, 0.08);
+    }
+    k._crest = crest; k._liftB = liftB;
+    // the lurch at each drop (kayakDrop): a damped spring the bow dives on and bobs back up from
+    const l = (k.lurch ??= { pitch: 0, pv: 0, heave: 0, hv: 0 }), sd = Math.min(dt, 0.05);
+    l.pv += (-38 * l.pitch - 5.5 * l.pv) * sd; l.pitch += l.pv * sd;
+    l.hv += (-30 * l.heave - 5 * l.hv) * sd; l.heave += l.hv * sd;
+    k.tiltPivot.position.y = Math.sin(elapsed * 1.7) * 0.015 + r * Math.sin(elapsed * 7.1) * 0.08 + lift + l.heave;
     k.tiltPivot.rotation.z = -k.turnVel * 0.06 * Math.min(1, Math.abs(k.speed) / 2) + Math.sin(elapsed * 1.3) * 0.012 + roll * 0.03
-      + r * Math.sin(elapsed * 6.3 + 2) * 0.07;
-    k.tiltPivot.rotation.x = Math.sin(elapsed * 1.1 + 0.7) * 0.008 + k.pitch + r * Math.sin(elapsed * 8.2) * 0.05;
+      + r * Math.sin(elapsed * 6.3 + 2) * 0.1;
+    k.tiltPivot.rotation.x = Math.sin(elapsed * 1.1 + 0.7) * 0.008 + k.pitch + k.wave + l.pitch + r * Math.sin(elapsed * 8.2) * 0.07;
     if (r > 0.3) rumble(0, r * 0.3, r * 0.5, 0.1);
+  }
+
+  // How still the water is under the boat (riverStillness), looked up every quarter second and eased between
+  kayakStill(k, dt) {
+    k._stillAt = (k._stillAt ?? 0) - dt;
+    if (k._stillAt <= 0 || Math.hypot(k.position.x - (k._stillX ?? Infinity), k.position.z - (k._stillZ ?? 0)) > 20) {
+      k._stillAt = 0.25; k._stillX = k.position.x; k._stillZ = k.position.z;
+      const jump = k._stillWant === undefined;
+      k._stillWant = riverStillness(k.position.x, k.position.z);
+      if (jump) k.still = k._stillWant;
+    }
+    k.still = (k.still ?? 0) + (k._stillWant - (k.still ?? 0)) * Math.min(1, dt * 0.8);
+    return k.still;
+  }
+
+  // Over a drop of the Argo Cascades: the bow dives and kicks back up, the white water slews the kayak round (the
+  // more off the chute's middle, the harder, and the way it's off), and spray flies (kayakSpray, which main.js throws
+  // into water-splash.js). `rapid` is cascadeCurrent's, sh/ch the heading's sine and cosine.
+  kayakDrop(k, rapid, sh, ch) {
+    const was = k._dropAt;
+    k._dropAt = rapid.drop >= 0 ? { drop: rapid.drop, ds: rapid.ds } : null;
+    if (!was || !k._dropAt || was.drop !== rapid.drop || !(was.ds < 0 && rapid.ds >= 0)) return;
+    const vx = Math.sin(k.heading) * k.speed + k.driftX, vz = Math.cos(k.heading) * k.speed + k.driftZ, sp = Math.hypot(vx, vz);
+    const hit = Math.min(1, 0.45 + sp / 7);
+    const l = (k.lurch ??= { pitch: 0, pv: 0, heave: 0, hv: 0 });
+    l.pv += 2.6 * hit; // nose down over the lip
+    l.hv -= 1.3 * hit;
+    // slewed round: off the chute's middle the white water grabs one end; in it, a lesser kick either way
+    const side = Math.abs(rapid.lat) > 1 ? Math.sign(rapid.lat) : Math.sin(k.strokes * 1.7 + rapid.drop * 2.3) < 0 ? -1 : 1;
+    k.turnVel += side * (0.35 + 0.9 * (1 - rapid.chute)) * hit * (0.8 + 0.4 * Math.abs(Math.sin(rapid.drop * 3.1 + k.strokes)));
+    k.speed *= 0.82; // the hole below grabs the hull a moment
+    k.drops = (k.drops ?? 0) + 1;
+    this.kayakSpray(k, k.position.x + sh * 1.6, k.position.z + ch * 1.6, 0.6 + 0.5 * hit);
+    rumble(0, 0.5 + 0.4 * hit, 0.8 * hit, 0.22);
+  }
+
+  // Spray thrown up at (x, z) off the kayak, `strength` 0-1.5, for main.js to show (water-splash.js spray)
+  kayakSpray(k, x, z, strength) {
+    const q = (k.sprays ??= []);
+    if (q.length > 8) q.shift();
+    const level = waterLevel(x, z) ?? k.position.y;
+    q.push({ x, y: level, z, vx: Math.sin(k.heading) * k.speed + k.driftX, vz: Math.cos(k.heading) * k.speed + k.driftZ, strength });
   }
 
   // A ring on the water at (x, z), of `size` metres across when it has spread, at `strength` (its first opacity)

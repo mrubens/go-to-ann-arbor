@@ -1322,9 +1322,9 @@ function buildCarProxyGeometry(spec) {
 function buildLightbarGeometry(spec = BODY_SPECS.sedan) {
   const L = carLayout(spec);
   const cab = spec.cabin;
-  const z = lerp(cab.roofFront, cab.roofRear, 0.32);
-  const c = L.cabin(z);
-  const y = c.railY + c.h;
+  // (a high-roof van's bar sits at the front of its high roof, over the cargo box: an ambulance's)
+  const z = spec.cargo ? 0.05 : lerp(cab.roofFront, cab.roofRear, 0.32);
+  const y = spec.cargo ? cab.roofY[0][1] + Math.max(...spec.cargo.rise.map((q) => q[1])) : (() => { const c = L.cabin(z); return c.railY + c.h; })();
   const bar = roundedBox(0.13, 0.045, 1.12, 0.04, 0.02).rotateY(Math.PI / 2).translate(0, y + 0.075, z);
   const parts = [part(bar, CAR_PARTS.SIGN)];
   for (const side of [-1, 1]) {
@@ -1333,11 +1333,13 @@ function buildLightbarGeometry(spec = BODY_SPECS.sedan) {
   return mergeGeometries(parts);
 }
 
-let _lightbarMat = null;
+let _lightbarMat = null, _ambulanceBarMat = null;
 
 // Light bar lenses: NYPD red (-x), blue (+x) & centre white takedown LED pods flashing in alternation per cruiser
-function createLightbarMaterial() {
-  if (_lightbarMat) return _lightbarMat;
+// (an ambulance's, `ambulance`: red both sides, as Michigan's are)
+function createLightbarMaterial(ambulance = false) {
+  if (ambulance ? _ambulanceBarMat : _lightbarMat) return ambulance ? _ambulanceBarMat : _lightbarMat;
+  const blueLens = ambulance ? 0x8e0d14 : 0x0f3c9a, blueGlow = ambulance ? 0xff1820 : 0x286eff;
   const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.12, metalness: 0.25 });
   const lightbar = () => {
     const p = attribute('position', 'vec3');
@@ -1357,17 +1359,18 @@ function createLightbarMaterial() {
   };
   mat.colorNode = Fn(() => {
     const s = lightbar();
-    const lens = mix(mix(color(0xdce2e8), color(0x8e0d14), s.isRed), color(0x0f3c9a), s.isBlue).mul(s.pod);
+    const lens = mix(mix(color(0xdce2e8), color(0x8e0d14), s.isRed), color(blueLens), s.isBlue).mul(s.pod);
     return mix(color(0x14171a), lens, s.isLens);
   })();
   mat.emissiveNode = Fn(() => {
     const s = lightbar();
     const rEmit = color(0xff1820).mul(s.isRed.mul(s.redOn).mul(6.2));
-    const bEmit = color(0x286eff).mul(s.isBlue.mul(s.blueOn).mul(7.2));
+    const bEmit = color(blueGlow).mul(s.isBlue.mul(s.blueOn).mul(ambulance ? 6.2 : 7.2));
     const wEmit = color(0xf4f8ff).mul(s.isWhite.mul(s.whiteOn).mul(3.8));
     return rEmit.add(bEmit).add(wEmit).mul(s.pod).mul(s.isLens);
   })();
-  _lightbarMat = mat;
+  if (ambulance) _ambulanceBarMat = mat;
+  else _lightbarMat = mat;
   return mat;
 }
 
@@ -1769,6 +1772,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
   const isPolice = isLivery(1.0);
   const isBoro = isLivery(2.0);
   const isTLC = isLivery(3.0);
+  const isAmbulance = isLivery(5.0); // a plain ambulance: a red band and pinstripe, no lettering
   const isTwoTone = max(isLivery(4.0), step(abs(trimCode.sub(3.0)), 0.25));
   const isBlackout = step(abs(trimCode.sub(2.0)), 0.25);
   const hasChrome = max(float(spec.chrome ? 1.0 : 0.0), step(abs(trimCode.sub(1.0)), 0.25)).mul(one.sub(isBlackout));
@@ -1896,7 +1900,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
 
       // Side doors, handles & liveries (evaluated only on side-facing body fragments)
       If(isSide.greaterThan(0.05), () => {
-        const hasLivery = max(isPolice, max(isBoro, float(spec.sign ? 1.0 : 0.0)));
+        const hasLivery = max(max(isPolice, isAmbulance), max(isBoro, float(spec.sign ? 1.0 : 0.0)));
         If(hasLivery.greaterThan(0.5), () => {
           const along = smoothstep(spec.zRear + 0.22, spec.zRear + 0.3, p.z).mul(smoothstep(spec.zFront - 0.28, spec.zFront - 0.36, p.z));
           const stripe = band(p.y.sub(0.57), 0.072, fwY).mul(along);
@@ -1907,6 +1911,9 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
             .mul(band(p.z.sub(doorMid), 0.24, fwZ));
           const polMask = isPolice.mul(isSide).mul(ao);
           bCol.assign(mix(mix(bCol, color(0x1b3d8a), max(stripe, lettering).mul(polMask)), color(0x6ba5dc), pin.mul(polMask)));
+          const ambMask = isAmbulance.mul(isSide).mul(ao);
+          const ambBand = band(p.y.sub(spec.cargo ? 1.12 : 0.72), 0.11, fwY).mul(along);
+          bCol.assign(mix(mix(bCol, color(0xc41e24), max(stripe, ambBand).mul(ambMask)), color(0xc41e24), pin.mul(ambMask)));
 
           const hasTaxiBadge = max(float(spec.sign ? 1.0 : 0.0), isBoro).mul(isSide);
           const badge = rrect(vec2(p.z.sub(doorMid), p.y.sub(0.66)), vec2(0.21, 0.052), 0.012, fwZY).mul(hasTaxiBadge);

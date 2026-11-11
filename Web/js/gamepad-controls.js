@@ -221,8 +221,8 @@ class GamepadControls {
     const cycleMode = Number(Boolean(edge(5))) - Number(Boolean(edge(4)));
     const cycleCamera = edge(3), recenter = edge(11), getInOut = edge(2);
     const radio = Number(Boolean(edge(15))) - Number(Boolean(edge(14)));
-    // View: the toolbar; the left stick's click: the horn; Y on the map: clear the route set with X
-    const menu = edge(8), horn = edge(10), clear = edge(3);
+    // View: the toolbar; B: the horn (a bicycle's bell; on the map B is back); Y on the map: clear the route set with X
+    const menu = edge(8), horn = edge(1), clear = edge(3);
     const menuEdges = Array.from({ length: BUTTON_COUNT }, (_, i) => edge(i));
     this.previousButtons = pressed;
 
@@ -298,7 +298,10 @@ class GamepadControls {
     this.controller.setGamepadInput('backward', Math.max(0, -drive));
     this.controller.setGamepadInput('left', Math.max(0, -movement.x));
     this.controller.setGamepadInput('right', Math.max(0, movement.x));
-    this.controller.setGamepadInput('up', mode === 'person' || mode === 'car' ? Number(Boolean(held(0))) : Math.max(0, vertical));
+    // A: jump, the car's handbrake, the bicycle's brake
+    this.controller.setGamepadInput('up', mode === 'person' || mode === 'car' || mode === 'cyclist' ? Number(Boolean(held(0))) : Math.max(0, vertical));
+    // the left stick's click, held: look behind (cameras.js)
+    this.controller.setGamepadInput('lookBack', Boolean(held(10)));
     this.controller.setGamepadInput('down', Math.max(0, -vertical));
     const zoom = Number(Boolean(held(13))) - Number(Boolean(held(12)));
     this.camera.applyGamepadInput(look.x, look.y, zoom, Number.isFinite(dt) ? Math.max(0, Math.min(0.1, dt)) : 0);

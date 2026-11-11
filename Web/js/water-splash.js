@@ -193,6 +193,23 @@ function createWaterSplash(scene) {
     if (random() < dt * 6 * s) puff(x + ux * length, level + 0.4, z + uz * length, 0.6 + random() * 0.6, 1 + random() * 0.8, vx * 0.4, 0.3, vz * 0.4);
   }
 
+  // white water thrown up off a kayak's bow in the Argo Cascades (controllers.js kayakSpray): a fan of drops up and
+  // over the bow, a puff or two of spray and a ring of foam. v the kayak's velocity over the bed, s 0-1.5
+  function spray(x, level, z, vx, vz, s) {
+    const sp = Math.hypot(vx, vz), ux = sp > 0.1 ? vx / sp : 0, uz = sp > 0.1 ? vz / sp : 0;
+    for (let i = 0; i < 60 + 260 * s; i++) {
+      const d = drop(), a = (random() - 0.5) * 2.6, out = 0.6 + random() * 1.8 * s;
+      d.x = x + (random() - 0.5) * 0.8; d.z = z + (random() - 0.5) * 0.8; d.y = level + 0.05 + random() * 0.15;
+      d.vx = vx * (0.4 + random() * 0.4) + (Math.sin(a) * ux + Math.cos(a) * -uz) * out;
+      d.vz = vz * (0.4 + random() * 0.4) + (Math.sin(a) * uz + Math.cos(a) * ux) * out;
+      d.vy = (1.2 + random() * 2.6) * (0.5 + s * 0.6);
+      d.r = 0.004 + random() * 0.009; d.age = 0; d.life = 2; d.floor = level;
+    }
+    for (let i = 0; i < 2 + 5 * s; i++) puff(x + (random() - 0.5), level + 0.3 + random() * 0.5 * s, z + (random() - 0.5),
+      0.4 + random() * 0.5 * s, 0.8 + random() * 0.8, vx * 0.5, 0.25, vz * 0.5);
+    ring(x, level, z, 0.5, 0.8 + s, 2.2, 0.5 + 0.3 * Math.min(1, s));
+  }
+
   // Watching the player: who is in the water, and when they cross its surface. ent the active vehicle or null.
   let was = null, px = 0, py = 0, pz = 0, cool = 0;
   function track(ent, kind, dt) {
@@ -303,7 +320,7 @@ function createWaterSplash(scene) {
     ringFade.needsUpdate = true;
   }
 
-  return { group, update, track };
+  return { group, update, track, spray };
 }
 
 export { createWaterSplash };

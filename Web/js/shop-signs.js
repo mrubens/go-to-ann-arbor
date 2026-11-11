@@ -41,7 +41,10 @@ function buildShopSigns(group) {
   };
 
   for (let i = 0; i < count; i++) {
-    const [x, z, deg, w, y, ni, cat] = list.slice(i * 7, i * 7 + 7);
+    let [x, z, deg, w, y, ni, cat] = list.slice(i * 7, i * 7 + 7);
+    // Nickels Arcade's State St entrance is an open arch (more-landmarks.js): a sign set across it goes on the shop
+    // bay south of it instead
+    if (Math.hypot(x - 616.25, z - 139.75) < 3) { z = 146.15; w = Math.min(w, 4.6); }
     const name = names[ni];
     // the board, painted into its cell, its letters squeezed so they read right once stretched over the board
     const cx = (i % COLS) * CELL_W, cy = Math.floor(i / COLS) * CELL_H;

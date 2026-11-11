@@ -528,7 +528,22 @@ export function createMotorVoice(context, resources, kind, output) {
     const whinePitch = smoothParameter(whine.frequency, 0.08, 0.5, true);
     const whineCenter = smoothParameter(whineFilter.frequency, 0.08, 1);
     const whineLevel = smoothParameter(whineGain.gain, 0.1);
-    render = (speed, load, doppler, now) => {
+    // and the pedestrian warning sound an electric car makes under 20 mph (as the US rule asks of them): a soft two-tone
+    // hum, rising a little with speed and gone by 20 mph; heard outside the car, hardly from the driver's seat
+    const hum = oscillator('triangle', 440);
+    const hum2 = oscillator('triangle', 660);
+    const humFilter = filter('lowpass', 1400, 0.7);
+    const humGain = gain();
+    hum.connect(humFilter); hum2.connect(humFilter);
+    humFilter.connect(humGain).connect(mix);
+    const humPitch = smoothParameter(hum.frequency, 0.15, 0.5);
+    const humPitch2 = smoothParameter(hum2.frequency, 0.15, 0.5);
+    const humLevel = smoothParameter(humGain.gain, 0.15);
+    render = (speed, load, doppler, now, _vertical, cabin) => {
+      const warn = speed > 0.15 ? Math.max(0, 1 - speed / 8.9) : 0;
+      humLevel((cabin ? 0 : 0.012) * Math.min(1, speed / 0.6) * warn, now);
+      humPitch((420 + speed * 18) * (0.98 + variation * 0.04) * doppler, now);
+      humPitch2((630 + speed * 27) * (0.98 + variation * 0.04) * doppler, now);
       const rolling = Math.min(1.35, speed / 28);
       roadLevel(Math.pow(rolling, 1.25) * 0.11, now);
       roadFrequency((900 + Math.min(1, rolling) * 1000) * doppler, now);
@@ -574,7 +589,7 @@ export function createMotorVoice(context, resources, kind, output) {
     };
   }
 
-  function update({ speed = 0, load = 0, doppler = 1, seed = 0, verticalSpeed = 0 } = {}, now = context.currentTime) {
+  function update({ speed = 0, load = 0, doppler = 1, seed = 0, verticalSpeed = 0, cabin = false } = {}, now = context.currentTime) {
     if (disposed) return;
     const safeSeed = Number.isFinite(seed) ? seed : 0;
     if (safeSeed !== lastSeed) {
@@ -588,7 +603,8 @@ export function createMotorVoice(context, resources, kind, output) {
       Number.isFinite(load) ? clamp(load, 0, 1) : 0,
       Number.isFinite(doppler) ? clamp(doppler, 0.5, 2) : 1,
       time,
-      Number.isFinite(verticalSpeed) ? clamp(verticalSpeed, -30, 30) : 0
+      Number.isFinite(verticalSpeed) ? clamp(verticalSpeed, -30, 30) : 0,
+      cabin
     );
   }
 

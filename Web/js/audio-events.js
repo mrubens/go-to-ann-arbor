@@ -346,6 +346,13 @@ function door(ctx) {
   }, 0.6);
 }
 
+// A bus's stop chime (main.js, as the ridden bus pulls in at a stop): two soft sine tones, high then lower, each with
+// a quiet octave over it, dying away like a struck bar
+function busChime(ctx) {
+  const tone = (t, f) => t < 0 ? 0 : (Math.sin(TAU * f * t) + 0.18 * Math.sin(TAU * 2 * f * t)) * Math.exp(-t * 5) * Math.min(1, t / 0.006);
+  return makeBuffer(ctx, 1.1, (t) => tone(t, 1046.5) + tone(t - 0.28, 830.6), 0.5);
+}
+
 // --- the animals (animals.js), made at a lower rate since nothing in them is above 10 kHz -------------------------
 const ANIMAL_RATE = 24000;
 
@@ -585,6 +592,7 @@ export function createEventResources(ctx, resources) {
   lazy(out.crashes, 'debris', () => Array.from({ length: 3 }, (_, i) => crashDebris(ctx, i + 501)));
   lazy(out, 'splashes', () => Array.from({ length: 4 }, (_, i) => splash(ctx, i + 701)));
   lazy(out, 'door', () => door(ctx));
+  lazy(out, 'busChime', () => busChime(ctx));
   lazy(out, 'clang', () => [clang(ctx, 1701), clang(ctx, 1702)]);
   const animals = {
     chatter: () => [chatter(ctx, 1301), chatter(ctx, 1302)],
@@ -611,7 +619,7 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
   const random = randomSource(options.seed);
   const start = Math.max(ctx.currentTime, finite(options.when, ctx.currentTime));
   const intensity = clamp(finite(options.intensity, 1));
-  const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, plunge: 0.9, door: 0.45, thud: 0.5,
+  const levels = { footstep: 0.22, talk: 0.065, shout: 0.2, horn: 0.23, trainhorn: 0.5, signal: 0.13, crash: 0.35, splash: 0.5, plunge: 0.9, door: 0.45, buschime: 0.22, thud: 0.5,
     chatter: 0.22, quack: 0.3, honk: 0.4, hiss: 0.22, wingbeat: 0.3, hawk: 0.32, clang: 0.55, snort: 0.4,
     coo: 0.22, caw: 0.36, chirp: 0.16 };
   if (!Object.hasOwn(levels, kind) || intensity === 0) return { endTime: start, dispose() {} };
@@ -717,6 +725,8 @@ export function playEvent(ctx, resources, kind, output, options = {}) {
     play(resources.crashes.body[variant], start, 0.62 + random() * 0.1, 1);
   } else if (kind === 'door') {
     play(resources.door, start, 0.95 + random() * 0.1);
+  } else if (kind === 'buschime') {
+    play(resources.busChime, start, 1);
   } else if (kind === 'chatter' || kind === 'quack' || kind === 'honk') {
     const set = resources.animals[kind], buffer = set[Math.floor(random() * set.length)];
     const pitch = 0.92 + random() * 0.16;

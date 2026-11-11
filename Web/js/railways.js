@@ -3,13 +3,15 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GEO } from './city-geodata.js';
 import { groundHeight, riverbedHeight } from './terrain.js';
 import { localTime } from './theride.js';
+import { HORN_PATTERN } from './rail-sounds.js';
 
 // Ann Arbor's railroads (GEO.rail from build-annarbor.py, OpenStreetMap): every piece of track as ballast, ties and two
 // steel rails, on the ground's heights smoothed along the line, and level across its bridges; and a train on each
-// long line: Amtrak's Wolverine (a locomotive and five silver cars) on the Michigan Line along the Huron, coming through
+// long line: Amtrak's Wolverine (a Charger at each end and four silver cars) on the Michigan Line along the Huron, coming through
 // on Amtrak's timetable (data/wolverine.json, build-wolverine.py from Amtrak's GTFS feed) and stopping at the Depot
 // Street station; an Ann Arbor Railroad freight (two engines, boxcars and hoppers) and a short Great Lakes Central one
-// running back and forth.
+// each coming up its line on a few runs a day, switching at the far end and going back. Each sounds its horn for every
+// grade crossing ahead and the crossings' bells ring while their lamps flash (rail-sounds.js, audio-system.js).
 
 const GAUGE = 1.435, TIE_STEP = 1.2, TOP = 0.42; // top of the rails above the ground
 
@@ -225,10 +227,17 @@ const CAR_KINDS = {
 // looked for on the line (time enough to cross the town at line speed)
 const STATION = { x: 432, z: -905 };
 const RUN_WINDOW = 420;
+// The freights' runs (FREIGHT, below): each comes in from `from` end of its line, stops at the far end, switches
+// there for `dwell` seconds (its engines running round the cars), and goes back out the way it came. `days` Monday
+// first. The city's 2019-20 quiet-zone study counted about one Ann Arbor Railroad round trip a day, often at night;
+// here a late-night turn every day and a late-morning one on weekdays.
 const TRAINS = {
-  'Michigan Subdivision': { cars: ['charger', 'coach', 'coach', 'coach', 'coach', 'coach'], speed: 22, wait: 25, horn: true, timetable: true },
-  'Ann Arbor Railroad': { cars: ['diesel', 'diesel', 'boxcar', 'hopper', 'hopper', 'boxcar:0x2f5d3a', 'tank', 'tank', 'hopper:0x6b5a3a', 'boxcar', 'hopper', 'boxcar:0x3a4f6b'], speed: 11, wait: 40, horn: true },
-  'Great Lakes Central Railroad': { cars: ['diesel', 'boxcar', 'tank'], speed: 6, wait: 60, horn: false }
+  // the Wolverine top-and-tail, a Charger at each end (the tail one turned round)
+  'Michigan Subdivision': { cars: ['charger', 'coach', 'coach', 'coach', 'coach', 'charger:rev'], speed: 22, wait: 25, horn: true, timetable: true },
+  'Ann Arbor Railroad': { cars: ['diesel', 'diesel', 'boxcar', 'hopper', 'hopper', 'boxcar:0x2f5d3a', 'tank', 'tank', 'hopper:0x6b5a3a', 'boxcar', 'hopper', 'boxcar:0x3a4f6b'], speed: 11, horn: true,
+    from: 'south', runs: [{ arr: 11 * 3600 + 20 * 60, dwell: 1500, days: '1111100' }, { arr: 23 * 3600 + 40 * 60, dwell: 1800, days: '1111111' }] },
+  'Great Lakes Central Railroad': { cars: ['diesel', 'boxcar', 'tank'], speed: 6, horn: true,
+    from: 'north', runs: [{ arr: 14 * 3600 + 30 * 60, dwell: 1200, days: '1111100' }] }
 };
 
 function buildRailways(group, crossings = [], wolverine = null) {
@@ -371,8 +380,12 @@ function buildRailways(group, crossings = [], wolverine = null) {
     if (made[spec]) return made[spec];
     const [kind, hex] = spec.split(':');
     const parts = [];
-    const L = hex ? CAR_KINDS[kind](parts, Number(hex)) : CAR_KINDS[kind](parts);
-    return (made[spec] = { geo: mergeGeometries(parts.map((g) => { for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'color'].includes(k)) g.deleteAttribute(k); return g; }), false), L });
+    // ':rev' a car turned round (the Wolverine's tail locomotive); else ':0x…' its colour
+    const rev = hex === 'rev';
+    const L = hex && !rev ? CAR_KINDS[kind](parts, Number(hex)) : CAR_KINDS[kind](parts);
+    const geo = mergeGeometries(parts.map((g) => { for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'color'].includes(k)) g.deleteAttribute(k); return g; }), false);
+    if (rev) geo.rotateY(Math.PI);
+    return (made[spec] = { geo, L });
   };
   const trainsGroup = new THREE.Group();
   trainsGroup.name = 'Trains';
@@ -393,6 +406,8 @@ function buildRailways(group, crossings = [], wolverine = null) {
     const length = cars.reduce((s, c) => s + c.L + 1, 0);
     const train = { name, path, cars, length, speed: spec.speed, wait: spec.wait, horn: spec.horn,
       s: Math.min(path.length - 1, length + (path.length - length) * 0.3), dir: 1, v: 0, waiting: 0, sinceHorn: 999 };
+    // (a train on a timetable or runs starts off the line, out of sight, until its first update places it)
+    if ((spec.timetable && wolverine?.trips?.length) || spec.runs) { train.s = -1e9; train.hidden = true; }
     if (spec.timetable && wolverine?.trips?.length) {
       // its platform: the point of the line nearest the Depot Street station, and which way along it is west
       let best = Infinity;
@@ -409,6 +424,15 @@ function buildRailways(group, crossings = [], wolverine = null) {
       train.timetable = wolverine.trips;
       train.moving = false;
     }
+    if (spec.runs) {
+      // a freight on its runs: which end of the line it comes in at (north is -z)
+      const z0 = path.z[0], z1 = path.z[path.z.length - 1];
+      train.inDir = (spec.from === 'south') === (z0 > z1) ? 1 : -1;
+      train.runs = spec.runs;
+    }
+    train.hornAt = { x: 0, y: 0, z: 0, seed: 0.7 }; // where its horn is: the lead locomotive's cab
+    train.blown = new Set(); // the crossings ahead it has sounded its horn for
+    train.hornEnd = -Infinity;
     result.trains.push(train);
   }
   const at = {}, front = {}, back = {};
@@ -430,6 +454,38 @@ function buildRailways(group, crossings = [], wolverine = null) {
       car.mesh.rotation.set(-Math.atan2(fy - by, h), Math.atan2(dx, dz), 0, 'YXZ'); // facing the way it was built
     }
   };
+  // Braking into a stop and pulling away from it: how far from the stop the head is `tau` seconds before (ahead) or
+  // after (gone), for a train whose line speed is V
+  const BRAKE = 0.55, PULL = 0.4;
+  const ahead = (V, tau) => tau < V / BRAKE ? 0.5 * BRAKE * tau * tau : V * V / (2 * BRAKE) + V * (tau - V / BRAKE);
+  const gone = (V, tau) => tau < V / PULL ? 0.5 * PULL * tau * tau : V * V / (2 * PULL) + V * (tau - V / PULL);
+  const hide = (t) => {
+    t.s = -1e9; // gates stay up
+    t.v = 0;
+    t.hidden = true;
+    for (const car of t.cars) car.mesh.visible = false;
+    t.moving = false;
+  };
+  // Where the clock puts it (s, going v along dir), eased there: between the clock's whole seconds the train carries
+  // on at its speed, so it never moves in steps. Hidden once wholly off the line. `pushPull`: a change of direction
+  // reverses the cars (the last car leads); else the engines have run round the train and lead again.
+  const settle = (t, dt, s, v, dir, key, sec, pushPull, onHorn) => {
+    if (dir !== t.dir) { t.dir = dir; if (pushPull) t.cars.reverse(); }
+    if (t.stopKey === key && Math.abs(s - t.s) < 40) t.s += Math.max(-4, Math.min(4, s + dir * v * (t.frac = (t.frac || 0) + dt) - t.s)) * Math.min(1, dt * 8);
+    else t.s = s;
+    if (t.lastSec !== sec) { t.lastSec = sec; t.frac = 0; }
+    t.stopKey = key;
+    const inside = t.s - dir * t.length > -50 && t.s - dir * t.length < t.path.length + 50 && t.s > -50 && t.s < t.path.length + 50;
+    if (!inside) { hide(t); return; }
+    t.hidden = false;
+    t.v = v;
+    t.waiting = v === 0 ? 1 : 0;
+    // two short blasts as it sets off from a stop (on the line, not coming in at its end)
+    if (t.horn && onHorn && v > 0 && t.moving === false && t.wasStopped) { sample(t.path, t.s, t.hornAt); t.hornAt.y += 4; onHorn(t.hornAt, 0, 'start'); }
+    t.wasStopped = v === 0;
+    t.moving = v > 0;
+    place(t);
+  };
   // A train on Amtrak's timetable: the stop at Ann Arbor in service today nearest the time now puts
   // it braking down the line toward the platform, standing there between its arrival and departure, or pulling away;
   // with no train due it is off the end of the line, out of sight
@@ -444,71 +500,112 @@ function buildRailways(group, crossings = [], wolverine = null) {
       if (since < -RUN_WINDOW || now.sec - dep > RUN_WINDOW) continue;
       if (Math.abs(since) < Math.abs(into)) { into = since; stop = trip; }
     }
-    if (!stop) {
-      t.s = -1e9; // gates stay up
-      t.v = 0;
-      for (const car of t.cars) car.mesh.visible = false;
-      t.moving = false;
-      return;
-    }
+    if (!stop) { hide(t); return; }
     const [, way, , arr, dep] = stop;
     const dir = way === 'west' ? t.west : -t.west;
-    if (dir !== t.dir) { t.dir = dir; t.cars.reverse(); }
     // the head stops with the train along the platform
     const stopAt = t.platform + dir * t.length * 0.5;
-    const V = t.speed, BRAKE = 0.55, PULL = 0.4;
-    const ahead = (tau) => tau < V / BRAKE ? 0.5 * BRAKE * tau * tau : V * V / (2 * BRAKE) + V * (tau - V / BRAKE);
-    const gone = (tau) => tau < V / PULL ? 0.5 * PULL * tau * tau : V * V / (2 * PULL) + V * (tau - V / PULL);
+    const V = t.speed;
     let s, v;
-    if (now.sec < arr) { const tau = arr - now.sec; s = stopAt - dir * ahead(tau); v = Math.min(V, BRAKE * tau); }
+    if (now.sec < arr) { const tau = arr - now.sec; s = stopAt - dir * ahead(V, tau); v = Math.min(V, BRAKE * tau); }
     else if (now.sec < dep) { s = stopAt; v = 0; }
-    else { const tau = now.sec - dep; s = stopAt + dir * gone(tau); v = Math.min(V, PULL * tau); }
-    // between the timetable's whole seconds the train carries on at its speed, so it never moves in steps
-    if (t.stopKey === stop && Math.abs(s - t.s) < 40) t.s += Math.max(-4, Math.min(4, s + dir * v * (t.frac = (t.frac || 0) + dt) - t.s)) * Math.min(1, dt * 8);
-    else t.s = s;
-    if (t.lastSec !== now.sec) { t.lastSec = now.sec; t.frac = 0; }
-    t.stopKey = stop;
-    const inside = t.s - dir * t.length > -50 && t.s - dir * t.length < t.path.length + 50 && t.s > -50 && t.s < t.path.length + 50;
-    if (!inside) { for (const car of t.cars) car.mesh.visible = false; t.moving = false; return; }
-    t.v = v;
-    t.waiting = v === 0 ? 1 : 0;
-    // the horn as it pulls out, and now and then on the way
-    if (t.horn && onHorn && ((v > 0 && !t.moving && now.sec >= dep) || (v > 4 && t.sinceHorn > 45))) {
-      sample(t.path, t.s, at); onHorn(at); t.sinceHorn = 0;
+    else { const tau = now.sec - dep; s = stopAt + dir * gone(V, tau); v = Math.min(V, PULL * tau); }
+    settle(t, dt, s, v, dir, stop, now.sec, true, onHorn);
+  };
+  // A freight on its runs (TRAINS `runs`): in from its end of the line at line speed, braking to a stop near the far
+  // end, switching there, and out again with its engines leading, off the end; out of sight between runs
+  const runFreight = (t, dt, onHorn) => {
+    const now = localTime(Date.now());
+    const V = t.speed, P = t.path.length, dirIn = t.inDir;
+    const stopAt = dirIn > 0 ? P - 15 : 15;
+    const tIn = (P + 100) / V + V / BRAKE, tOut = (P + t.length + 100) / V + V / PULL;
+    let run = null, sec = 0;
+    for (const r of t.runs) {
+      // today's run, or yesterday's still going after midnight
+      for (const [day, offset] of [[now.weekday, 0], [(now.weekday + 6) % 7, 86400]]) {
+        const x = now.sec + offset;
+        if (r.days[day] === '1' && x > r.arr - tIn && x < r.arr + r.dwell + tOut) { run = r; sec = x; }
+      }
     }
-    t.moving = v > 0;
-    place(t);
+    if (!run) { hide(t); return; }
+    const dep = run.arr + run.dwell;
+    let s, v, dir;
+    if (sec < run.arr) { const tau = run.arr - sec; s = stopAt - dirIn * ahead(V, tau); v = Math.min(V, BRAKE * tau); dir = dirIn; }
+    else if (sec < dep) { s = stopAt; v = 0; dir = dirIn; }
+    // run round: the engines at what was the back, heading out
+    else { const tau = sec - dep; dir = -dirIn; s = stopAt - dirIn * t.length + dir * gone(V, tau); v = Math.min(V, PULL * tau); }
+    settle(t, dt, s, v, dir, run, now.sec, false, onHorn);
   };
   for (const t of result.trains) place(t);
   const gates = buildCrossingGates(group, crossings, rail, result.trains);
   result.crossings = gates.list || [];
 
-  // Each frame: accelerate toward the line speed, slow to a stop at the end of the line, wait, and go back; sound the
-  // horn as it sets off and every so often on the way
-  result.update = (dt, onHorn) => {
-    for (const t of result.trains) {
-      t.sinceHorn += dt;
-      if (t.timetable) { runTimetable(t, dt, onHorn); continue; }
-      if (t.waiting > 0) {
+  // The horn for the crossings ahead (49 CFR 222.21; Ann Arbor has no quiet zone): 15 to 20 s before the lead engine
+  // reaches each public crossing, long, long, short, long, the last held until it's there. Crossings close together
+  // (each reached within 8 s of the one before) share one call, its last blast held through them all, as an engineer
+  // does downtown; a crossing it will reach while the horn's still blowing is covered by it; one too near for the whole
+  // call when the horn falls quiet gets one long blast.
+  let clock = 0;
+  const LEAD_TIME = 17, CHAIN = 8, HOLD_MAX = 30;
+  const coming = [];
+  const hornAhead = (t, k, onHorn) => {
+    if (!t.horn || !onHorn || t.hidden) return;
+    if (t.v < 0.5) { t.blown.clear(); return; }
+    coming.length = 0;
+    for (const c of result.crossings) {
+      const s = c.at[k];
+      if (s === null) continue;
+      const d = (s - t.s) * t.dir;
+      if (d <= 0) { t.blown.delete(c); continue; }
+      if (t.blown.has(c)) continue;
+      const eta = d / Math.max(t.v, 2);
+      if (clock + eta <= t.hornEnd + 1.5) { t.blown.add(c); continue; }
+      if (eta < LEAD_TIME + HOLD_MAX) coming.push({ c, eta });
+    }
+    if (clock < t.hornEnd || !coming.length) return;
+    coming.sort((a, b) => a.eta - b.eta);
+    if (coming[0].eta > LEAD_TIME) return;
+    let n = 1;
+    while (n < coming.length && coming[n].eta - coming[n - 1].eta < CHAIN && coming[n].eta < HOLD_MAX) n++;
+    const hold = coming[n - 1].eta, first = coming[0].c;
+    const kind = coming[0].eta > HORN_PATTERN + 1.5 ? 'crossing' : 'long';
+    sample(t.path, t.s, t.hornAt); t.hornAt.y += 4;
+    onHorn(t.hornAt, hold, kind);
+    t.hornEnd = clock + hold;
+    for (let i = 0; i < n; i++) t.blown.add(coming[i].c);
+    console.log(`[rail] horn: ${t.name} ${kind === 'crossing' ? 'long-long-short-long' : 'long'} for the crossing at (${first.x.toFixed(0)}, ${first.z.toFixed(0)}), ${coming[0].eta.toFixed(1)} s ahead at ${(t.v * 2.237).toFixed(0)} mph${n > 1 ? `, held ${hold.toFixed(1)} s through ${n} crossings` : ''}`);
+  };
+
+  // Each frame: every train where its timetable or runs put it (a train with no timetable runs back and forth: it
+  // accelerates toward the line speed, slows to a stop at the end of the line, waits, and goes back); its horn for the
+  // crossings ahead; the gates; and the crossing bells (`onBells` gets the crossings, each `on` while its lamps flash)
+  result.update = (dt, onHorn, onBells) => {
+    clock += dt;
+    result.trains.forEach((t, k) => {
+      if (t.timetable) runTimetable(t, dt, onHorn);
+      else if (t.runs) runFreight(t, dt, onHorn);
+      else if (t.waiting > 0) {
         t.waiting -= dt;
         if (t.waiting <= 0) {
           // back the way it came: the last car leads now (Amtrak runs push-pull), the cars where they stood
           t.s -= t.dir * t.length;
           t.dir = -t.dir;
           t.cars.reverse();
-          if (t.horn && onHorn) { sample(t.path, t.s, at); onHorn(at); t.sinceHorn = 0; }
+          if (t.horn && onHorn) { sample(t.path, t.s, t.hornAt); t.hornAt.y += 4; onHorn(t.hornAt, 0, 'start'); }
         }
-        continue;
+      } else {
+        const left = t.dir > 0 ? t.path.length - t.s : t.s;
+        const target = Math.min(t.speed, Math.sqrt(Math.max(0, left - 2) * 2 * 0.35));
+        t.v += Math.max(-1.2 * dt, Math.min(0.35 * dt, target - t.v));
+        t.s += t.dir * t.v * dt;
+        if (left < 2.5 && t.v < 0.3) { t.v = 0; t.waiting = t.wait; t.s = t.dir > 0 ? t.path.length : 0; }
+        place(t);
       }
-      const left = t.dir > 0 ? t.path.length - t.s : t.s;
-      const target = Math.min(t.speed, Math.sqrt(Math.max(0, left - 2) * 2 * 0.35));
-      t.v += Math.max(-1.2 * dt, Math.min(0.35 * dt, target - t.v));
-      t.s += t.dir * t.v * dt;
-      if (left < 2.5 && t.v < 0.3) { t.v = 0; t.waiting = t.wait; t.s = t.dir > 0 ? t.path.length : 0; }
-      if (t.horn && onHorn && t.v > 4 && t.sinceHorn > 45) { sample(t.path, t.s, at); onHorn(at); t.sinceHorn = 0; }
-      place(t);
-    }
+      if (!t.hidden) { sample(t.path, t.s, t.hornAt); t.hornAt.y += 4; }
+      hornAhead(t, k, onHorn);
+    });
     gates.update(dt);
+    if (onBells && result.crossings.length) onBells(result.crossings);
   };
   return result;
 }
@@ -562,7 +659,7 @@ function buildCrossingGates(group, crossings, rail, trains) {
     const D = Math.min(16, 4.2 / sin + 1.5);
     const rx = -road.dz, rz = road.dx; // the right of travel along the street's direction
     // (D: how far either side of the crossing along the street its gates stand, where traffic.js holds cars and walkers)
-    const c = { x, z, gated, on: false, t: 0, arm: ARM_UP, at: trains.map(() => null), first: posts.length, D, dx: road.dx, dz: road.dz };
+    const c = { x, y: groundHeight(x, z), z, gated, on: false, t: 0, arm: ARM_UP, at: trains.map(() => null), first: posts.length, D, dx: road.dx, dz: road.dz };
     for (const side of [1, -1]) {
       // traffic heading `side` along the street meets this gate before the tracks
       const px = x - side * road.dx * D + side * rx * (half + 0.7), pz = z - side * road.dz * D + side * rz * (half + 0.7);
@@ -657,6 +754,7 @@ function buildCrossingGates(group, crossings, rail, trains) {
             lampMesh.setColorAt(i * 2 + 1, lit && phase === 1 ? ON : OFF);
           }
           lampsChanged = true;
+          if (lit !== c.on) console.log(`[rail] crossing (${c.x.toFixed(0)}, ${c.z.toFixed(0)}) ${lit ? "lamps flash, bell rings" : "clear"}`);
           c.on = lit;
         }
         const want = on && c.gated ? ARM_DOWN : ARM_UP;

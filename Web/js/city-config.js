@@ -1,4 +1,4 @@
-import { historicDistrictAt } from './districts.js';
+import { historicDistrictAt, neighborhoodAt } from './districts.js';
 import { GEO } from './city-geodata.js';
 import { CHAMPION_TREES } from './champion-trees.js';
 import { GOLF_HOLES } from './golf-holes.js';
@@ -395,14 +395,35 @@ function getLocationLabel(x, z, prefer = null) {
   const b = blockAt(x, z);
   if (b && b.park > 0.6 && b.parkName) return b.parkName;
   const near = nearestRoads(x, z, 160);
-  // Lamp: inside one of the city's historic districts, its name over the street signs
+  // Lamp: inside one of the city's historic districts, its name over the street signs; elsewhere the neighbourhood's
   const historic = historicDistrictAt(x, z);
-  const lead = historic ? `${historic} · ` : '';
+  const hood = historic ? null : neighborhoodName(x, z);
+  const lead = historic || hood ? `${historic || hood} · ` : '';
   if (near.length >= 2) return `${lead}${near[0].road.name} & ${near[1].road.name}`;
   if (near.length) return `${lead}${near[0].road.name}`;
   if (historic) return historic;
+  if (hood) return `${hood}, Ann Arbor`;
   if (!inTown(x, z)) return 'Washtenaw County';
   return districtLabel(districtAt(x, z)) === 'Ann Arbor' ? 'Ann Arbor' : `${districtLabel(districtAt(x, z))}, Ann Arbor`;
+}
+
+// Lamp: the city's neighbourhood names are a public-safety program's, some of them two or three run together, and
+// round the middle of town they're wide umbrellas: inside one of those, the local name of the hand-drawn area the
+// point is in (AREAS) is the more specific ("Water Hill", not "West Park–Miller"; "Kerrytown", not "North Central")
+const LOCAL_NAMES = {
+  'North Central': ['kerrytown', 'water_hill', 'lower_town'],
+  'West Park–Miller': ['water_hill'],
+  'Mack School–Sunset': ['water_hill'],
+  'Broadway–Riverside': ['lower_town'],
+  'Downtown': ['state_street', 'kerrytown'],
+  'Central Campus Medical': ['central_campus', 'medical_campus']
+};
+function neighborhoodName(x, z) {
+  const hood = neighborhoodAt(x, z);
+  if (!hood) return null;
+  const local = LOCAL_NAMES[hood];
+  const id = local && districtAt(x, z);
+  return local && local.includes(id) ? districtLabel(id) : hood;
 }
 
 // Positions authored in the starter's old frame have no Ann Arbor equivalent: they're taken as they are

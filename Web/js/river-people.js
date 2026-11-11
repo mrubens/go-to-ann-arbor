@@ -152,7 +152,8 @@ function buildRiverPeople(group) {
     people.push({
       kayak, slot: kayak ? i : i - KAYAKS, s, at: 0,
       lane: (rand() - 0.5) * 1.4, phase: rand() * 100,
-      speed: kayak ? 1.5 + rand() * 0.7 : 0.7 + rand() * 0.35,
+      // (a tube drifts at the Huron's own half a metre a second, controllers.js KAYAK_CURRENT; a kayak paddles on)
+      speed: kayak ? 1.5 + rand() * 0.7 : 0.45 + rand() * 0.2,
       stroke: rand() * 6, spin: rand() * 6, heading: null, x: 0, y: 0, z: 0,
       rig: new PersonRig({ seed: 50 + i * 7.3, scale: 0.92 + rand() * 0.14, female: rand() < 0.5, girth: 0.9 + rand() * 0.25, hair: rand() * 0.6 }),
       root: new THREE.Object3D(),
@@ -198,8 +199,8 @@ function buildRiverPeople(group) {
     let kayaksShown = 0, tubesShown = 0;
     for (const p of people) {
       const pull = place(p, dt);
-      // on through the chutes a little quicker
-      let s = p.s + p.speed * (1 + 0.9 * pull) * dt;
+      // on through the chutes quicker: a tube is shot through at the chute's own pace
+      let s = p.s + p.speed * (1 + (p.kayak ? 0.9 : 4) * pull) * dt;
       // squeezed into the middle there, a boat length behind whoever is ahead, rather than through them
       if (pull > 0.2) for (const o of people) if (o !== p && o.s > p.s && o.s - GAP < s) s = Math.max(p.s, o.s - GAP);
       p.s = s;

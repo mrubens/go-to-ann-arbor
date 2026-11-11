@@ -57,12 +57,17 @@ import {
   sqrt,
   specularColor,
   specularColorBlended,
-  specularF90
+  specularF90,
+  int,
+  uniformArray,
+  vertexStage
 } from 'three/tsl';
 import { TOWN_BOUNDS } from './city-config.js';
 import { groundHeightNode } from './terrain.js';
 import { CASCADE_WAVES } from './cascades.js';
 import { hot } from '../lamp-game.js';
+import { onSeason } from './seasons.js';
+import { TIER } from './device-tier.js';
 
 // Procedural city materials: facades and interiors, vegetation, roads, water and lighting effects.
 
@@ -80,6 +85,31 @@ const cityUniforms = hot(import.meta).keep('cityUniforms', () => ({
 // Lamp: how much of the ground lies under snow, 0 to 1 (snow-cover.js); added after the others, so a city kept from
 // before it gets it too
 cityUniforms.uSnow ??= uniform(0);
+// Lamp: the season (seasons.js, set by trees.js on each new day). Per tree species (trees.js SPECIES, 7 the shrubs):
+// how much of a tree's leaves are on it, max(z, clamp(x + y * the tree's random fraction, 0, 1)), so the trees of a
+// kind drop (or open) their leaves one by one over a couple of weeks. And how dormant the lawns are, 0 green to 1 straw
+cityUniforms.uTreeLeaves ??= uniformArray(Array.from({ length: 8 }, () => new THREE.Vector4(1, 0, 1, 0)), 'vec4');
+cityUniforms.uLawnDormant ??= uniform(0);
+// Lamp: fallen leaves on the lawns. How much of the trees' fall is lying on the ground today, 0 to 1 (trees.js, by the
+// season), and where: a coarse map of the leaf-dropping trees' crowns over the town (trees.js `bakeLitter`, filled
+// once the trees are known; LITTER_SIZE square, r 0 to 1), placed by uLitterBox (min x, min z, 1 / width, 1 / depth)
+const LITTER_SIZE = 1024;
+cityUniforms.uLitter ??= uniform(0);
+cityUniforms.uLitterBox ??= uniform(new THREE.Vector4(0, 0, 0, 0));
+cityUniforms.litterMap ??= (() => {
+  const tex = new THREE.DataTexture(new Uint8Array(LITTER_SIZE * LITTER_SIZE), LITTER_SIZE, LITTER_SIZE, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.magFilter = tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.name = 'LeafLitter';
+  tex.needsUpdate = true;
+  return tex;
+})();
+// lawns go dormant through the second half of November, stay straw until mid March and green up by mid April
+onSeason((day) => {
+  cityUniforms.uLawnDormant.value = day >= 200 ? Math.min(1, Math.max(0, (day - 318) / 22)) : Math.min(1, Math.max(0, (108 - day) / 34));
+});
 
 // Fast deterministic 2D -> 1D hash in TSL
 const hash2D = Fn(([p]) => {
@@ -1411,8 +1441,10 @@ class TreeNodeMaterial extends THREE.MeshStandardNodeMaterial {
   }
 }
 
-// Prevailing wind (xz, blowing from the west-north-west across Manhattan)
-const TREE_WIND = vec2(0.86, 0.51);
+// The wind in the trees: which way it blows (xz, toward) and how hard, 1 being a light breeze. Lamp: set from KARB's
+// observed wind (outdoors.js); offline it stays this gentle breeze from the west-north-west. Kept like cityUniforms
+const treeWind = hot(import.meta).keep('treeWind', () => ({ dir: uniform(new THREE.Vector2(0.86, 0.51)), strength: uniform(1) }));
+const TREE_WIND = treeWind.dir;
 
 /**
  * Instanced street & park tree material (js/trees.js): bark tubes and alpha-tested leaf cards in ONE draw per mesh.
@@ -1448,6 +1480,12 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
   const rnd = fract(aData.w);
   const species = floor(aData.w);
   const leaf = texture(leafAtlas, uv());
+  // Lamp: the share of its leaves this tree has on it today (the season, cityUniforms.uTreeLeaves): 1 in summer,
+  // falling to 0 after the fall browning, rising again at leaf-out. A leaf of the atlas stays while its own random
+  // value (g) is under it, so a crown thins leaf by leaf; the twigs and stalks (b) stay, so a bare crown is twigs
+  const season = cityUniforms.uTreeLeaves.element(int(species));
+  const leafShare = max(season.z, clamp(season.x.add(season.y.mul(rnd)), 0.0, 1.0));
+  const leavesOn = varying(vertexStage(leafShare));
 
   // Wind. positionLocal is already instanced (world space); positionGeometry is the tree's own frame (metres)
   mat.positionNode = Fn(() => {
@@ -1456,7 +1494,7 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
     const phase = rnd.mul(6.2832);
     // gusts rolling downwind across the city
     const gust = sin(time.mul(0.5).sub(dot(p.xz, TREE_WIND).mul(0.045))).mul(0.5).add(0.5);
-    const strength = gust.mul(gust).mul(0.7).add(0.3);
+    const strength = gust.mul(gust).mul(0.7).add(0.3).mul(treeWind.strength);
     // the whole tree bends with height, leaning downwind and rocking across it
     const h = g.y.div(11.0);
     const bend = h.mul(h);
@@ -1470,9 +1508,11 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
     const moved = p.add(sway).add(vec3(0.0, bob, 0.0)).add(normalLocal.mul(flutter));
     if (!merged) return moved;
     // Lamp: one geometry holding every species' shape at this level (trees.js, the Xbox): each tree keeps only its
-    // own, the rest fold to one point and draw nothing
+    // own, the rest fold to one point and draw nothing. A bare tree's inner leaf cards fold away too (its crown shell's
+    // cards keep its twigs): winter's crowns cost the Xbox less fill than summer's, not more
     const own = step(abs(attribute('aKind', 'float').sub(attribute('aTreeKind', 'float'))), 0.5);
-    return mix(vec3(0.0, -1000.0, 0.0), moved, own);
+    const innerCard = isLeaf.mul(float(1.0).sub(step(0.5, uv().x).mul(step(0.5, uv().y))));
+    return mix(vec3(0.0, -1000.0, 0.0), moved, own.mul(float(1.0).sub(innerCard.mul(step(leafShare, 0.02)))));
   })();
 
   // Coverage: leaf cards from the atlas; bark is opaque from outside (its back faces are dropped)
@@ -1484,9 +1524,15 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
   const shell = step(0.5, uv().x).mul(step(0.5, uv().y));
   const inside = step(0.0, dot(normalViewGeometry, positionView)); // seen from the crown's side of the card
   const nearFade = smoothstep(1.4, 3.2, dist).mul(float(1.0).sub(shell.mul(inside).mul(smoothstep(9.0, 6.0, dist))));
-  const alpha = mix(float(frontFacing), leaf.a.mul(nearFade), isLeaf);
+  // Lamp: the season's leaves (above): the leaves still on and the twigs; and off where the atlas's mips have blurred
+  // the twigs away, a thinner gray haze of what a leafless crown's twig mass looks like from afar, not a hole
+  const twig = smoothstep(0.15, 0.45, leaf.b);
+  const kept = step(leaf.g, leavesOn);
+  const shown = max(twig, kept);
+  const haze = smoothstep(200.0, 600.0, dist).mul(0.6);
+  const alpha = mix(float(frontFacing), leaf.a.mul(nearFade).mul(max(shown, haze)), isLeaf);
   mat.alphaTestNode = float(0.5);
-  mat.maskShadowNode = mix(float(frontFacing), leaf.a, isLeaf).greaterThan(0.5);
+  mat.maskShadowNode = mix(float(frontFacing), leaf.a.mul(shown), isLeaf).greaterThan(0.5);
 
   mat.colorNode = Fn(() => {
     // Leaves: per-tree tint x atlas brightness, a share of sun-yellowed and of cooler leaves, brown twigs & stalks,
@@ -1496,7 +1542,8 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
     const warm = smoothstep(0.62, 1.0, leaf.g).mul(0.55);
     const cool = smoothstep(0.38, 0.0, leaf.g).mul(0.45);
     const leafCol = mix(mix(base, base.mul(vec3(1.25, 1.08, 0.5)), warm), base.mul(vec3(0.8, 0.92, 1.05)), cool);
-    const foliage = mix(leafCol, color(0x4a3b2c), leaf.b).mul(crownAO.mul(0.45).add(0.55));
+    // (the twigs of a leafless crown a weathered gray-brown)
+    const foliage = mix(mix(leafCol, color(0x4a3b2c), leaf.b), color(0x4f4842), float(1.0).sub(kept)).mul(crownAO.mul(0.45).add(0.55));
 
     // Bark (uv in metres): furrowed grey-brown ridges, or the London plane's olive bark flaking to cream & tan
     const bu = uv();
@@ -1519,7 +1566,7 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
   mat.aoNode = canyonSkyAONode().mul(crownAO.mul(0.75).add(0.25));
 
   // Light through the leaves: yellow-green, strongest out on the thin shell
-  mat.translucencyNode = aData.xyz.mul(vec3(1.0, 1.2, 0.45)).mul(leaf.r.mul(1.5)).mul(crownAO.mul(0.8).add(0.2)).mul(isLeaf);
+  mat.translucencyNode = aData.xyz.mul(vec3(1.0, 1.2, 0.45)).mul(leaf.r.mul(1.5)).mul(crownAO.mul(0.8).add(0.2)).mul(isLeaf).mul(kept);
 
   mat.userData.snow = 0; // leaves keep no snow (snow-cover.js)
   return mat;
@@ -2942,6 +2989,8 @@ const waterDisturb = hot(import.meta).keep('waterDisturb', () => ({
 }));
 // how much PFAS foam drifts on the river, 0 to 1 (river-pfas.js, set by main.js); added here so a kept object has it
 waterDisturb.pfas ??= uniform(0);
+// how hard it's raining on the water, 0 to 1 (outdoors.js, from weather.js): rings spreading where drops land
+waterDisturb.rain ??= uniform(0);
 
 // The slope those add at p (a vec2, like the waves' own)
 const disturbSlope = (p) => {
@@ -2958,6 +3007,21 @@ const disturbSlope = (p) => {
   }
   // the wake: two arms of waves spreading back from the bow at about 19°, the waves along them standing still
   // with the kayak, fading over 10 m or so
+  // rain on the water: in two offset grids of little cells, a drop now and then lands somewhere in each and a ring
+  // runs out from it, about 20 cm wide as it fades; the more rain, the more cells have one. Only near the camera, where
+  // they're bigger than a pixel
+  const near = smoothstep(45.0, 14.0, length(positionWorld.sub(cameraPosition)));
+  const rain = waterDisturb.rain.mul(near);
+  for (const [size, shift, rate] of [[0.55, 0.0, 1.3], [0.8, 0.37, 0.9]]) {
+    const q = p.div(size).add(shift), id = floor(q), f2 = fract(q);
+    const h = hash2D(id), h2 = hash2D(id.add(7.31)), h3 = hash2D(id.add(19.7));
+    const age = fract(time.mul(rate).add(h.mul(5.3)));
+    const d = f2.sub(vec2(h2, h3).mul(0.5).add(0.25)), dist = length(d).add(0.001);
+    const ring = dist.sub(age.mul(0.42));
+    const env = e(ring.div(0.07).pow(2).negate()).mul(float(1).sub(age).pow(2)).mul(step(h3.mul(0.6).add(h.mul(0.4)), rain));
+    const k = 2 * Math.PI / 0.09;
+    slope.addAssign(d.div(dist).mul(cos(ring.mul(k)).mul(env).mul(0.006 * k)));
+  }
   const f = waterDisturb.bow.zw, side = vec2(f.y.negate(), f.x);
   const rel = p.sub(waterDisturb.bow.xy);
   const back = dot(rel, f).negate(), v = dot(rel, side);
@@ -2989,10 +3053,11 @@ const rapidsField = Fn(([p]) => {
       If(inside.greaterThan(0), () => {
         const chute = fall(4.0, 1.2, abs(lat));
         const after = smoothstep(0.2, 1.2, ds).mul(e(ds.sub(1).max(0).mul(-0.2)));
-        // the tongue's standing waves, about 1.8 m apart, still in the water but for a slight surge
+        // the tongue's standing waves, about 1.8 m apart, still in the water but for a slight surge (cascades.js cascadeWaveLift
+        // keeps the same, for the kayak riding them)
         const k = 2 * Math.PI / 1.8;
         const phase = ds.mul(k).add(sin(time.mul(1.3)).mul(0.35));
-        const A = chute.mul(after).mul(0.17).mul(cos(lat.mul(2.4)).mul(0.25).add(0.75)).mul(inside);
+        const A = chute.mul(after).mul(0.22).mul(cos(lat.mul(2.4)).mul(0.25).add(0.75)).mul(inside);
         // the boil: short chop running downstream with the current, everywhere below the drop
         const k2 = 2 * Math.PI / 0.9;
         const run = ds.sub(time.mul(2.4)).mul(k2), side = lat.mul(3.1).add(ds.mul(1.7)).sub(time.mul(1.6));
@@ -3154,7 +3219,21 @@ function createParkLawnMaterial(isMeadow = false, mown = null) {
       cGrassMid,
       macroPatch.mul(0.45).add(midClover.mul(0.35)).add(mowStripe.mul(0.20))
     );
-    const grass = mix(baseLawn, cGrassSun, microBlade.mul(0.38));
+    const green = mix(baseLawn, cGrassSun, microBlade.mul(0.38));
+    // Lamp: dormant in winter (cityUniforms.uLawnDormant, seasons.js): straw tan, in patches, a little green left in
+    // the low spots (snow-cover.js whitens it over, as it does a green lawn)
+    const straw = mix(color(0x7a6a45), color(0xa89466), macroPatch.mul(0.5).add(microBlade.mul(0.5)));
+    const lawn = mix(green, straw, cityUniforms.uLawnDormant.mul(smoothstep(0.1, 0.45, midClover.add(macroPatch.mul(0.4))).mul(0.25).add(0.75)));
+    // Lamp: fallen leaves under the trees in late fall (cityUniforms.uLitter, litterMap): drifts thickest under the
+    // crowns, broken up leaf by leaf, rust, ochre and brown, raked away or under the snow by mid December
+    // (not on the phone/Xbox or slow tiers: a texture read and three noises on every lawn pixel, all year, for a
+    // few weeks of leaves)
+    const box = cityUniforms.uLitterBox;
+    const under = texture(cityUniforms.litterMap, vec2(wp.x.sub(box.x).mul(box.z), wp.y.sub(box.y).mul(box.w))).r;
+    const leafy = noise2D(wp.mul(8.0)).mul(0.5).add(noise2D(wp.mul(1.3)).mul(0.5));
+    const litter = smoothstep(0.52, 0.62, under.mul(cityUniforms.uLitter).mul(1.15).add(leafy.mul(0.6)));
+    const leafCol = mix(mix(color(0x6e4220), color(0xb07a2a), noise2D(wp.mul(9.0).add(3.7))), color(0x9a3a1a), smoothstep(0.55, 0.8, noise2D(wp.mul(6.0).add(9.3))));
+    const grass = TIER.name === 'phone' || TIER.name === 'slow' ? lawn : mix(lawn, leafCol.mul(microBlade.mul(0.35).add(0.75)), litter.mul(step(0.001, cityUniforms.uLitter)));
     if (!mown) return grass;
     const angle = attribute('mow', 'float');
     const v = dot(wp, vec2(angle.sin().negate(), angle.cos())).div(mown.width);
@@ -3484,6 +3563,7 @@ function createCarFlareMaterial() {
 
 export {
   cityUniforms,
+  treeWind,
   waterDisturb,
   WATER_RIPPLES,
   WALL_KINDS,

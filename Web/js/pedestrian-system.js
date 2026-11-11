@@ -1,8 +1,12 @@
-import { TIER } from './device-tier.js';
+import * as THREE from 'three/webgpu';
+import { TIER, XBOX } from './device-tier.js';
 import { blockAt, districtAt, LANDMARKS } from './city-config.js';
+import { GEO } from './city-geodata.js';
 import { createPedestrianRoutes } from './pedestrian-routes.js';
-import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
+import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION, PERSON_STYLE } from './pedestrians.js';
 import { groundHeight } from './terrain.js';
+import { LIFE, patiosOpen, mild } from './street-life.js';
+import { createUmbrellas, createDogs } from './crowd-props.js';
 
 // Local pedestrian population: connected walks, curb queues, conversations and player avoidance.
 // Traffic supplies crossing permissions and view checks; this system owns the crowd and its animation.
@@ -29,10 +33,17 @@ const STREET_CROWD = [
   [/\b(Fifth|Ashley|Division|Huron|Ann|Catherine|Kingsley)\b/, 0.6]
 ];
 const DIAG = LANDMARKS.find((l) => l.id === 'diag') || { x: 900, z: 200 };
-function edgeCrowd(e) {
+// Lamp: and how that goes by the hour, the weekday and U-M's term (town-clock.js crowdShares, set through setBusy):
+// campus, downtown and the homes each by their own share, scaling the place's weight
+const CAMPUS = new Set(['state_street', 'central_campus', 'north_campus', 'medical_campus', 'athletic_campus']);
+const DOWNTOWN = new Set(['downtown', 'kerrytown']);
+const share = { campus: 1, downtown: 1, homes: 1 };
+const edgeCrowd = (e) => placeCrowd(e) * share[e.crowdPart];
+function placeCrowd(e) {
   if (e.crowd !== undefined) return e.crowd;
   const mx = (e.from.x + e.to.x) * 0.5, mz = (e.from.z + e.to.z) * 0.5;
   const district = districtAt(mx, mz);
+  e.crowdPart = CAMPUS.has(district) ? 'campus' : DOWNTOWN.has(district) ? 'downtown' : 'homes';
   let w = PLACE_CROWD[district] ?? 0.05;
   if (CORE.has(district) && e.street) {
     for (const [re, v] of STREET_CROWD) if (re.test(e.street)) { w = Math.max(w, v); break; }
@@ -41,6 +52,59 @@ function edgeCrowd(e) {
   if (diag < 260) w = Math.max(w, 1 - (diag / 260) * 0.35);
   return (e.crowd = w);
 }
+
+// Lamp: the walks through the parks, the woods and the campus lawns (pedestrian-routes.js trailsNear: GEO.trails as
+// walk-only tracks). The Diag's and the campus walks are as busy as the streets round them; a park's paths a little
+// less, the dirt ones in the woods less again. By the hour (park hours are 6 a.m. to 10 p.m.: a few out before and
+// after) and the weather (rain and snow empty the parks before the streets)
+const CORE_CAMPUS = new Set(['central_campus', 'state_street']);
+const NEAR_CAMPUS = new Set(['north_campus', 'medical_campus', 'athletic_campus']);
+const NEIGHBORHOOD = new Set(['old_west_side', 'water_hill', 'burns_park', 'geddes', 'lower_town', 'neighborhood']);
+function trailBase(t) {
+  if (t.crowd !== undefined) return t.crowd;
+  const mx = t.ax + t.ux * t.len * 0.5, mz = t.az + t.uz * t.len * 0.5;
+  const diag = Math.hypot(mx - DIAG.x, mz - DIAG.z);
+  const b = blockAt(mx, mz), district = districtAt(mx, mz);
+  t.park = !b || b.park > 0.6;
+  let w = t.park ? 0.4 : Math.max(0.1, (PLACE_CROWD[district] ?? 0.05) * 0.8);
+  if (diag < 260) { w = Math.max(w, 1 - (diag / 260) * 0.35); t.park = false; }
+  if (t.kind === 1) w *= 0.55;
+  return (t.crowd = w);
+}
+function parkHour(h) {
+  if (h < 5.5 || h >= 22.5) return 0.03;
+  if (h < 6.5) return 0.4;
+  if (h < 9) return 0.9; // the morning runners and dog walkers
+  if (h < 16) return 0.65;
+  if (h < 20.5) return 1; // after work
+  return 0.4;
+}
+function trailCrowd(t) {
+  const w = trailBase(t);
+  if (!t.park) return w;
+  const weather = LIFE.snow ? 0.4 : LIFE.rain ? 0.45 : LIFE.tempF != null && LIFE.tempF < 25 ? 0.6 : 1;
+  return w * parkHour(LIFE.hour) * weather;
+}
+// (what's laid on the ground there: a curbed block's sidewalk height, else the ground's own)
+const floorAt = (x, z) => {
+  const b = blockAt(x, z);
+  return groundHeight(x, z) + (b && !(b.park > 0.6 && !b.median) ? 0.22 : 0.03);
+};
+
+// Lamp: the places to sit (seats.js, from main.js once they're gathered): diners at the patio tables in season, open
+// hours and mild dry weather, busiest at lunch and dinner; sitters on the park benches by day when it's dry. Seated
+// people are cheap: posed once (PersonRig.perch, as the player sits) and drawn through the crowd's LODs.
+let SIT_SPOTS = null;
+function setSitSpots(spots) { SIT_SPOTS = spots; }
+function mealHour(h) {
+  if (h >= 11.5 && h < 14) return 1;
+  if (h >= 17 && h < 21.5) return 1;
+  if (h >= 7 && h < 11.5) return 0.35; // coffee
+  if (h >= 14 && h < 17) return 0.45;
+  return 0.25;
+}
+const SIT_POSE = (hipY) => ({ hip: [0, hipY, -0.04], shoulder: [0, hipY + 0.52, -0.1], hand: [0.16, hipY + 0.13, 0.3],
+  foot: [0.13, 0.07, Math.min(0.5, 0.2 + hipY * 0.62)], standing: false });
 
 function createPedestrianSystem(network, { player, player2 = null, nearEdges, nearSignals, mayCross, walkOn, visible, nearView }) {
   let clock = 0;
@@ -64,6 +128,14 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
   // One instanced draw per level of detail; every pedestrian has a PersonRig that plants its footsteps on the
   // sidewalk (no sliding), with their own build, height, sex, hair, clothes and gait
   const pedCrowd = new PersonCrowd(NUM_PEDS);
+  // Lamp: umbrellas in the rain (near people only) and dogs on the leash (none on the Xbox, where animals are left out)
+  const UMBRELLA_RANGE = 70, DOG_RANGE = 90;
+  const umbrellas = createUmbrellas(Math.max(8, Math.min(160, Math.round(NUM_PEDS * 0.4))));
+  const MAX_DOGS = XBOX ? 0 : LEAN ? 4 : 12;
+  const dogs = MAX_DOGS ? createDogs(MAX_DOGS) : null;
+  const SIT_CAP = Math.min(LEAN ? 40 : 90, Math.round(NUM_PEDS * 0.3));
+  const handPos = new THREE.Vector3(), leashHand = new THREE.Vector3();
+  const sitRoot = new THREE.Object3D();
   const hash = (i, salt) => {
     const v = Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453;
     return v - Math.floor(v);
@@ -91,8 +163,17 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       waiting: false,
       walkDelay: 0.2 + hash(i, 8) * 1.3,
       walkAt: -1,
-      // preferred walking speed; one in fourteen is out for a run
+      // preferred walking speed; one in fourteen is out for a run (on the park paths more: spawnPed)
       speed: i % 14 === 5 ? 2.9 + hash(i, 3) * 0.6 : 1.22 + (i % 5) * 0.1 + hash(i, 3) * 0.08,
+      baseSpeed: 0,
+      trail: false, // on a park path (pedestrian-routes.js trailsNear)
+      seat: null, // sitting there (seats.js), until sitUntil
+      sitUntil: 0,
+      posed: false,
+      homeless: false, // sat at a seat with no walk near (seatTrack)
+      dog: null, // the dog on their leash (crowd-props.js)
+      umbrella: hash(i, 13) < 0.7, // puts one up in the rain
+      hold: 0,
       v: 0, // current speed, easing up to it and down to stops
       pause: 0,
       route: null,
@@ -132,13 +213,26 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
   }
 
   const KERB = 1.6; // how far along a crosswalk track pedestrians wait to cross (the curb is 2 m along)
-  const pedRoutes = createPedestrianRoutes(network, blockAt);
+  for (const p of peds) p.baseSpeed = p.speed;
+  const pedRoutes = createPedestrianRoutes(network, blockAt, GEO.trails);
+  const nearTrails = [];
+  let trailSum = 0, edgeSum = 0;
+  const nearSeats = [], seatScratch = [];
+  let sitWanted = 0, sitting = 0, sitCheck = 0;
   const track = { ax: 0, az: 0, ux: 0, uz: 1, len: 1, node: null, side: 0, line: 0, route: null };
 
   function sidewalkTrack(e) {
     const choices = pedRoutes.along(e);
     if (!choices.length) return false;
     const route = choices[Math.floor(Math.random() * choices.length)];
+    Object.assign(track, route, { route });
+    return true;
+  }
+
+  function trailTrack() {
+    if (!nearTrails.length) return false;
+    const route = nearTrails[Math.floor(Math.random() * nearTrails.length)];
+    if (Math.random() > (trailCrowd(route) / crowdPeak) ** 2) return false;
     Object.assign(track, route, { route });
     return true;
   }
@@ -183,15 +277,131 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     }
   }
 
+  // Lamp: dressed for where they are (maize and blue: about three in ten on campus, more on a fall Saturday; casual
+  // clothes on campus and in the neighbourhoods, more tailored jackets downtown), paced for it (on a park path one in
+  // three running at dawn and after work), and now and then out with the dog (in the neighbourhoods and the parks,
+  // mornings and evenings most)
+  function dressFor(p, x, z) {
+    const district = districtAt(x, z);
+    const campus = CORE_CAMPUS.has(district) || Math.hypot(x - DIAG.x, z - DIAG.z) < 400;
+    const nearCampus = !campus && NEAR_CAMPUS.has(district), home = NEIGHBORHOOD.has(district);
+    const football = LIFE.weekday === 6 && LIFE.month >= 9 && LIFE.month <= 11;
+    const mb = (campus ? 0.3 : nearCampus ? 0.2 : 0.1) * (football ? 1.8 : 1);
+    const casual = campus ? 0.75 : nearCampus || home || p.trail ? 0.6 : 0.1;
+    p.rig.setStyle((Math.random() < mb ? PERSON_STYLE.MAIZE_BLUE : 0) + (Math.random() < casual ? PERSON_STYLE.CASUAL : 0));
+    p.speed = p.baseSpeed;
+    const h = LIFE.hour;
+    if (p.trail && !p.seat && Math.random() < ((h >= 6 && h < 9) || (h >= 16 && h < 19.5) ? 0.35 : 0.15)) p.speed = 2.6 + Math.random() * 0.8;
+    if (dogs && !p.seat && p.speed < 2 && dogs.available) {
+      const dogHour = (h >= 6.5 && h < 9.5) || (h >= 16.5 && h < 20.5) ? 1 : h >= 9.5 && h < 16.5 ? 0.4 : 0.1;
+      const where = p.trail ? (p.route?.chain && trailBase(p.route) && p.route.park ? 0.2 : 0.06) : home ? 0.16 : 0.03;
+      if (Math.random() < where * dogHour * (LIFE.rain || LIFE.snow ? 0.5 : 1)) {
+        p.dog = dogs.take(Math.random());
+        if (p.dog) p.speed = Math.min(p.speed, 1.12 + Math.random() * 0.18);
+      }
+    }
+  }
+
+  // Lamp: sitting down (setSitSpots). Each seat's way back to a walk (the nearest sidewalk or park path within 12 m,
+  // its own line along it and how far off it the seat is) is found once: the sitter is placed on it as one stepped
+  // aside (dodge), so getting up (standUp, or a knock) is the same step back to their line as after a fall
+  const seatScratch2 = [];
+  const seatFree = (s) => !s.taken && !s.box?.knock?.down;
+  function homeFor(seat) {
+    if (seat.home !== undefined) return seat.home;
+    let best = null, bestD = 12;
+    const consider = (tr) => {
+      if (tr.node) return;
+      const qx = seat.x - tr.ax, qz = seat.z - tr.az, t = qx * tr.ux + qz * tr.uz;
+      if (t < 0.5 || t > tr.len - 0.5) return;
+      const off = qx * tr.uz - qz * tr.ux;
+      if (Math.abs(off) < bestD) { bestD = Math.abs(off); best = { track: tr, t, off }; }
+    };
+    for (const e of nearEdges) {
+      const mx = e.sx + e.dx * e.len * 0.5, mz = e.sz + e.dz * e.len * 0.5;
+      if (Math.hypot(mx - seat.x, mz - seat.z) > e.len * 0.5 + 16) continue;
+      for (const tr of pedRoutes.along(e)) consider(tr);
+    }
+    for (const tr of pedRoutes.trailsNear(seat.x, seat.z, 14, seatScratch2)) if (tr.chain) consider(tr);
+    if (!best && !nearEdges.length) return null; // (not known yet: asked again later)
+    return (seat.home = best || false); // (false: none, for good)
+  }
+  // A seat with no walk near enough (a patio out back, a sidewalk its tables leave no walking line along) still seats
+  // someone: they stay until no one's looking and then go, and stand where they are if knocked off it
+  function seatTrack(seat) {
+    return { ax: seat.x, az: seat.z, ux: Math.sin(seat.yaw), uz: Math.cos(seat.yaw), len: 1, node: null, side: 0, line: 0,
+      trail: false, edge: null, block: null, before: null, after: null, chain: null };
+  }
+  function releaseSeat(p) {
+    if (p.seat && p.seat.taken === p) p.seat.taken = null;
+    p.seat = null;
+  }
+  function sitDown(p, rMinSq, rMaxSq, protectView) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const seat = nearSeats[Math.floor(Math.random() * nearSeats.length)];
+      if (!seatFree(seat)) continue;
+      const dx = seat.x - focusX, dz = seat.z - focusZ, d2 = dx * dx + dz * dz;
+      if (d2 < rMinSq || d2 > rMaxSq || (protectView && nearView(seat.x, seat.z, 2, PED_SPAWN_DISTANCE))) continue;
+      if (player.active && (seat.x - player.x) ** 2 + (seat.z - player.z) ** 2 < 100) continue;
+      // company: a chair at a table someone's already at is likelier taken than one at an empty table
+      if (seat.y != null && Math.random() < 0.5 && !SIT_SPOTS.within(seat.x, seat.z, 1.6, seatScratch2).some((s) => s !== seat && s.taken)) continue;
+      const home = homeFor(seat);
+      if (home === null) continue;
+      if (p.conversation) endConversation(p.conversation);
+      const track = home ? home.track : seatTrack(seat);
+      Object.assign(p, track);
+      p.route = track;
+      p.homeless = !home;
+      p.t = home ? home.t : 0;
+      p.dir = Math.random() < 0.5 ? 1 : -1;
+      p.dodge = p.dodgeTarget = home ? home.off : 0;
+      p.x = seat.x; p.z = seat.z;
+      p.v = 0; p.pause = 0; p.waiting = false; p.walkAt = -1; p.avoidUntil = 0; p.resumeDir = 0;
+      p.returning = false; p.diveStart = -Infinity; p.ragdoll = false; p.rig.ragdolling = false;
+      p.nextRoute = null; p.nextLeg = 0; p.goalTime = 0; p._curbNode = null;
+      p.restTime = clock + 25 + Math.random() * 45;
+      p.socialTime = clock + 5 + Math.random() * 15;
+      p.seat = seat; seat.taken = p;
+      sitting++; // (counted afresh each frame; this keeps a burst of placing, after a jump, to sitWanted)
+      p.sitUntil = clock + 90 + Math.random() * 300;
+      p.posed = false;
+      p.rig.placed = false;
+      p.placed = true;
+      dressFor(p, seat.x, seat.z);
+      if (p.homeless) p.speed = 0;
+      return true;
+    }
+    return false;
+  }
+  // gone home (out of range, or too many out): their seat and their dog are free at once, for whoever's placed next
+  function goHome(p) {
+    if (p.seat) { releaseSeat(p); sitting--; }
+    if (p.dog) { dogs.release(p.dog); p.dog = null; }
+  }
+  function standUp(p) {
+    releaseSeat(p);
+    p.rig.placed = false;
+    p.dodgeTarget = 0;
+    p.returning = true;
+    p.pause = 0.8;
+    p.v = 0;
+    p.restTime = Math.max(p.restTime, clock + 20);
+  }
+
   // Try crosswalks first for crossing pedestrians, then fall back to sidewalks if no suitable crossing fits.
   function spawnPed(p, rMin, rMax, protectView) {
     const rMinSq = rMin * rMin, rMaxSq = rMax * rMax, gapSq = QUEUE_GAP * QUEUE_GAP;
+    if (p.seat) releaseSeat(p);
+    if (p.dog) { dogs.release(p.dog); p.dog = null; }
+    if (sitting < sitWanted && nearSeats.length && Math.random() < 0.6 && sitDown(p, rMinSq, rMaxSq, protectView)) return true;
+    const trailShare = trailSum / (trailSum + edgeSum || 1);
     for (let attempt = 0; attempt < 10; attempt++) {
-      const crosswalk = p.crossesStreets && nearSignals.length > 0 && attempt < 5;
-      const edge = !crosswalk && nearEdges.length > 0 ? nearEdges[Math.floor(Math.random() * nearEdges.length)] : null;
+      const onTrail = Math.random() < trailShare;
+      const crosswalk = !onTrail && p.crossesStreets && nearSignals.length > 0 && attempt < 5;
+      const edge = !onTrail && !crosswalk && nearEdges.length > 0 ? nearEdges[Math.floor(Math.random() * nearEdges.length)] : null;
       // busier sidewalks take more of the people out walking (a quiet street still gets the odd one)
       if (edge && Math.random() > (edgeCrowd(edge) / crowdPeak) ** 2) continue;
-      const ok = crosswalk
+      const ok = onTrail ? trailTrack() : crosswalk
         ? crosswalkTrack(nearSignals[Math.floor(Math.random() * nearSignals.length)])
         : !!edge && sidewalkTrack(edge);
       if (!ok) continue;
@@ -241,6 +451,8 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       p.rig.placed = false; // stands afresh where it now is
       p.placed = true;
       if (crosswalk) atCurb(p);
+      p.homeless = false;
+      dressFor(p, x, z);
       return true;
     }
     return false;
@@ -388,7 +600,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       speed = PED_ESCAPE_SPEED;
       best = playerContactTime(p, dir * speed, forward);
       // Corner connectors need their pending route; only full sidewalk/crosswalk tracks can turn around.
-      if (p.node || p.route?.edge) {
+      if (p.node || p.route?.edge || p.route?.chain) {
         const back = escapeRoom(p, -dir);
         const retreat = playerContactTime(p, -dir * speed, back);
         if (retreat > best + (avoiding ? 0.2 : 0)
@@ -456,7 +668,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       let away = (dx * p.ux + dz * p.uz) >= 0 ? 1 : -1, run = PED_ESCAPE_SPEED;
       // on a corner's connector there's no turning back (its pending route goes on ahead, and turning drops it): they
       // run on along it if that's away from the car, else stop where they are
-      if (!p.route?.edge && away !== p.dir) { away = p.dir; run = 0; }
+      if (!(p.route?.edge || p.route?.chain) && away !== p.dir) { away = p.dir; run = 0; }
       if (p.conversation) endConversation(p.conversation);
       if (!p.resumeDir) p.resumeDir = p.dir;
       if (away !== p.dir) turnPed(p, away);
@@ -523,7 +735,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       p.nextLeg = 0;
       if (!p.node && p.nextRoute) atCurb(p);
     }
-    if (!p.node && p.route?.edge && p.t > 6 && p.t < p.len - 6 && clock >= p.restTime) {
+    if (!p.node && (p.route?.edge || p.route?.chain) && p.t > 6 && p.t < p.len - 6 && clock >= p.restTime) {
       p.pause = 1.5 + Math.random() * 3;
       p.restTime = clock + 35 + Math.random() * 55;
     }
@@ -667,7 +879,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     meetingCells.clear();
     for (let i = 0; i < peds.length; i++) {
       const p = peds[i];
-      if (!p.placed || p.node || !p.route?.edge || p.conversation || clock < p.socialTime || p.t < 6 || p.t > p.len - 6) continue;
+      if (!p.placed || p.node || p.seat || !(p.route?.edge || p.route?.chain) || p.conversation || clock < p.socialTime || p.t < 6 || p.t > p.len - 6) continue;
       const ix = Math.floor(p.x * 0.5), iz = Math.floor(p.z * 0.5);
       let partner = null;
       for (let dx = -1; dx <= 1 && !partner; dx++) {
@@ -706,6 +918,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
   const SIDEWALK_Y = 0.22;
   const CROSSWALK_Y = 0.012;
   function pedGround(p, x, z) {
+    if (p.trail) return floorAt(x, z); // (a park path: on the ground there, or a block's sidewalk where it crosses one)
     const ground = groundHeight(x, z); // Lamp: on the ground there (terrain.js)
     if (!p.node) return ground + SIDEWALK_Y;
     const t = (x - p.ax) * p.ux + (z - p.az) * p.uz;
@@ -729,6 +942,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     const vx = player.vx * 1.1 + player.fz * side * push, vz = player.vz * 1.1 - player.fx * side * push;
     const vy = Math.min(6.5, 1.2 + speed * 0.28);
     p.hitAt = clock;
+    if (p.seat) releaseSeat(p); // (thrown from the seat as posed there)
     if (p.ragdoll && p.rig.rag) p.rig.kickRagdoll(vx * 0.6, vy * 0.5, vz * 0.6);
     else {
       if (p.conversation) endConversation(p.conversation);
@@ -750,6 +964,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       const dx = p.x - x, dz = p.z - z;
       if (dx * dx + dz * dz > r * r || y - groundHeight(p.x, p.z) > 1.9) continue;
       p.hitAt = clock;
+      if (p.seat) releaseSeat(p);
       const s = Math.min(1, speed / 12);
       if (p.ragdoll && p.rig.rag) p.rig.kickRagdoll(vx * 0.3, 1, vz * 0.3);
       else {
@@ -768,7 +983,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
   // raised block (storefronts' sidewalk, a front lawn: as controllers.js isPointOnSidewalk, parks at the ground's
   // level) or the road
   function ragGround(p, x, z) {
-    if (p.node) return pedGround(p, x, z);
+    if (p.node || p.trail) return pedGround(p, x, z);
     const off = Math.abs((x - p.ax) * p.uz - (z - p.az) * p.ux);
     if (off < 1.8) return groundHeight(x, z) + SIDEWALK_Y;
     const b = blockAt(x, z);
@@ -812,10 +1027,29 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
         return;
       }
     }
+    const dx = p.x - focusX, dz = p.z - focusZ, distSq = dx * dx + dz * dz;
+    if (p.dog) { dogOwner = p; dogs.step(p.dog, dt, p.x, p.z, p.ux, p.uz, dogGround, draw && distSq < DOG_RANGE * DOG_RANGE, null); }
     if (!draw) return;
-    const dx = p.x - focusX, dz = p.z - focusZ;
-    pedCrowd.add(rig, Math.sqrt(dx * dx + dz * dz));
+    pedCrowd.add(rig, Math.sqrt(distSq));
   }
+
+  // Lamp: seated, posed once when first seen (perch), drawn as it was posed after that
+  function renderSitter(p) {
+    const draw = !hasView || visible(p.x, p.z, 7);
+    if (!draw) return;
+    const seat = p.seat;
+    if (!p.posed) {
+      const footY = seat.y == null ? floorAt(seat.x, seat.z) : seat.y - 0.44;
+      sitRoot.position.set(seat.x, footY, seat.z);
+      sitRoot.rotation.set(0, seat.yaw, 0);
+      p.rig.perch(sitRoot, SIT_POSE(seat.y == null ? 0.47 : seat.y - footY));
+      p.posed = true;
+    }
+    const dx = p.x - focusX, dz = p.z - focusZ;
+    pedCrowd.add(p.rig, Math.sqrt(dx * dx + dz * dz));
+  }
+  let dogOwner = null;
+  const dogGround = (x, z) => pedGround(dogOwner, x, z);
 
   // Visible people (and hidden ones within footstep/turn range) advance their gait; only those the camera may see
   // solve their bone transforms and are drawn, the far ones with the light LOD. Walkers also begin turning towards
@@ -845,8 +1079,18 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     const heading = diving ? p.diveHeading : partner ? Math.atan2(partner.x - p.x, partner.z - p.z)
       : Math.abs(sideStep) > 0.01 ? Math.atan2(p.uz * Math.sign(sideStep), -p.ux * Math.sign(sideStep))
       : Math.atan2(fx, fz);
+    // Lamp: an umbrella up in the rain (not running), near the camera only
+    const hold = LIFE.rain && p.umbrella && p.speed < 2.4 && !diving && distSq < UMBRELLA_RANGE * UMBRELLA_RANGE ? 1 : 0;
+    p.hold = clamp(p.hold + clamp(hold - p.hold, -dt * 2, dt * 2), 0, 1);
+    p.rig.hold = p.hold;
     p.rig.update(dt, p.x, p.z, heading, pedGround, p, 0, draw, diving ? diveTime : -1);
+    if (p.dog) {
+      dogOwner = p;
+      const near = draw && distSq < DOG_RANGE * DOG_RANGE;
+      dogs.step(p.dog, dt, p.x, p.z, p.ux * p.dir, p.uz * p.dir, dogGround, near, near ? p.rig.handAt(0, leashHand) : null);
+    }
     if (!draw) return;
+    if (p.hold > 0.6) umbrellas.add(p.rig.handAt(1, handPos), p.x, p.z, hash(p.rig.seed, 14));
     pedCrowd.add(p.rig, Math.sqrt(distSq));
   }
 
@@ -871,12 +1115,44 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
         const w = edgeCrowd(e), L = e.span || 1;
         sum += w * L; length += L; peak = Math.max(peak, w);
       }
+      // Lamp: and the park and campus paths round about (their share of the walkers: spawnPed)
+      edgeSum = sum;
+      trailSum = 0;
+      pedRoutes.trailsNear(focusX, focusZ, PED_RADIUS * 0.8, nearTrails);
+      for (const t of nearTrails) {
+        const w = trailCrowd(t);
+        trailSum += w * t.len; length += t.len; peak = Math.max(peak, w);
+      }
+      sum += trailSum;
       crowdShare = length ? sum / length : 0;
       crowdPeak = peak;
+      // Lamp: the seats round about that someone might be sitting in now
+      nearSeats.length = 0;
+      sitWanted = 0;
+      if (SIT_SPOTS?.within) {
+        const open = patiosOpen() && !LIFE.rain && !LIFE.snow && mild();
+        const benches = !LIFE.rain && !LIFE.snow && LIFE.hour >= 8 && LIFE.hour < 20.5
+          ? (LIFE.tempF != null && LIFE.tempF < 40 ? 0.04 : LIFE.month >= 5 && LIFE.month <= 9 ? 0.2 : 0.1) : 0;
+        let patio = 0, bench = 0;
+        for (const st of SIT_SPOTS.within(focusX, focusZ, PLACE_MAX, seatScratch)) {
+          if (st.kind === 'bleacher' || st.box?.knock?.down) continue;
+          const isPatio = st.y != null; // (a park bench's height is the ground's under it: y null)
+          if (isPatio ? !open : !benches) continue;
+          nearSeats.push(st);
+          if (isPatio) patio++; else bench++;
+        }
+        sitWanted = Math.min(SIT_CAP, Math.round((patio * 0.35 * mealHour(LIFE.hour) + bench * benches) * busy));
+      }
     }
     const wanted = Math.round(NUM_PEDS * clamp(crowdShare * 1.5, 0.05, 1) * busy * perf);
     placedCount = 0;
-    for (const p of peds) if (p.placed) placedCount++;
+    sitting = 0;
+    for (const p of peds) {
+      if (p.placed) { placedCount++; if (p.seat) sitting++; continue; }
+      // gone home: their seat and their dog freed
+      if (p.seat) releaseSeat(p);
+      if (p.dog) { dogs.release(p.dog); p.dog = null; }
+    }
     let pedBudget = jump ? NUM_PEDS : 6;
     const keepRadius = jump ? NEAR_RADIUS : PED_RADIUS;
     const keepRadiusSq = keepRadius * keepRadius;
@@ -886,6 +1162,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       // too many out for the place and hour: one out of sight goes home
       if (p.placed && placedCount > wanted && (jump || !nearView(p.x, p.z, 2, PED_SPAWN_DISTANCE))) {
         if (p.conversation) endConversation(p.conversation);
+        goHome(p);
         p.placed = false; placedCount--; pedBudget--;
         continue;
       }
@@ -894,37 +1171,75 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
         if (dx * dx + dz * dz <= keepRadiusSq) continue;
       }
       pedBudget--;
-      if (p.placed) { if (p.conversation) endConversation(p.conversation); p.placed = false; placedCount--; }
+      if (p.placed) { if (p.conversation) endConversation(p.conversation); goHome(p); p.placed = false; placedCount--; }
       if (placedCount >= wanted) continue;
       if (spawnPed(p, jump ? 0 : PLACE_MIN, jump ? NEAR_RADIUS : PLACE_MAX, !jump)) placedCount++;
+    }
+    // Lamp: short of sitters for the hour (the crowd full, nobody leaving to make room): a walker or two out of sight
+    // goes to sit down somewhere else out of sight, a couple of times a second
+    if (sitting < sitWanted && nearSeats.length && clock >= sitCheck) {
+      sitCheck = clock + 0.5;
+      for (let k = 0; k < 2; k++) {
+        const p = peds[Math.floor(Math.random() * NUM_PEDS)];
+        if (!p.placed || p.seat || p.ragdoll || p.node || clock - p.diveStart < PEDESTRIAN_DIVE_DURATION || nearView(p.x, p.z, 2, PED_SPAWN_DISTANCE)) continue;
+        if (!sitDown(p, PLACE_MIN * PLACE_MIN, PLACE_MAX * PLACE_MAX, true)) continue;
+        if (p.dog) { dogs.release(p.dog); p.dog = null; }
+      }
     }
     for (let i = 0; i < NUM_PEDS; i++) {
       const p = peds[i];
       if (!p.placed) continue;
       if (pedRange) strike(p, player);
       if (strikes2) strike(p, player2);
-      if (!p.ragdoll) { react(p); avoidPlayer(p); }
+      if (!p.ragdoll && !p.seat) { react(p); avoidPlayer(p); }
     }
     meet(dt);
     gatherCurbs();
     pedCrowd.begin();
+    umbrellas.begin();
+    dogs?.begin();
     for (let i = 0; i < NUM_PEDS; i++) {
       const p = peds[i];
       if (!p.placed) continue;
       if (p.ragdoll) { renderRagdoll(p, dt); continue; }
+      if (p.seat) {
+        // up again when they've sat long enough, or when the chair's knocked over or put away
+        const kept = !p.seat.box?.knock?.down;
+        if (kept && clock < p.sitUntil) { renderSitter(p); continue; }
+        if (p.homeless && kept) {
+          // (no walk to step back to: they sit on while they're seen, and are gone when they aren't)
+          if (hasView && !visible(p.x, p.z, 7)) { releaseSeat(p); p.placed = false; continue; }
+          p.sitUntil = clock + 15;
+          renderSitter(p);
+          continue;
+        }
+        standUp(p);
+      } else if (p.homeless && hasView && !visible(p.x, p.z, 7) && !p.ragdoll) { p.placed = false; continue; }
       walk(p, dt);
       renderPed(p, dt);
     }
     pedCrowd.end();
+    umbrellas.end();
+    dogs?.end();
   }
 
   // 0 (empty streets) to 1 (a warm evening downtown), from the hour and the weather
-  function setBusy(value) { busy = clamp(value, 0.05, 1); crowdCheck = -Infinity; }
-  const stats = () => ({ out: placedCount, perf: +perf.toFixed(2), share: +crowdShare.toFixed(2), busy });
+  // (shares: town-clock.js crowdShares; without them value is the whole town's hour as well)
+  function setBusy(value, shares = null) {
+    busy = clamp(value, 0.05, 1);
+    for (const k of ['campus', 'downtown', 'homes']) share[k] = shares ? clamp(shares[k], 0.02, 1.5) : 1;
+    crowdCheck = -Infinity;
+  }
+  const stats = () => {
+    let onTrails = 0, withDogs = 0, umbrellasUp = 0;
+    for (const p of peds) if (p.placed) { if (p.trail) onTrails++; if (p.dog) withDogs++; if (p.hold > 0.6) umbrellasUp++; }
+    return { out: placedCount, sitting, sitWanted, onTrails, withDogs, umbrellasUp, perf: +perf.toFixed(2), share: +crowdShare.toFixed(2), busy,
+      campus: +share.campus.toFixed(2), downtown: +share.downtown.toFixed(2), homes: +share.homes.toFixed(2) };
+  };
 
   function setRailCrossings(list) { rails = list || []; }
 
-  return { peds, meshes: pedCrowd.meshes, update, setBusy, stats, setRailCrossings, setHitListener(fn) { onHit = fn; }, knockBy, onRiderHit: (x, z, speed) => onHit?.(x, z, speed) };
+  return { peds, meshes: [...pedCrowd.meshes, umbrellas.mesh, ...(dogs ? dogs.meshes : [])], update, setBusy, stats, setRailCrossings, setHitListener(fn) { onHit = fn; }, knockBy, onRiderHit: (x, z, speed) => onHit?.(x, z, speed) };
 }
 
-export { createPedestrianSystem };
+export { createPedestrianSystem, setSitSpots };

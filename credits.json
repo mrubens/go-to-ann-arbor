@@ -7,7 +7,7 @@
       "url" : "https://github.com/lampdotdev/newyork"
     },
     {
-      "commit" : "f493fd32755447d835c96758c80e4b2f1538ac30",
+      "commit" : "09c39235dc77a6ca14dd6bed170015d141b539a7",
       "name" : "Go To Ann Arbor",
       "url" : "https://github.com/mrubens/go-to-ann-arbor",
       "wish" : "3DF4E397-D414-4837-8390-3F7946A6D12D"
@@ -155,6 +155,12 @@
       "url" : "https://ckan.a2gov.org/dataset/historic-districts"
     },
     {
+      "author" : "City of Ann Arbor",
+      "license" : "None",
+      "name" : "Neighborhoods",
+      "url" : "https://ckan.a2gov.org/dataset/neighborhoods"
+    },
+    {
       "author" : "U.S. Geological Survey",
       "license" : "LicenseRef-US-Government-Public-Domain",
       "name" : "Huron River at Ann Arbor gauge (04174500), live flow",
@@ -201,12 +207,6 @@
       "license" : "LicenseRef-Bird-GBFS-Data-License",
       "name" : "Ann Arbor scooter locations (GBFS)",
       "url" : "https://gbfs.spin.pm/api/gbfs/v2_3/ann_arbor/gbfs"
-    },
-    {
-      "author" : "Open-Meteo.com",
-      "license" : "CC-BY-4.0",
-      "name" : "Snow depth (Open-Meteo)",
-      "url" : "https://open-meteo.com"
     }
   ]
 }

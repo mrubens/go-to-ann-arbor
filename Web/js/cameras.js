@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { TIER } from './device-tier.js';
+import { TIER, XBOX } from './device-tier.js';
 import { groundHeight, riverbedHeight, stadiumGround, waterLevel, riverDepth } from './terrain.js';
 import { hot, log } from '../lamp-game.js';
 
@@ -19,6 +19,13 @@ const floorUnder = (x, z, y) => {
 
 // Lamp: scenic views placed at street level, which stand on the ground where they are
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
+
+// The follow views' feel of speed and of a hit (CameraSystem.feel): the view widens with speed, up to this many degrees
+// (less on the Xbox, whose drawing budget a wider view strains); a hit shakes it briefly, a fast car hums it faintly
+// and it leans a touch into a bend. The shake, hum and lean are left out for a player who asks their system for
+// reduced motion
+const SPEED_FOV = XBOX ? 5 : 10;
+const reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
 const STREET_VIEWS = new Set(['diag', 'mainStreet', 'stateLiberty', 'burtonTower', 'burtonTop', 'bigHouse', 'arbRiver']);
 
@@ -355,6 +362,13 @@ class CameraSystem {
   // the view a preset or the jump camera asks for, opened for a narrow window (`onResize`)
   setFov(fov) {
     this.baseFov = fov;
+    this.fovExtra = 0;
+    this.projectFov();
+  }
+
+  // baseFov opened by fovExtra (the follow views' speed, feel), for a narrow window too
+  projectFov() {
+    const fov = this.baseFov + (this.fovExtra || 0);
     const a = this.camera.aspect, wide = 16 / 9;
     this.camera.fov = this.widen && a < wide
       ? Math.min(120, 2 * Math.atan(Math.tan(fov * Math.PI / 360) * wide / a) * 180 / Math.PI)
@@ -413,7 +427,14 @@ class CameraSystem {
     this.smoothedSpeed += (Math.abs(entity.speed) - this.smoothedSpeed) * (1 - Math.exp(-dt * 3.0));
     const speedLag = this.smoothedSpeed * 0.1;
 
-    const totalYaw = entity.heading + this.orbitYawOffset;
+    // looking back (X, the left stick's click, held: controllers.js keys.lookBack): every follow view turned to see
+    // what's behind, at once (a glance, not a pan), and back as it's let go
+    const back = this.controllerManager.keys?.lookBack ? Math.PI : 0;
+    if (back !== (this._back || 0)) { this._back = back; this._snap = true; }
+    const totalYaw = entity.heading + this.orbitYawOffset + back;
+    const ahead = entity.heading + back;
+    // heard from inside (audio-sources.js: no electric car's warning hum from the driver's seat)
+    this.controllerManager.viewInside = this.activePresetId === 'pov';
 
     if (this.updateOverride(dt)) return;
     if (this.updateJumpCam(entity, dt)) return;
@@ -433,9 +454,9 @@ class CameraSystem {
 
         const lookUpBias = entity.type === 'helicopter' ? 0.2 : (entity.type === 'car' ? 0.52 : 1.55);
         desiredLook.set(
-          entity.position.x + Math.sin(entity.heading) * 5.2,
+          entity.position.x + Math.sin(ahead) * 5.2,
           entity.position.y + entity.cameraTargetOffset.y + lookUpBias + (this.lookUp || 0),
-          entity.position.z + Math.cos(entity.heading) * 5.2
+          entity.position.z + Math.cos(ahead) * 5.2
         );
         break;
       }
@@ -446,14 +467,14 @@ class CameraSystem {
         const lowY = entity.type === 'helicopter' ? entity.position.y + 1.2 : entity.position.y + 0.92;
 
         desiredPos.set(
-          entity.position.x - Math.sin(entity.heading) * backDist + Math.cos(entity.heading) * sideOffset,
+          entity.position.x - Math.sin(ahead) * backDist + Math.cos(ahead) * sideOffset,
           Math.max(floorUnder(entity.position.x, entity.position.z, entity.position.y) + 0.55, lowY),
-          entity.position.z - Math.cos(entity.heading) * backDist - Math.sin(entity.heading) * sideOffset
+          entity.position.z - Math.cos(ahead) * backDist - Math.sin(ahead) * sideOffset
         );
         desiredLook.set(
-          entity.position.x + Math.sin(entity.heading) * 3.2,
+          entity.position.x + Math.sin(ahead) * 3.2,
           entity.position.y + 1.05,
-          entity.position.z + Math.cos(entity.heading) * 3.2
+          entity.position.z + Math.cos(ahead) * 3.2
         );
         break;
       }
@@ -584,7 +605,9 @@ class CameraSystem {
         this.followOffset.subVectors(this.currentPos, entity.position);
         this.followLookOffset.subVectors(this.currentLookAt, entity.position);
       }
-      const k = 1 - Math.exp(-dt * 8.5);
+      // (looking back or ahead again: there at once)
+      const k = this._snap ? 1 : 1 - Math.exp(-dt * 8.5);
+      this._snap = false;
       this.followBaseY += (entity.position.y - this.followBaseY) * k;
       // falling out of the helicopter (free or under the canopy): the height is kept with the player, not eased, or a
       // fall of 50 m/s leaves them below the frame
@@ -636,6 +659,41 @@ class CameraSystem {
 
     this.camera.position.copy(this.currentPos);
     this.camera.lookAt(this.currentLookAt);
+    this.feel(entity, dt, elapsed);
+  }
+
+  // Speed and hits felt in the follow views (SPEED_FOV): in the car or on the bike the chase and action views widen
+  // from about 18 mph to 67 mph (eased with smoothedSpeed, over the preset's own view: projectFov); a hit in the car
+  // (controllers.js feelHit sets `jolt`) shakes the view a few centimetres and a fraction of a degree, gone in about
+  // 0.3 s; past about 56 mph the car's view hums faintly; and it leans a degree or two into a bend
+  feel(entity, dt, elapsed) {
+    const cm = this.controllerManager;
+    const follow = this.activePresetId === 'chase' || this.activePresetId === 'action';
+    const riding = entity.type === 'car' || entity.type === 'cyclist';
+    const extra = follow && riding ? SPEED_FOV * clamp01((this.smoothedSpeed - 8) / 22) : 0;
+    if (Math.abs(extra - (this.fovExtra || 0)) > 0.05 || (extra === 0 && this.fovExtra)) {
+      this.fovExtra = extra;
+      this.projectFov();
+    }
+    this._shake = Math.max((this._shake || 0) * Math.exp(-dt * 10), cm.jolt || 0);
+    cm.jolt = 0;
+    // the turn it's making, eased (rad/s)
+    const turn = this._lastHeading === undefined ? 0 : Math.atan2(Math.sin(entity.heading - this._lastHeading), Math.cos(entity.heading - this._lastHeading)) / Math.max(dt, 1e-3);
+    this._lastHeading = entity.heading;
+    this._turn = (this._turn || 0) + (turn - (this._turn || 0)) * (1 - Math.exp(-dt * 4));
+    if (reducedMotion?.matches || !(follow || this.activePresetId === 'pov') || !riding) { this._shake = 0; return; }
+    const shake = this._shake, v = Math.abs(entity.speed || 0);
+    const hum = entity.type === 'car' ? 0.004 * clamp01((v - 25) / 20) : 0;
+    const a = shake * 0.05 + hum;
+    if (a > 1e-4) {
+      this.camera.position.x += (Math.sin(elapsed * 71) + Math.sin(elapsed * 113) * 0.5) * a;
+      this.camera.position.y += (Math.sin(elapsed * 83 + 1.3) + Math.sin(elapsed * 127) * 0.5) * a;
+      this.camera.position.z += (Math.sin(elapsed * 67 + 2.1) + Math.sin(elapsed * 109) * 0.5) * a;
+    }
+    // (into the bend: rolling the way it turns; looking back, the other way)
+    const lean = Math.max(-0.03, Math.min(0.03, this._turn * Math.min(v, 30) * 0.0011)) * (this._back ? -1 : 1);
+    const roll = lean + shake * 0.008 * Math.sin(elapsed * 59);
+    if (Math.abs(roll) > 1e-4) this.camera.rotateZ(roll);
   }
 }
 

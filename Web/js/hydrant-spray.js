@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { groundHeight } from './terrain.js';
 import { random } from '../lamp-game.js';
-import { float, vec3, uv, time, sin, positionLocal, normalView, positionViewDirection, dot, abs, smoothstep, clamp, attribute } from 'three/tsl';
+import { float, vec3, uv, time, sin, positionLocal, normalView, positionViewDirection, dot, abs, smoothstep, clamp, attribute, uniform } from 'three/tsl';
 
 // Water from a hydrant knocked off its main (knockdowns.js): a column of water roaring out of the broken riser, rising
 // some 8 to 10 m before it breaks up, the drops drifting with the wind and falling back as rain around it, splashing
@@ -10,7 +10,10 @@ import { float, vec3, uv, time, sin, positionLocal, normalView, positionViewDire
 
 const MAX_DROPS = 2600, MAX_MIST = 260, MAX_GEYSERS = 4;
 const FULL = 30, SHUTOFF = 6; // seconds at full pressure, then how long it takes to die down
-const WIND_X = 0.9, WIND_Z = 0.35; // a light breeze leans the column and carries the spray
+// the breeze at the street (m/s, toward x east and z south) leans the column and carries the spray: a light one
+// offline, the airport's observed wind once weather.js has it (outdoors.js calls setWind)
+let WIND_X = 0.9, WIND_Z = 0.35;
+const uLean = uniform(new THREE.Vector3(0.9, 0, 0.35));
 
 function createHydrantSpray(scene) {
   // the scene outlives a change to the code: take away the water a previous run left in it
@@ -28,7 +31,7 @@ function createHydrantSpray(scene) {
     const y = uv().y, ang = uv().x.mul(Math.PI * 2);
     // radius flares from the riser's throat as the jet loses pressure, then frays near the top
     const flare = float(0.075).add(y.mul(y).mul(0.42)).add(sin(ang.mul(5).add(y.mul(17)).sub(time.mul(13))).mul(y).mul(0.05));
-    const leanX = y.mul(y).mul(WIND_X * 0.9), leanZ = y.mul(y).mul(WIND_Z * 0.9);
+    const leanX = y.mul(y).mul(uLean.x.mul(0.9)), leanZ = y.mul(y).mul(uLean.z.mul(0.9));
     jetMat.positionNode = vec3(positionLocal.x.mul(flare).add(leanX), positionLocal.y, positionLocal.z.mul(flare).add(leanZ));
     // streaks rushing up the surface
     const streak = sin(ang.mul(9).add(sin(y.mul(6).sub(time.mul(7))).mul(1.6))).mul(0.5).add(0.5);
@@ -207,7 +210,14 @@ function createHydrantSpray(scene) {
     return out;
   }
 
-  return { group, start, update, gushes, get running() { return geysers.length; } };
+  // the wind at the street (m/s): the column leans with it, at most about as far as a fresh breeze takes it
+  function setWind(x, z) {
+    const m = Math.hypot(x, z), k = m > 3.2 ? 3.2 / m : 1;
+    WIND_X = x * k; WIND_Z = z * k;
+    uLean.value.set(WIND_X, 0, WIND_Z);
+  }
+
+  return { group, start, update, gushes, setWind, get running() { return geysers.length; } };
 }
 
 export { createHydrantSpray };

@@ -16,7 +16,7 @@ import { buildLandmarks } from './landmarks.js';
 import { buildRailways } from './railways.js';
 import { buildParkedCars } from './parked-cars.js';
 import { buildCityBlocks } from './buildings.js';
-import { setDistricts } from './districts.js';
+import { setDistricts, setNeighborhoods } from './districts.js';
 import { setRoofShapes, setBuildingLooks } from './houses.js';
 import { buildStreetDetails } from './street-details.js';
 import { createTrafficSystem, createHighwayTraffic } from './traffic.js';
@@ -52,9 +52,13 @@ import { buildRestrooms } from './restrooms.js';
 import { buildDraftedHouses } from './drafted-houses.js';
 import { buildHelipads } from './helipads.js';
 import { speedLimitAt } from './speed-limits.js';
+import { townTime, crowdShares, trafficShare } from './town-clock.js';
 import { createSeats } from './seats.js';
 import { CityAudioSystem } from './audio-system.js';
 import { fetchWeather, createPrecipitation } from './weather.js';
+import { setRoadWeather } from './road-feel.js';
+import { createFallingLeaves } from './falling-leaves.js';
+import { createOutdoors } from './outdoors.js';
 import { fetchRiverFlow } from './river-gauge.js';
 import { fetchRiverPfas } from './river-pfas.js';
 import { createPlanes } from './planes.js';
@@ -64,6 +68,8 @@ import { buildBikeRacks } from './bike-racks.js';
 import { probe, gpuTimer } from './gpu-probe.js';
 import { buildPools } from './pools.js';
 import { buildOutdoorSeating } from './outdoor-seating.js';
+import { setStreetLife } from './street-life.js';
+import { setSitSpots } from './pedestrian-system.js';
 import { buildBallDiamonds } from './ball-diamonds.js';
 import { buildFootballFields } from './football-fields.js';
 import { buildBleachers } from './bleachers.js';
@@ -75,6 +81,7 @@ import { buildBikeRoutes } from './bike-routes.js';
 import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
 import { waterDisturb } from './tsl-materials.js';
+import { refreshSeason } from './seasons.js';
 import { buildRoadWork } from './road-work.js';
 import { buildPotholes } from './potholes.js';
 import { buildSpeedHumps } from './speed-humps.js';
@@ -239,6 +246,8 @@ async function initApp() {
   const lightingSystem = lighting.made;
   const precipitation = createPrecipitation(); // rain & snow (weather.js)
   scene.add(precipitation.mesh);
+  const fallingLeaves = createFallingLeaves(); // leaves coming down in the fall (falling-leaves.js)
+  scene.add(fallingLeaves.mesh);
   markInit('lighting');
 
   // Lamp: the ground's real heights, which everything below is set on (terrain.js)
@@ -346,6 +355,8 @@ async function initApp() {
   // the city's land use and historic districts (build-districts.py): building looks and the location label ask them
   const districtBytes = await asset('data/districts.json');
   setDistricts(districtBytes ? JSON.parse(new TextDecoder().decode(districtBytes)) : null);
+  const hoodBytes = await asset('data/neighborhoods.json'); // the city's neighbourhoods, for the label and the map
+  setNeighborhoods(hoodBytes ? JSON.parse(new TextDecoder().decode(hoodBytes)) : null);
   const addressBytes = await asset('data/addresses.json');
   const addresses = addressBytes ? JSON.parse(new TextDecoder().decode(addressBytes)) : null;
   const gasBytes = await asset('data/gas-stations.json');
@@ -514,7 +525,7 @@ async function initApp() {
   const cartBytes = await asset('data/collection-days.json');
   const cartData = cartBytes ? JSON.parse(new TextDecoder().decode(cartBytes)) : null;
   const cartsPart = live.keep('curb-carts', () => cityPart((g) => buildCurbCarts(g, cartData, addresses), { cull: setupSceneCulling }), { inputs: [heights, grid], from: ['js/curb-carts.js', 'data/collection-days.json', 'data/addresses.json'] });
-  log(`[carts] ${cartsPart.made.count} carts out for ${cartsPart.made.day || 'no pickup today'}`);
+  log(`[carts] ${cartsPart.made.count} carts${cartsPart.made.bags ? ` and ${cartsPart.made.bags} bags of leaves` : ''} out for ${cartsPart.made.day || 'no pickup today'}`);
   allColliders.push(...roadWork.colliders);
   allColliders.push(...airportPart.made.colliders);
   allColliders.push(...bleachersPart.made.colliders);
@@ -545,6 +556,8 @@ async function initApp() {
     boxOf: (s) => knockBoxOf.get(s.of != null ? seatObstacles[s.of] : s) || null
   });
   log(`[seats] ${seatSpots.count} places to sit`);
+  seatingPart.made.bindColliders?.((o) => knockBoxOf.get(o)); // put away out of season and overnight (street-life.js)
+  setSitSpots(seatSpots); // the town's people sit at them too (pedestrian-system.js)
   // streamed, the trees near the camera come and go, and their trunks with them (trees.js)
   const treeField = details.made.treeField;
   if (TIER.stream && treeField?.obstacles) {
@@ -639,6 +652,7 @@ async function initApp() {
     dateWatch.day = day;
     moonPart.made.setPhase?.();
     poolsPart.made.setSeason?.(day);
+    refreshSeason(); // the trees' leaves and the lawns (seasons.js)
     coverWithSnow().catch(() => {});
     const cartsStale = (cartsPart.made.day || null) !== cartDay(cartData);
     Promise.all([builtClosures, loadCityClosures().catch(() => null)]).then(([was, list]) => {
@@ -837,6 +851,8 @@ async function initApp() {
   }
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
   updateSoundButton();
+  // storms, the live wind, fireflies and the sounds of outdoors (outdoors.js)
+  const outdoors = createOutdoors({ scene, lightingSystem, audioSystem, controllerManager, hydrantSpray });
 
   // recording mode: the top bar's record button saves a video of the drive into Movies
   // (made here when the page was opened before the button was in it, so it shows without a reload)
@@ -890,6 +906,8 @@ async function initApp() {
     _holeAt.x = x; _holeAt.z = z; _holeAt.y = groundHeight(x, z) + 0.3;
     audioSystem.cue('thud', _holeAt, Math.min(1, 0.2 + strength * 0.6));
   };
+  // the safety corridor cruiser's one line ('Warning: 47 in a 35'), where the place label sits
+  trafficSystem.setNotice?.((text, secs) => showNotice(text, secs));
   // someone knocked down by the player's car or bike: a thump there and a jolt in the hands
   const _thudAt = { x: 0, y: 0, z: 0 };
   // (who: 0 the first player, 1 the second in split screen)
@@ -1067,7 +1085,7 @@ async function initApp() {
     onCloseMap: () => mapSystem.toggleFullMap(false),
     onMapInput: (input, dt) => mapSystem.gamepad(input, dt),
     onRadio: (dir) => carRadio.tune(dir),
-    // the left stick's click, as B on the keyboard (not over the map)
+    // B, as B on the keyboard (not over the map): the horn, or the bicycle's bell
     onHorn: () => { if (!mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity()); }
   });
   const carRadio = new CarRadio();
@@ -1089,9 +1107,12 @@ async function initApp() {
       { pad: [STICK.LEFT], does: 'Walk / Run & turn' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Jump' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }],
     car: [{ keys: ['KeyW', 'KeyS'], pad: [TRIGGER.RT, TRIGGER.LT], does: 'Drive / Reverse' },
       { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Steer' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Handbrake' },
-      { keys: ['KeyB'], pad: [BUTTON.LSTICK], does: 'Horn' }, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Radio' }, { pad: [STICK.RIGHT], does: 'Orbit' }],
+      { keys: ['KeyB'], pad: [BUTTON.B], does: 'Horn' }, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Radio' }, { pad: [STICK.RIGHT], does: 'Orbit' },
+      { keys: ['KeyX'], pad: [BUTTON.LSTICK], does: 'Look back' }],
     cyclist: [{ keys: ['KeyW', 'KeyS'], pad: [TRIGGER.RT, TRIGGER.LT], does: 'Pedal / Brake' },
-      { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Lean & Turn' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }],
+      { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Lean & Turn' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Brake' },
+      { keys: ['KeyB'], pad: [BUTTON.B], does: 'Bell' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' },
+      { keys: ['KeyX'], pad: [BUTTON.LSTICK], does: 'Look back' }],
     helicopter: [{ keys: ['KeyW', 'KeyS'], does: 'Pitch' }, { keys: ['KeyA', 'KeyD'], does: 'Yaw' },
       { pad: [STICK.LEFT], does: 'Pitch & Yaw' }, { keys: ['Space', 'KeyE'], pad: [TRIGGER.RT], does: 'Ascend' },
       { keys: ['KeyQ', 'KeyC'], pad: [TRIGGER.LT], does: 'Descend' }],
@@ -1641,24 +1662,26 @@ async function initApp() {
     return stillList;
   }
 
-  // How many people are out: few late at night, busiest from mid-afternoon into the evening, and fewer in rain or snow
-  const CROWD_BY_LOOK = { midday: 0.8, golden: 1, twilight: 0.85, midnight: 0.18 };
+  // How many people and cars are out: by Ann Arbor's hour, weekday and U-M's term (town-clock.js, for the hour shown:
+  // the real one under Now, a look's own), and fewer people in rain, snow or hard cold
   function crowdBusy(timeId) {
-    if (timeId !== 'now') return CROWD_BY_LOOK[timeId] ?? 0.8;
-    const hour = +new Date(Date.now()).toLocaleString('en-US', { timeZone: 'America/Detroit', hour: 'numeric', hourCycle: 'h23' });
-    const byHour = [0.2, 0.14, 0.1, 0.06, 0.06, 0.08, 0.2, 0.35, 0.5, 0.55, 0.6, 0.7, 0.8, 0.8, 0.8, 0.9, 1, 1, 1, 1, 0.95, 0.85, 0.6, 0.35];
-    const w = lightingSystem.weather;
+    const t = townTime(timeId);
+    const w = timeId === 'now' ? lightingSystem.weather : null;
     // (by the kind weather.js made of the report, as the rain and snow that fall are)
     const wet = w && (w.amount > 0 || w.kind === 'rain' || w.kind === 'storm' || w.kind === 'snow') ? 0.6 : 1;
     const cold = w && w.tempF != null && w.tempF < 25 ? 0.75 : 1;
-    return byHour[hour] * wet * cold;
+    trafficSystem.setTrafficShare?.(trafficShare(t));
+    return [wet * cold, crowdShares(t)];
   }
 
   function selectTime(timeId) {
     lightingSystem.applyPreset(timeId, timeId === 'now');
-    trafficSystem.setCrowdBusy?.(crowdBusy(timeId));
-    // rain or snow falls only under the real sky
+    setStreetLife(timeId, lightingSystem.weather); // the hour, date and weather the people go by (street-life.js)
+    trafficSystem.setCrowdBusy?.(...crowdBusy(timeId));
+    // rain or snow falls only under the real sky, and only then are the roads wet or slippery (road-feel.js)
     precipitation.set(timeId === 'now' ? lightingSystem.weather : null);
+    setRoadWeather(timeId === 'now' ? lightingSystem.weather : null);
+    fallingLeaves.set(timeId === 'now' ? lightingSystem.weather : null);
     colorGrade.applyPreset(lightingSystem.lookId, lightingSystem.lookBlend);
     split.view?.grade.applyPreset(lightingSystem.lookId, lightingSystem.lookBlend);
     timeButtons.forEach((btn) => {
@@ -1898,6 +1921,29 @@ async function initApp() {
     } else if ((championShown || viewLandmark) && (pad.pressed & CHAMPION_CONTROLS.flyover)) startChampionFlyover();
   }
 
+  // Lamp: buses where the player stands (theride.js departures, traffic.js busesDue/busRide), four times a second. On
+  // foot within 6 m of a stop's sign: its next buses by the timetable and the live delay, "4 · Ypsilanti · 6 min".
+  // On a bus: "Next: Washtenaw & Stadium", the stop it makes next, and a soft chime as it pulls in there.
+  let chimedStop = -2;
+  const clock12 = (sec) => { const h = Math.floor(sec / 3600) % 24, m = Math.floor(sec / 60) % 60; return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+  function busLine() {
+    const cm = controllerManager, p = cm.entities.person;
+    if (cm.activeMode !== 'person') { chimedStop = -2; return null; }
+    if (p.onBus) {
+      const ride = trafficSystem.busRide();
+      if (!ride?.nextStop) return null;
+      // (not for the stop the player got on at)
+      if (chimedStop === -2) chimedStop = ride.stopped ? ride.nextStopIx : -1;
+      else if (ride.stopped && chimedStop !== ride.nextStopIx) { chimedStop = ride.nextStopIx; audioSystem.cue('buschime', p.position, 0.8); }
+      return { place: ride.stopped ? ride.nextStop : `Next: ${ride.nextStop}` };
+    }
+    chimedStop = -2;
+    const due = trafficSystem.busesDue(p.position.x, p.position.z, 6);
+    if (!due) return null;
+    if (!due.length) return { lines: ['No more buses today'] };
+    return { lines: due.map((d) => `${d.um ? d.name : d.short} · ${d.headsign} · ${d.secs < 30 ? 'Now' : d.secs < 3600 ? `${Math.max(1, Math.round(d.secs / 60))} min` : clock12(d.clock)}`) };
+  }
+
   // Where you are: the place's name over its street corner, drawn as a pair of green street-name signs
   const roadNames = new Set(ROADS.map((r) => r.name));
   const placeNames = new Set(LANDMARKS.flatMap((l) => (l.art ? [l.name, l.short] : [l.name])));
@@ -1913,9 +1959,24 @@ async function initApp() {
     elViewHint.replaceChildren(g ? g : '', document.createTextNode(g ? (championFlying ? ' to go back' : ' to view') : (championFlying ? 'Tap to go back' : 'Tap to view')));
   }
   onInput((on) => drawViewHint(on));
-  function renderLocation(label) {
-    if (!elLocation || label === locationText) return;
-    locationText = label;
+  // `bus`: on a bus, the stop it makes next in place of the place's name ({ place }); at a stop's sign, the next buses
+  // from it, a plain line each under the name ({ lines }: busLine)
+  // A new place or corner shows once it has held for a moment (0.7 s), so passing a side street or the edge of a
+  // park doesn't flick the signs back and forth; the first label, a teleport's arrival and the bus lines show at once
+  let locationPending = null, locationPendingAt = 0;
+  function renderLocation(label, bus = null) {
+    const key = bus ? `${label}\n${bus.place || ''}\n${(bus.lines || []).join('\n')}` : label;
+    if (!elLocation || key === locationText) { locationPending = null; return; }
+    if (locationText && !bus && !arrival) {
+      const now = performance.now();
+      if (key !== locationPending) { locationPending = key; locationPendingAt = now; return; }
+      if (now - locationPendingAt < 700) return;
+    }
+    locationPending = null;
+    locationText = key;
+    // what's shown already stays as it is; only what's new fades in (`fresh`)
+    const shownPlace = elLocation.querySelector('.location-place')?.firstChild?.textContent || '';
+    const shownSigns = new Set([...elLocation.querySelectorAll('.street-sign')].map((s) => s.textContent));
     let place = '';
     let streets = label;
     const split = label.indexOf(' · ');
@@ -1926,6 +1987,7 @@ async function initApp() {
       place = label;
       streets = '';
     }
+    if (bus?.place) place = bus.place;
     const nodes = [];
     // a landmark (a building, park, mural, sculpture or champion tree) can be flown round: "T to view" beside its name
     viewLandmark = null;
@@ -1940,14 +2002,20 @@ async function initApp() {
     }
     if (place) {
       const el = document.createElement('div');
-      el.className = 'location-place';
+      el.className = 'location-place' + (place === shownPlace ? ' kept' : '');
       el.textContent = place;
       if (viewLandmark) { el.appendChild(elViewHint); drawViewHint(); }
       nodes.push(el);
     }
+    for (const line of bus?.lines || []) {
+      const el = document.createElement('div');
+      el.className = 'location-bus';
+      el.textContent = line;
+      nodes.push(el);
+    }
     if (streets) {
       const row = document.createElement('div');
-      row.className = 'location-signs';
+      row.className = 'location-signs kept';
       if (streets.startsWith('near ')) {
         streets = streets.slice(5);
         const near = document.createElement('span');
@@ -1957,7 +2025,7 @@ async function initApp() {
       }
       for (const name of streets.split(' & ')) {
         const sign = document.createElement('span');
-        sign.className = 'street-sign';
+        sign.className = 'street-sign' + (shownSigns.has(name) ? '' : ' fresh');
         sign.textContent = name;
         row.appendChild(sign);
       }
@@ -2575,7 +2643,7 @@ async function initApp() {
     mark('player & traffic');
     highwayTraffic.update(dt, cameraSystem.camera, controllerManager.getActiveEntity(), controllerManager.activeMode);
     mark('highway');
-    railways.update(dt, (at) => audioSystem.trainHorn(at));
+    railways.update(dt, (at, hold, kind) => audioSystem.trainHorn(at, hold, kind), (crossings) => audioSystem.crossingBells(crossings));
     // (in split screen the second player's camera too: parked-cars.js keeps the cells near either)
     parkedCars.update(cameraSystem.camera, split.drawn ? split.second.camera : null);
     // (the cameras, so the work zones' town-wide meshes are hidden while no player is near one: road-work.js cull)
@@ -2616,6 +2684,11 @@ async function initApp() {
       heardStrokes = kayak.strokes;
       if (controllerManager.activeMode === 'kayak') audioSystem.cue('splash', kayak.position, 0.8);
     }
+    // white water off the bow in the Argo Cascades (controllers.js kayakSpray)
+    for (const s of kayak.sprays?.splice(0) || []) {
+      waterSplash.spray(s.x, s.y, s.z, s.vx, s.vz, s.strength);
+      if (s.strength > 0.5) audioSystem.cue('splash', s, Math.min(1, s.strength));
+    }
     if (!document.hidden && now >= nextPlayerSave) {
       savePlayerState();
       nextPlayerSave = now + 5000;
@@ -2637,6 +2710,7 @@ async function initApp() {
     lightingSystem.update(cameraSystem.currentPos);
     // (the radar every other frame on the Xbox, where each redraw of it costs a few tenths of a millisecond)
     radarTick = !radarTick;
+    mapSystem.setPursuer?.(trafficSystem.pursuer?.());
     if (!XBOX || radarTick || mapSystem.isFullMapOpen) mapSystem.update();
     placeChampionSign();
     // (by the clock, as the weather is: a frame of play counts at most 0.05 s, and none while the page was hidden)
@@ -2646,11 +2720,15 @@ async function initApp() {
     }
     if (Date.now() - weatherAskedAt > 15 * 60e3) askWeather();
     precipitation.update(cameraSystem.camera, elapsed);
+    fallingLeaves.update(cameraSystem.camera, elapsed);
     audioSystem.update(dt, elapsed, cameraSystem.camera, lightingSystem.lookId === 'midnight');
+    outdoors.update(dt, elapsed, cameraSystem.camera);
     {
       const car = controllerManager.entities.car;
       const driving = controllerManager.activeMode === 'car' && car;
       audioSystem.tireSkid(driving ? car.skid || 0 : 0, driving ? Math.abs(car.speed) : 0);
+      // the road under the wheels: brick, gravel, planks, wet roads' hiss, and the bicycle's gear changes
+      audioSystem.ride(controllerManager.getActiveEntity(), controllerManager.activeMode);
     }
     mark('light, map, weather, sound');
     // on the Xbox, short of processor, the culling runs every third frame and the ground's streaming every fourth (each
@@ -2867,7 +2945,7 @@ async function initApp() {
       const where = cameraSystem.getActivePreset().category === 'follow' ? activeEnt.position : cameraSystem.currentPos;
       updateChampion(now, where);
       if (arrival && Math.hypot(where.x - arrival.x, where.z - arrival.z) > 25) arrival = null;
-      renderLocation(getLocationLabel(where.x, where.z, arrival?.id));
+      renderLocation(getLocationLabel(where.x, where.z, arrival?.id), busLine());
     }
   };
 
@@ -2914,7 +2992,7 @@ async function initApp() {
     // the Xbox: Lamp's stage at 1920x1080 (scale 1); elsewhere the window's shape at the tier's pixels
     stopFilling?.();
     stopFilling = fillWindow(renderer, (w, h) => { stage = { w, h }; fitCameras(); });
-    const was = pendingRestore(); if (was) startFrom(was);
+    const was = pendingRestore(); if (was) startFrom(was); else golf.resume(); // (a golf round saved at the last close)
   // (on an Xbox too: the runtime's own steps, from 1920x1080, undid its smaller size and left it at 960x540 or full size)
   }, frame, touch: false, keyboard: false, snapshot, sharp: XBOX || TIER.name !== 'phone', fill: FILLS,
     // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.

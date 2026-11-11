@@ -40,6 +40,34 @@ async function loadTheRide(url = './data/theride.json.gz', name = 'theride') {
   }
 }
 
+// ---- Names as people say them ----------------------------------------------------------------------------------------
+// The feeds' stop names and headsigns are written for the agency's own use: "SB Fifth Av + Huron", "TO Pauline + Maple",
+// "Temp BTC endpt" (TheRide's stand-in stops on Fifth Ave and Washington while the Blake Transit Center is closed, from
+// May 3, 2026), "Meijer- Carpent". Here they read as on a sign: "Fifth Ave & Huron", "Pauline & Maple".
+const STOP_NAMES = { 'Temp BTC endpt': 'Fifth Ave & Washington', 'Geddes + CCTC': 'Geddes & Central Campus Transit Center' };
+const HEADSIGNS = {
+  'Blake Transit Center': 'Downtown', 'Blake Transit Ctr': 'Downtown', 'CCTC': 'Central Campus Transit Center',
+  'Central Campus Transit Ctr': 'Central Campus Transit Center', 'WCC': 'Washtenaw Community College',
+  'Meijer- Carpent': 'Meijer Carpenter Rd', 'Meijer: Carpenter Rd': 'Meijer Carpenter Rd', 'Meijer: Jackson Rd': 'Meijer Jackson Rd',
+  'Meijer: AA - Saline': 'Meijer Ann Arbor-Saline', 'Ypsilanti Transit Ctr': 'Ypsilanti', 'Ypsilanti Transit Center': 'Ypsilanti',
+  'Pioneer High School P&R': 'Pioneer High School', 'State Park & Ride': 'State St Park & Ride', 'Plymouth Rd P&R': 'Plymouth Rd Park & Ride',
+  'Dominos': "Domino's Farms"
+};
+const ROUTE_NAMES = { 'Bursley Baits': 'Bursley-Baits', 'Eisenhower- Golfside': 'Eisenhower-Golfside' };
+function tidy(name) {
+  return name.replace(/%%/g, ' ').replace(/\s*\+\s*/g, ' & ').replace(/\s+/g, ' ').replace(/\s*\([^)]*$/, '').trim();
+}
+function cleanStopName(raw) {
+  let name = raw.replace(/\s*\(\d+\)\s*$/, '').trim();
+  if (STOP_NAMES[name]) return STOP_NAMES[name];
+  name = tidy(name.replace(/(^|\s)[NSEW]B\s+/g, '$1')).replace(/\bAv\b/g, 'Ave');
+  return STOP_NAMES[name] || name;
+}
+function cleanHeadsign(raw) {
+  const name = tidy(raw.replace(/^to\s+/i, ''));
+  return HEADSIGNS[name] || name;
+}
+
 // A trip: [route, shape, headsign, service, block, stop, arrive, depart, stop, arrive, depart, ...]
 const tripStart = (t) => t[6];
 const tripEnd = (t) => t[t.length - 1];
@@ -136,12 +164,14 @@ function createSchedule(data, network) {
 
   // The trips on the road at `ms`, each with how far into its service day it is (a trip after midnight runs on the
   // day before's timetable, past 24:00)
+  // the services running today and yesterday (for its trips past midnight) at `now` (localTime)
+  function servicesAround(now) {
+    const before = (now.weekday + 6) % 7;
+    return { today: servicesOn(inFeed(now.date, now.weekday), now.weekday), yesterday: servicesOn(inFeed(dayBefore(now.date), before), before) };
+  }
   function activeTrips(ms) {
     const now = localTime(ms);
-    const date = inFeed(now.date, now.weekday);
-    const today = servicesOn(date, now.weekday);
-    const before = (now.weekday + 6) % 7;
-    const yesterday = servicesOn(inFeed(dayBefore(now.date), before), before);
+    const { today, yesterday } = servicesAround(now);
     // only the trips whose start lies in the window that can be on the road now are looked at (by start, with the
     // longest trip and the live feed's largest delays either way as the slack)
     let minDelay = 0, maxDelay = 0;
@@ -402,16 +432,57 @@ function createSchedule(data, network) {
     return null;
   }
 
+  const labels = new Map();
   function label(trip) {
+    let l = labels.get(trip[2] * 1000 + trip[0]);
+    if (l) return l;
     const [short, name, col] = data.routes[trip[0]];
     let head = data.headsigns[trip[2]];
     if (head.startsWith(short + ' ')) head = head.slice(short.length + 1);
     const to = head.lastIndexOf(' to '); // "Washtenaw Local to Ypsilanti Transit Ctr": the sign shows where it's going
     if (to > 0) head = head.slice(to + 4);
-    return { short, name, color: col, headsign: head };
+    l = { short, name: ROUTE_NAMES[name] || name, color: col, headsign: cleanHeadsign(head) };
+    labels.set(trip[2] * 1000 + trip[0], l);
+    return l;
   }
 
-  return { activeTrips, secondsInto, placeAt, label, applyLive, delayOf, liveStamp, stops: data.stops };
+  // ---- What comes next at a stop ----------------------------------------------------------------------------------
+  // Each stop's calls (trip, its place in the trip), found once the stop is first asked about. A trip's last stop is
+  // left out: the bus ends there and takes no one on.
+  const callsCache = new Map();
+  function callsAt(stop) {
+    let calls = callsCache.get(stop);
+    if (calls) return calls;
+    calls = [];
+    for (const t of data.trips) {
+      for (let j = 5; j + 5 < t.length; j += 3) if (t[j] === stop) calls.push({ trip: t, j });
+    }
+    callsCache.set(stop, calls);
+    return calls;
+  }
+  // The next buses from `stop` at `ms` (today's trips and yesterday's past midnight): for each route and headsign the
+  // soonest, by its timetable shifted by the live delay; `secs` until it comes (0 while it stands there), soonest first
+  function departures(stop, ms, max = 2) {
+    const now = localTime(ms);
+    const { today, yesterday } = servicesAround(now);
+    const best = new Map();
+    for (const { trip, j } of callsAt(stop)) {
+      const delay = delayOf(trip);
+      const arr = trip[j + 1] + delay, dep = trip[j + 2] + delay;
+      let at = Infinity;
+      if (today.has(trip[3]) && dep >= now.sec) at = arr - now.sec;
+      if (yesterday.has(trip[3]) && dep - 86400 >= now.sec) at = Math.min(at, arr - 86400 - now.sec);
+      if (at === Infinity) continue;
+      const l = label(trip);
+      const key = l.short + '|' + l.headsign;
+      const b = best.get(key);
+      if (!b || at < b.secs) best.set(key, { secs: Math.max(0, at), clock: (now.sec + Math.max(0, at)) % 86400, ...l });
+    }
+    return [...best.values()].sort((a, b) => a.secs - b.secs).slice(0, max);
+  }
+  const stopName = (stop) => cleanStopName(data.stops[stop]?.[0] || '');
+
+  return { activeTrips, secondsInto, placeAt, label, applyLive, delayOf, liveStamp, departures, stopName, stops: data.stops };
 }
 
 // ---- The stop signs ---------------------------------------------------------------------------------------------------
@@ -443,7 +514,8 @@ function placeStopSigns(stops, network) {
   };
   const SLIDES = [0];
   for (let d = 2; d <= 30; d += 2) SLIDES.push(-d, d);
-  for (const [, x, z] of stops) {
+  for (let i = 0; i < stops.length; i++) {
+    const [, x, z] = stops[i];
     let best = null, bd = Infinity;
     for (const e of edges) {
       const qx = x - e.sx, qz = z - e.sz;
@@ -465,14 +537,14 @@ function placeStopSigns(stops, network) {
           if (t < 0 || t > e.len) continue;
           const px = e.sx + e.dx * t + e.rx * off, pz = e.sz + e.dz * t + e.rz * off;
           if (onRoad(px, pz)) continue;
-          placed.push({ x: px, z: pz, yaw: Math.atan2(e.dx, e.dz) });
+          placed.push({ x: px, z: pz, yaw: Math.atan2(e.dx, e.dz), i });
           done = true;
           break;
         }
         if (done) break;
       }
     } else if (!onRoad(x, z)) {
-      placed.push({ x, z, yaw: 0 });
+      placed.push({ x, z, yaw: 0, i });
     }
   }
 
@@ -526,16 +598,16 @@ function createStopSigns(group) {
   const geo = mergeGeometries([plateGeo, poleGeo]);
   const mat = new THREE.MeshStandardNodeMaterial({ map: tex, roughness: 0.55, metalness: 0.15, side: THREE.DoubleSide });
 
-  const all = []; // { x, z, m: the sign's 16 matrix numbers }
+  const all = []; // { x, z, m: the sign's 16 matrix numbers, sched, stop: its stop in that timetable }
   let mesh = null;
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
   const up = new THREE.Vector3(0, 1, 0);
-  function add(stops, network) {
+  function add(stops, network, sched = null) {
     for (const st of placeStopSigns(stops, network)) {
       // the plate stands out over the sidewalk from the pole, its face to the traffic coming (against the edge's way)
       q.setFromAxisAngle(up, st.yaw + Math.PI);
       p.set(st.x, groundHeight(st.x, st.z), st.z);
-      all.push({ x: st.x, z: st.z, m: m.compose(p, q, one).toArray(new Float32Array(16)) });
+      all.push({ x: st.x, z: st.z, m: m.compose(p, q, one).toArray(new Float32Array(16)), sched, stop: st.i });
     }
     if (mesh) { group.remove(mesh); mesh.dispose(); }
     mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, all.length));
@@ -559,7 +631,16 @@ function createStopSigns(group) {
     mesh.visible = n > 0;
     if (n) { mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }
   }
-  return { add, near, get count() { return all.length; } };
+  // the signs within `reach` of (x, z), nearest first (main.js: the next buses from the stop the player stands at)
+  function at(x, z, reach) {
+    const r2 = reach * reach, out = [];
+    for (const st of all) {
+      const d2 = (st.x - x) ** 2 + (st.z - z) ** 2;
+      if (d2 < r2 && st.sched) out.push({ d2, sched: st.sched, stop: st.stop });
+    }
+    return out.sort((a, b) => a.d2 - b.d2);
+  }
+  return { add, near, at, get count() { return all.length; } };
 }
 
 // Asks the app around the page for TheRide's live positions and moves the schedule's trips to them; how many buses
@@ -576,4 +657,4 @@ async function fetchTheRideLive(sched) {
   }
 }
 
-export { loadTheRide, createSchedule, createStopSigns, localTime, fetchTheRideLive };
+export { loadTheRide, createSchedule, createStopSigns, localTime, fetchTheRideLive, cleanStopName, cleanHeadsign };

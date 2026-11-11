@@ -1,5 +1,5 @@
-// Ann Arbor's land use parcels and historic districts (data/districts.json, Assets/Tools/build-districts.py), from
-// the City of Ann Arbor's open data. main.js hands the file to setDistricts before the city is built; until then
+// Ann Arbor's land use parcels and historic districts (data/districts.json, Assets/Tools/build-districts.py) and its
+// neighbourhoods (data/neighborhoods.json, build-neighborhoods.py), from the City of Ann Arbor's open data. main.js hands the file to setDistricts before the city is built; until then
 // every lookup answers "nothing here".
 
 // Land use codes, as the build writes them
@@ -75,4 +75,48 @@ export function historicDistrictAt(x, z) {
 /** Every historic district, for the map: [{ name, rings }] */
 export function historicDistricts() {
   return historic;
+}
+
+// Lamp: the city's neighbourhoods (data/neighborhoods.json, Assets/Tools/build-neighborhoods.py): the AAGIS
+// Neighborhoods layer's 52 polygons, which tile the town. A 500 m grid of candidates, each tested on its bounds first.
+const HOOD_CELL = 500;
+let hoods = [];             // [{ name, rings, label, r, w, minX, maxX, minZ, maxZ }]
+let hoodCells = new Map();  // cell key -> [hood]
+
+export function setNeighborhoods(list) {
+  hoods = [];
+  hoodCells = new Map();
+  for (const d of list || []) {
+    const all = d.rings.map(bounds);
+    const h = {
+      ...d,
+      // the city's double names ('Bader–Ann Arbor Hills', the school's name first) shown by their last part only, as
+      // the person asked: 'Ann Arbor Hills'
+      name: String(d.name).split('–').pop().trim(),
+      minX: Math.min(...all.map((b) => b.minX)), maxX: Math.max(...all.map((b) => b.maxX)),
+      minZ: Math.min(...all.map((b) => b.minZ)), maxZ: Math.max(...all.map((b) => b.maxZ))
+    };
+    hoods.push(h);
+    for (let cx = Math.floor(h.minX / HOOD_CELL); cx <= Math.floor(h.maxX / HOOD_CELL); cx++) {
+      for (let cz = Math.floor(h.minZ / HOOD_CELL); cz <= Math.floor(h.maxZ / HOOD_CELL); cz++) {
+        const key = cx + ',' + cz;
+        if (!hoodCells.has(key)) hoodCells.set(key, []);
+        hoodCells.get(key).push(h);
+      }
+    }
+  }
+}
+
+/** The name of the city's neighbourhood at (x, z) ("Burns Park", "Bader–Ann Arbor Hills"), or null outside them */
+export function neighborhoodAt(x, z) {
+  for (const h of hoodCells.get(Math.floor(x / HOOD_CELL) + ',' + Math.floor(z / HOOD_CELL)) || []) {
+    if (x < h.minX || x > h.maxX || z < h.minZ || z > h.maxZ) continue;
+    if (h.rings.some((r) => inRing(r, x, z))) return h.name;
+  }
+  return null;
+}
+
+/** Every neighbourhood, for the map: [{ name, rings, label: [x, z], r, w }] */
+export function neighborhoods() {
+  return hoods;
 }

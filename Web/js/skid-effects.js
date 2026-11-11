@@ -4,7 +4,9 @@ import { uv, smoothstep, attribute } from 'three/tsl';
 
 // Rubber and smoke from the player's car when its back tires slide (the handbrake, or the tail stepping out): a dark
 // streak laid behind each back wheel, fading the longer it's been on the road, and white tire smoke boiling up from
-// the wheels, swelling and drifting as it thins. `car.skid` (controllers.js) says how hard they slide, 0 to 1.
+// the wheels, swelling and drifting as it thins. `car.skid` (controllers.js) says how hard they slide, 0 to 1. On a wet
+// road (`car.roadWet`, road-feel.js) the back wheels throw up a thin spray at speed instead, low and short-lived, the
+// slide's smoke is that spray too, and the rubber laid is fainter.
 
 const MAX_MARKS = 1600, MAX_SMOKE = 320;
 const MARK_WIDTH = 0.26, MARK_FADE = 40; // m, seconds a streak takes to fade from the road
@@ -52,7 +54,7 @@ function createSkidEffects(scene) {
   smoke.count = 0;
   smoke.renderOrder = 4;
   group.add(marks, smoke);
-  const S = Array.from({ length: MAX_SMOKE }, () => ({ life: 0, age: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, r: 0 }));
+  const S = Array.from({ length: MAX_SMOKE }, () => ({ life: 0, age: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, r: 0, k: 1, grow: 3.2 }));
   let smokeCursor = 0, smokeCarry = 0;
 
   // where each back wheel's streak last left off
@@ -63,6 +65,7 @@ function createSkidEffects(scene) {
   // the back wheels, picked out once for each car (or bike) the player has
   let rearOf = null, rear = [];
 
+  let wetNow = 0;
   function lay(a, x, y, z, strength) {
     const dx = x - a.x, dz = z - a.z, dy = y - a.y, len = Math.hypot(dx, dz);
     if (len < SEGMENT) return;
@@ -73,7 +76,7 @@ function createSkidEffects(scene) {
     p.set((x + a.x) / 2, (y + a.y) / 2, (z + a.z) / 2);
     sc.set(MARK_WIDTH, 1, Math.hypot(len, dy) + 0.04);
     marks.setMatrixAt(i, m.compose(p, q, sc));
-    markAge[i] = 0; markStrength[i] = 0.35 + 0.45 * strength * (0.8 + random() * 0.2);
+    markAge[i] = 0; markStrength[i] = (0.35 + 0.45 * strength * (0.8 + random() * 0.2)) * (1 - 0.6 * wetNow);
     a.x = x; a.y = y; a.z = z;
     marks.instanceMatrix.needsUpdate = true;
   }
@@ -81,8 +84,11 @@ function createSkidEffects(scene) {
   function update(dt, car, driving, camera) {
     dt = Math.min(dt, 0.05);
     const skid = driving && car ? car.skid || 0 : 0;
-    // nothing sliding, laid or drifting: nothing to do
-    if (skid < 0.15 && !markCount && !smoke.count) { wheelsLast[0].on = wheelsLast[1].on = false; return; }
+    const wet = wetNow = driving && car && !car.bike && !car.airborne ? car.roadWet || 0 : 0;
+    const fast = Math.abs(car?.speed || 0);
+    const spraying = wet > 0.3 && fast > 7;
+    // nothing sliding, spraying, laid or drifting: nothing to do
+    if (skid < 0.15 && !spraying && !markCount && !smoke.count) { wheelsLast[0].on = wheelsLast[1].on = false; return; }
     if (rearOf !== (car?.wheels ?? null)) { rearOf = car?.wheels ?? null; rear = rearOf?.filter((w) => !w.isFront) || []; }
     for (let k = 0; k < 2; k++) {
       const a = wheelsLast[k], w = rear[k];
@@ -95,16 +101,29 @@ function createSkidEffects(scene) {
       if (Math.hypot(wp.x - a.x, wp.z - a.z) > 6) { a.x = wp.x; a.y = y; a.z = wp.z; continue; } // a teleport
       lay(a, wp.x, y, wp.z, skid);
     }
-    // smoke boils off both back tires, more the harder they slide
-    if (skid > 0.25 && rear.length) {
-      smokeCarry += dt * 46 * skid;
+    // smoke boils off both back tires, more the harder they slide; on a wet road a spray comes off them instead, thrown
+    // back the way the car came, and more of it the faster it goes
+    const spray = wet > 0.5 || (spraying && skid <= 0.25);
+    const rate = (skid > 0.25 ? 46 * skid : 0) + (spraying ? 45 * wet * Math.min(1, (fast - 7) / 18) : 0);
+    if (rate > 0 && rear.length) {
+      smokeCarry += dt * rate;
+      const sin = Math.sin(car.heading), cos = Math.cos(car.heading);
       while (smokeCarry >= 1) {
         smokeCarry--;
         rear[smokeCursor % rear.length].steerPivot.getWorldPosition(wp);
         const s = S[smokeCursor]; smokeCursor = (smokeCursor + 1) % MAX_SMOKE;
-        s.x = wp.x + (random() - 0.5) * 0.3; s.z = wp.z + (random() - 0.5) * 0.3; s.y = car.position.y + 0.25;
-        s.vx = (random() - 0.5) * 1.2; s.vz = (random() - 0.5) * 1.2; s.vy = 0.5 + random() * 0.6;
-        s.r = 0.6 + random() * 0.4; s.age = 0; s.life = 1.6 + random() * 1.2;
+        s.x = wp.x + (random() - 0.5) * 0.3; s.z = wp.z + (random() - 0.5) * 0.3; s.age = 0;
+        if (spray) {
+          // (it starts out moving with the car and falls behind it)
+          const along = fast * (0.55 + random() * 0.15) * Math.sign(car.speed || 1);
+          s.x -= sin * 0.4; s.z -= cos * 0.4; s.y = car.position.y + 0.12;
+          s.vx = sin * along + (random() - 0.5) * 1.5; s.vz = cos * along + (random() - 0.5) * 1.5; s.vy = 0.3 + random() * 0.5;
+          s.r = 0.5 + random() * 0.3; s.life = 0.55 + random() * 0.4; s.k = 0.75; s.grow = 2.4;
+        } else {
+          s.y = car.position.y + 0.25;
+          s.vx = (random() - 0.5) * 1.2; s.vz = (random() - 0.5) * 1.2; s.vy = 0.5 + random() * 0.6;
+          s.r = 0.6 + random() * 0.4; s.life = 1.6 + random() * 1.2; s.k = 1; s.grow = 3.2;
+        }
       }
     }
 
@@ -130,11 +149,11 @@ function createSkidEffects(scene) {
       if (s.age >= s.life) { s.life = 0; continue; }
       s.vx *= drag; s.vz *= drag; s.vy *= Math.exp(-0.6 * dt);
       s.x += (s.vx + 0.5) * dt; s.y += s.vy * dt; s.z += (s.vz + 0.2) * dt; // the same light breeze as the hydrants'
-      const t = s.age / s.life, r = s.r * (1 + t * 3.2);
+      const t = s.age / s.life, r = s.r * (1 + t * s.grow);
       p.set(s.x, s.y + r * 0.3, s.z);
       sc.set(r, r, r);
       smoke.setMatrixAt(n, m.compose(p, camera.quaternion, sc));
-      fade.array[n] = Math.min(1, s.age / 0.15) * (1 - t) * (1 - t);
+      fade.array[n] = Math.min(1, s.age / (s.k < 1 ? 0.05 : 0.15)) * (1 - t) * (1 - t) * s.k;
       n++;
     }
     smoke.count = n;

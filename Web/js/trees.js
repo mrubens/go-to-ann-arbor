@@ -4,7 +4,8 @@ import { TIER, XBOX } from './device-tier.js';
 const MERGE_TREES = TIER.mergeTrees;
 import { log } from '../lamp-game.js';
 import * as THREE from 'three/webgpu';
-import { createTreeMaterial } from './tsl-materials.js';
+import { createTreeMaterial, cityUniforms } from './tsl-materials.js';
+import { onSeason } from './seasons.js';
 import { groundHeight } from './terrain.js';
 import { polygonBoxOverlaps } from './building-collision.js';
 import { dropBuffers } from './gpu-only.js';
@@ -469,42 +470,148 @@ const SPECIES = [
 SPECIES[0].fall = [0xa8862e, 0x8f7a2c, 0x5c6c28];
 SPECIES[1].fall = [0xd9b42a, 0xe6c63a, 0xb8a02a];
 
-// The season by the day of the year where the game is played (lamp-game.js gives Date.now a fixed day in the preview,
-// so a replay shows the same trees). Fall: each species starts turning on its own day (maples first, oaks last), each
-// tree a few days either side, reaching full color about two weeks on; a month after that its leaves have gone brown,
-// and soon after they're down. Winter: the leaf-losing trees stand bare (their limbs and twigs are modeled) until their
-// buds break in spring, flowering trees and maples first, oaks and honey locusts last (Ann Arbor's usual dates), in a
-// light fresh green that darkens to summer's over three weeks. Evergreens stay as they are.
-const DAY_OF_YEAR = (() => {
-  const d = new Date(Date.now());
-  return (d - new Date(d.getFullYear(), 0, 1)) / 864e5;
-})();
+// The season by Ann Arbor's date (seasons.js gives the day of the year, 0 on January 1, and again on each new day while
+// it's played). Fall: each species starts turning on its own day (maples first, oaks last), each tree a little before
+// or after the others, reaching full color about two weeks on; a month after that its leaves are going brown, and over
+// the two weeks after that they come down, leaf by leaf, until it stands bare (its limbs and branches are modeled, its
+// twigs are in the leaf cards). Oaks keep a share of their dead brown leaves all winter. Spring: the buds break,
+// flowering trees and maples first, oaks and honey locusts last (Ann Arbor's late April to mid May); the flowering
+// trees (crabapple, cherry, redbud, serviceberry, pear) bloom pink and white for two weeks as their leaves come, and
+// every new leaf is a pale yellow-green that darkens to summer's by June. Evergreens stay as they are.
+// The leaves on a tree are the material's (cityUniforms.uTreeLeaves, set here per species); a tree's color is its
+// instance's tint, baked as it's planted and again on a new day.
+let DAY = 0;
 const TURNS = { plane: 288, locust: 280, elm: 284, maple: 272, oak: 292, flowering: 278 };
-// days after a species starts turning that its leaves are down (locusts' small leaflets go first, planes and oaks hang on)
-const DROPS = { plane: 44, locust: 26, elm: 40, maple: 44, oak: 44, flowering: 40 };
-// day of the year its buds break
-const LEAFS_OUT = { plane: 118, locust: 128, elm: 112, maple: 108, oak: 122, flowering: 104 };
+// days after a species starts turning that its last leaves are down (locusts' small leaflets go first)
+const DROPS = { plane: 50, locust: 28, elm: 42, maple: 44, oak: 62, flowering: 42 };
+const FALL_DAYS = 14; // they come down over this many days before that
+const FALL_SPREAD = 20; // days between a species' first and last tree in the fall
+// day of the year its buds break, how many days its leaves take to come, and the spread from tree to tree
+const LEAFS_OUT = { plane: 125, locust: 135, elm: 118, maple: 115, oak: 130, flowering: 112 };
+const OUT_DAYS = { flowering: 4 };
+const SPRING_SPREAD = 10;
+const KEEPS = { oak: 0.3 }; // the share of its dead leaves a tree keeps through the winter
+const BLOOMS = { flowering: 14 }; // days in flower
 const BROWN = new THREE.Color(0x6b4a2a);
 const FRESH = new THREE.Color(0xa4c44c);
-// A tree of this species' state today: how far it has turned (0 summer green, 1 full fall color), gone brown after
-// (0 to 1), whether it stands bare, and how fresh its new leaves still are (1 just out, 0 summer's)
-function seasonOf(name, r, r1) {
+const BLOSSOM_WHITE = new THREE.Color(0xeae4e2);
+const BLOSSOM_PINK = new THREE.Color(0xe79abb);
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+// A tree of this species' state today (r: its random fraction, the material's too): how far it has turned (0 summer
+// green, 1 full fall color), gone brown after (0 to 1), how fresh its new leaves still are (1 just out, 0 summer's),
+// and how much in flower
+function seasonOf(name, r) {
   const start = TURNS[name];
-  if (start == null) return { turned: 0, browned: 0, bare: false, fresh: 0 };
-  const jitter = (r - 0.5) * 12 + (r1 - 0.5) * 8;
-  if (DAY_OF_YEAR < 200) {
-    const out = DAY_OF_YEAR - LEAFS_OUT[name] - jitter;
-    return { turned: 0, browned: 0, bare: out < 0, fresh: Math.min(1, Math.max(0, 1 - out / 21)) };
+  if (start == null) return { turned: 0, browned: 0, fresh: 0, bloom: 0 };
+  if (DAY < 200) {
+    const out = DAY - LEAFS_OUT[name] - (r - 0.5) * SPRING_SPREAD;
+    // before its buds break, what's left on it (an oak's) is last fall's
+    if (out < 0) return { turned: 0, browned: 1, fresh: 0, bloom: 0 };
+    const days = BLOOMS[name] || 0;
+    return { turned: 0, browned: 0, fresh: clamp01(1 - out / 40), bloom: days ? clamp01(Math.min(out / 2 + 0.3, (days - out) / 3)) : 0 };
   }
-  const at = DAY_OF_YEAR - start - jitter;
-  return { turned: Math.min(1, Math.max(0, at / 14)), browned: Math.min(1, Math.max(0, (at - 30) / 16)),
-    bare: at >= DROPS[name], fresh: 0 };
+  const at = DAY - start - (r - 0.5) * FALL_SPREAD;
+  return { turned: clamp01(at / 14), browned: clamp01((at - 30) / 16), fresh: 0, bloom: 0 };
 }
-// Where every shape of a level is drawn as one (MERGE_TREES, the Xbox and phones), a species goes bare or leafy all
-// together, on the day its middling tree does, so the merged geometry needn't carry both; elsewhere tree by tree
-const BARE_SPECIES = SPECIES.map((sp) => seasonOf(sp.name, 0.5, 0.5).bare);
-// a species any of whose trees is bare today (it's given bare shapes)
-const SOME_BARE = SPECIES.map((sp) => seasonOf(sp.name, 0, 0).bare || seasonOf(sp.name, 1, 1).bare);
+// The leaves on a species' trees today, as cityUniforms.uTreeLeaves takes them: a tree of random fraction r has
+// max(z, clamp(x + y r, 0, 1)) of them, in step with seasonOf
+function leavesOf(name, out) {
+  const start = TURNS[name];
+  if (start == null) return out.set(1, 0, 1, 0);
+  const keep = KEEPS[name] || 0;
+  if (DAY < 200) {
+    const n = OUT_DAYS[name] || 10;
+    return out.set((DAY - LEAFS_OUT[name] + 0.5 * SPRING_SPREAD) / n, -SPRING_SPREAD / n, keep, 0);
+  }
+  return out.set(1 - (DAY - start + 0.5 * FALL_SPREAD - DROPS[name] + FALL_DAYS) / FALL_DAYS, FALL_SPREAD / FALL_DAYS, keep, 0);
+}
+// A tree's foliage tint today (sRGB colors to linear), into `out`
+const _fallTint = new THREE.Color();
+function seasonTint(sp, r1, r2, r3, out) {
+  const { tints, fall, name } = SPECIES[sp];
+  out.setHex(tints[Math.floor(r3 * tints.length * 0.9999)]);
+  const season = seasonOf(name, r2);
+  if (season.fresh > 0) out.lerp(FRESH, season.fresh * 0.6);
+  if (season.turned > 0) out.lerp(_fallTint.setHex(fall[Math.floor(r3 * fall.length * 0.9999)]), season.turned);
+  if (season.browned > 0) out.lerp(BROWN, season.browned * 0.8);
+  // blossom, each tree its own mix of white and pink
+  if (season.bloom > 0) out.lerp(_fallTint.copy(BLOSSOM_WHITE).lerp(BLOSSOM_PINK, ((r1 * 7.31) % 1) ** 1.5), season.bloom);
+  return out.multiplyScalar(0.82 + r1 * 0.36);
+}
+// Lamp: leaves that fall. Of the leaf-dropping trees (every species but the evergreens), the share coming down today
+// (their leaves between all on and all off: falling-leaves.js drifts leaves down by the camera in proportion) and the
+// share of their leaves lying on the ground (the lawns' litter, cityUniforms.uLitter): it builds as they drop and is
+// raked up (or snowed over) through the first half of December. Spring's leaves don't fall.
+let fallingNow = 0;
+function fallOfLeaves(leaves) {
+  let falling = 0, down = 0, n = 0;
+  SPECIES.forEach((sp, s) => {
+    if (TURNS[sp.name] == null) return;
+    const { x, y, z } = leaves[s];
+    for (let k = 0; k < 16; k++) {
+      const L = Math.max(z, clamp01(x + y * (k + 0.5) / 16));
+      if (L > z + 0.02 && L < 0.98) falling++;
+      down += 1 - L;
+    }
+    n += 16;
+  });
+  if (DAY < 250) return [0, 0];
+  return [falling / n, (down / n) * clamp01((352 - DAY) / 18)];
+}
+// The leaf-dropping trees' crowns over the town, a LITTER_SIZE square map of 0 to 1 the lawns read (cityUniforms
+// .litterMap, uLitterBox), baked once from every tree's site; also read here for the falling leaves (litterAt)
+let litter = null;
+function bakeLitter(sites) {
+  const tex = cityUniforms.litterMap, N = tex.image.width;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const t of sites) {
+    if (t.x < minX) minX = t.x; if (t.x > maxX) maxX = t.x;
+    if (t.z < minZ) minZ = t.z; if (t.z > maxZ) maxZ = t.z;
+  }
+  if (!(maxX > minX && maxZ > minZ)) return;
+  minX -= 30; minZ -= 30; maxX += 30; maxZ += 30;
+  const cx = (maxX - minX) / N, cz = (maxZ - minZ) / N;
+  const sum = new Float32Array(N * N);
+  for (const t of sites) {
+    if ((t.species | 0) === 6) continue;
+    // the leaves lie a little past the crown's edge
+    const r = Math.min(10, Math.max(3, (t.height ? t.height * 0.32 : 5 * (t.scale || 1)))) + 2;
+    const i0 = Math.max(0, Math.floor((t.x - r - minX) / cx)), i1 = Math.min(N - 1, Math.floor((t.x + r - minX) / cx));
+    const j0 = Math.max(0, Math.floor((t.z - r - minZ) / cz)), j1 = Math.min(N - 1, Math.floor((t.z + r - minZ) / cz));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const d = Math.hypot(minX + (i + 0.5) * cx - t.x, minZ + (j + 0.5) * cz - t.z) / r;
+      if (d < 1) sum[j * N + i] += (1 - d * d) * 0.8;
+    }
+  }
+  const data = tex.image.data;
+  for (let k = 0; k < data.length; k++) data[k] = Math.round(255 * Math.min(1, sum[k]));
+  tex.needsUpdate = true;
+  cityUniforms.uLitterBox.value.set(minX, minZ, 1 / (maxX - minX), 1 / (maxZ - minZ));
+  litter = { data, N, minX, minZ, cx, cz };
+}
+// How thick the leaf-dropping trees' crowns are over (x, z), 0 to 1
+function litterAt(x, z) {
+  if (!litter) return 0;
+  const { data, N, minX, minZ, cx, cz } = litter;
+  const i = Math.floor((x - minX) / cx), j = Math.floor((z - minZ) / cz);
+  return i < 0 || j < 0 || i >= N || j >= N ? 0 : data[j * N + i] / 255;
+}
+// The share of the leaf-dropping trees' leaves coming down today, 0 to 1
+const leavesFalling = () => fallingNow;
+
+// the planted fields' re-tinting, for a new day
+const seasonFields = new Set();
+onSeason((day) => {
+  DAY = day;
+  const leaves = cityUniforms.uTreeLeaves.array;
+  SPECIES.forEach((sp, s) => leavesOf(sp.name, leaves[s]));
+  leaves[7].set(1, 0, 1, 0); // the shrubs and hedges keep theirs
+  const [falling, down] = fallOfLeaves(leaves);
+  fallingNow = falling;
+  cityUniforms.uLitter.value = down;
+  for (const retint of seasonFields) retint();
+  log(`[trees] day ${day} of the year: ${SPECIES.map((sp, s) => `${sp.name} ${Math.round(100 * clamp01(Math.max(leaves[s].z, leaves[s].x + leaves[s].y * 0.5)))}%`).join(', ')} in leaf; ${Math.round(falling * 100)}% of them coming down, ${Math.round(down * 100)}% on the ground`);
+});
 
 // =====================================================================================================================
 // 3. SKELETON
@@ -842,7 +949,7 @@ function placeCards(sp, branches, lod, tileMeters, rng, crown) {
 
 // One species / variant: [lod0, lod1, lod2] geometries. Bare (winter): no leaf cards, and near by the twigs and
 // branches the cards stood for drawn as bark instead (far off, the limbs alone)
-function buildTreeGeometries(speciesIndex, variant, tileMeters, bare = false) {
+function buildTreeGeometries(speciesIndex, variant, tileMeters) {
   const sp = SPECIES[speciesIndex];
   const seed = 7919 * (speciesIndex + 1) + 104729 * (variant + 1);
   const branches = growTree(sp, seed);
@@ -872,9 +979,7 @@ function buildTreeGeometries(speciesIndex, variant, tileMeters, bare = false) {
     const aoAt = (p) => crown.barkAO(p);
     // Small twigs are drawn in the leaf cards; simplify the remaining bark with distance.
     for (const b of branches) {
-      if (bare && lod < 2 && b.level === 3 - lod) {
-        addTube(gb, b, 3, b.pts.length - 1, aoAt, swayWeight);
-      } else if (lod === 0 && b.level <= 2) {
+      if (lod === 0 && b.level <= 2) {
         addTube(gb, b, [5, 3, 3][b.level], [2, 3, 4][b.level], aoAt, swayWeight);
       } else if (lod === 1 && b.level <= 1) {
         addTube(gb, b, 3, b.level === 0 ? 4 : 8, aoAt, swayWeight);
@@ -882,13 +987,13 @@ function buildTreeGeometries(speciesIndex, variant, tileMeters, bare = false) {
         addTube(gb, b, 3, b.pts.length - 1, aoAt, swayWeight);
       }
     }
-    const cards = bare ? [] : (lod === 0 ? cards0 : lod === 1 ? placeCards(sp, branches, lod, tileMeters, rng, crown) : [])
+    const cards = (lod === 0 ? cards0 : lod === 1 ? placeCards(sp, branches, lod, tileMeters, rng, crown) : [])
       .map((c) => ({ ...c, mirror: rng() < 0.5, random: rng() }))
       .filter((_, i) => i % 2 === 0);
     for (const c of cards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, c.mirror, c.random, crown);
-    if (!bare) for (const c of canopyCards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, c.mirror, c.random, crown);
+    for (const c of canopyCards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, c.mirror, c.random, crown);
     const g = gb.build();
-    g.userData = { species: sp.name, variant, lod, cards: bare ? 0 : cards.length + canopyCards.length, triangles: gb.idx.length / 3, bare };
+    g.userData = { species: sp.name, variant, lod, cards: cards.length + canopyCards.length, triangles: gb.idx.length / 3 };
     geos[lod] = g;
   }
   return geos;
@@ -964,12 +1069,10 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
   const group = new THREE.Group();
   group.name = 'Trees';
   const { atlas, material } = sharedLeaves();
+  bakeLitter(sites);
 
   // Geometries: [species][variant][lod]
   const geos = SPECIES.map((_, s) => [0, 1].map((v) => buildTreeGeometries(s, v, atlas.tileMeters)));
-  // and bare ones, for a species with trees bare today (on the merged tiers, a species bare as a whole)
-  const bareGeos = SPECIES.map((_, s) => (MERGE_TREES ? BARE_SPECIES[s] : SOME_BARE[s])
-    ? [0, 1].map((v) => buildTreeGeometries(s, v, atlas.tileMeters, true)) : null);
   const clearOfBuildings = createTreeClearance(colliders);
   const treeBounds = geos.map((variants) => variants.map((levels) => {
     const bounds = new THREE.Box3();
@@ -999,12 +1102,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
   const meshIndex = SPECIES.map((sp, s) => ({
     l0: [0, 1].map((v) => makeType(geos[s][v][0], `Trees_${sp.name}_v${v}_lod0`)),
     l1: [0, 1].map((v) => makeType(geos[s][v][1], `Trees_${sp.name}_v${v}_lod1`)),
-    l2: [0, 1].map((v) => makeType(geos[s][v][2], `Trees_${sp.name}_v${v}_lod2`)),
-    bare: bareGeos[s] && {
-      l0: [0, 1].map((v) => makeType(bareGeos[s][v][0], `Trees_${sp.name}_bare_v${v}_lod0`)),
-      l1: [0, 1].map((v) => makeType(bareGeos[s][v][1], `Trees_${sp.name}_bare_v${v}_lod1`)),
-      l2: [0, 1].map((v) => makeType(bareGeos[s][v][2], `Trees_${sp.name}_bare_v${v}_lod2`))
-    }
+    l2: [0, 1].map((v) => makeType(geos[s][v][2], `Trees_${sp.name}_v${v}_lod2`))
   }));
   // Lamp: on the Xbox, where setting up each draw is what costs, a level's shapes of every species are one geometry
   // (each vertex knowing its shape, `aKind`) and each tree its shape (`aTreeKind`): the material folds the others away,
@@ -1013,7 +1111,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     const parts = [];
     let verts = 0, tris = 0;
     geos.forEach((variants, s) => variants.forEach((levels, v) => {
-      const g = (bareGeos[s] ? bareGeos[s][v] : levels)[l];
+      const g = levels[l];
       parts.push({ g, kind: s * 2 + v });
       verts += g.attributes.position.count;
       tris += g.index.count / 3;
@@ -1060,13 +1158,13 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     if (list.length > 20) t.height = list[Math.floor((0.35 + hashPos(t.x, 2.7, t.z) * 0.65) * (list.length - 1))];
   }
   const dummy = new THREE.Object3D();
-  const tint = new THREE.Color(), fallTint = new THREE.Color();
+  const tint = new THREE.Color();
+  // a site's random fractions (its size, turn and tint), as placeOf takes them
+  const randomsOf = (t) => [hashPos(t.x, 1.3, t.z), hashPos(t.z, 7.1, t.x), hashPos(t.x + t.z, 3.3, 0.7)];
   // Where site t's tree stands (left in `dummy`): { sp, variant, s, y }, or null where a building is in the way
   function placeOf(t, cleared = false) {
     const sp = Math.min(SPECIES.length - 1, Math.max(0, t.species || 0));
-    const r1 = hashPos(t.x, 1.3, t.z);
-    const r2 = hashPos(t.z, 7.1, t.x);
-    const r3 = hashPos(t.x + t.z, 3.3, 0.7);
+    const [r1, r2, r3] = randomsOf(t);
     const variant = hashPos(t.x, 5.9, t.z) < 0.5 ? 0 : 1;
     // a surveyed tree grows to its real height (t.height, metres) from its kind's height at scale 1
     // (its real height as given, but for a typo past 45 m, taller than any tree in Michigan)
@@ -1140,13 +1238,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     trunkR[i] = SPECIES[sp].trunk.r * dummy.scale.x;
     treeH[i] = heightOf[sp][variant] * dummy.scale.y;
     dummy.matrix.toArray(mats, i * 16);
-    const { tints, fall, name } = SPECIES[sp];
-    tint.setHex(tints[Math.floor(r3 * tints.length * 0.9999)]);
-    const season = seasonOf(name, r2, r1);
-    if (season.fresh > 0) tint.lerp(FRESH, season.fresh * 0.6);
-    if (season.turned > 0) tint.lerp(fallTint.setHex(fall[Math.floor(r3 * fall.length * 0.9999)]), season.turned);
-    if (season.browned > 0) tint.lerp(BROWN, season.browned * 0.8);
-    tint.multiplyScalar(0.82 + r1 * 0.36);
+    seasonTint(sp, r1, r2, r3, tint);
     data.set([tint.r, tint.g, tint.b, sp + r2 * 0.999], i * 4);
     px[i] = t.x;
     py[i] = y + 6 * s;
@@ -1169,8 +1261,7 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     };
     const near = cellOf[i] = cellAt(TREE_CELL_SIZE, false);
     const far = farOf[i] = cellAt(FAR_CELL_SIZE, true);
-    const bare = MERGE_TREES ? BARE_SPECIES[sp] : season.bare;
-    const mi = bare && meshIndex[sp].bare || meshIndex[sp];
+    const mi = meshIndex[sp];
     const treeTypes = [mi.l0[variant], mi.l1[variant], mi.l2[variant]];
     kindOf[i] = sp * 2 + variant;
     for (let l = 0; l < 3; l++) {
@@ -1472,8 +1563,23 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
     rebuild();
   }
 
+  // A new day: every tree's tint again (its leaves on or off are the material's), drawn at its level as it is
+  function retint() {
+    for (const [t, i] of indexOf) {
+      const [r1, r2, r3] = randomsOf(t);
+      seasonTint(Math.floor(data[i * 4 + 3]), r1, r2, r3, tint);
+      data[i * 4] = tint.r;
+      data[i * 4 + 1] = tint.g;
+      data[i * 4 + 2] = tint.b;
+    }
+    for (const cell of cellList) { dirtyCells.add(cell); dirtyCells.add(cell.farCell); }
+    rebuild();
+  }
+  seasonFields.add(retint);
+
   // the meshes' own buffers given back (the trees' shapes are shared, and stay)
   function dispose() {
+    seasonFields.delete(retint);
     group.removeFromParent();
     for (const mesh of instanced) {
       dropBuffers([mesh.instanceMatrix, mesh.geometry.attributes.aTreeData, mesh.geometry.attributes.aTreeKind].filter(Boolean));
@@ -1739,7 +1845,8 @@ function createShrubs(field, { bushes = [], hedges = [] } = {}) {
     list.forEach((b, i) => {
       mesh.setMatrixAt(i, m4.compose(p.set(b.x, b.y, b.z), q.setFromAxisAngle(UP, b.yaw), sc.set(b.w, b.h, b.len)));
       tint.copy(b.color).multiplyScalar(0.9);
-      data.set([tint.r, tint.g, tint.b, 3 + hashPos(b.x, b.y, b.z) * 0.999], i * 4);
+      // (as a maple, but kind 7: the season leaves their leaves on, cityUniforms.uTreeLeaves)
+      data.set([tint.r, tint.g, tint.b, 7 + hashPos(b.x, b.y, b.z) * 0.999], i * 4);
     });
     geo.setAttribute('aTreeData', new THREE.InstancedBufferAttribute(data, 4));
     mesh.instanceMatrix.needsUpdate = true;
@@ -1752,4 +1859,4 @@ function createShrubs(field, { bushes = [], hedges = [] } = {}) {
   return group;
 }
 
-export { createShrubs, sharedLeaves, createTreeField, createLeafAtlas, buildTreeGeometries, SPECIES as TREE_SPECIES };
+export { createShrubs, sharedLeaves, createTreeField, litterAt, leavesFalling, createLeafAtlas, buildTreeGeometries, SPECIES as TREE_SPECIES };

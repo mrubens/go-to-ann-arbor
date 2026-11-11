@@ -1,9 +1,12 @@
 import * as THREE from 'three/webgpu';
-import { positionWorld, normalWorld, cameraPosition, vertexColor, mx_noise_float, smoothstep, step, mix, max, abs, floor, fract, float, vec3 } from 'three/tsl';
+import { positionWorld, normalWorld, cameraPosition, vertexColor, mx_noise_float, smoothstep, step, mix, max, abs, floor, fract, float, vec3, color } from 'three/tsl';
 import { builder, groundOf, strips, landmarkGlass } from './campus-landmarks.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { polygonContains } from './building-collision.js';
 import { groundHeight } from './terrain.js';
+import { LIFT } from './ground-lifts.js';
+import { cityUniforms } from './tsl-materials.js';
+import { XBOX } from './device-tier.js';
 
 // Lamp: the rest of Ann Arbor's landmark buildings, modelled by hand on the city survey's own outline of each (found by
 // a point inside it, so the model stands exactly where the survey's plain block stood, which it replaces):
@@ -25,6 +28,8 @@ import { groundHeight } from './terrain.js';
 //   classroom pods joined by a long diagonal spine, curved wings around them, the gym block to the north, glass dome
 //   skylights over the pods and ribbon windows wrapping every curve.
 // - Atomic Object (123 N Ashley, 1926): cream brick with a shaped parapet, tall glass bays and punched windows.
+// - Nickels Arcade (1915-18): the terra cotta State St front with its arched portico, the yellow brick Maynard end, and
+//   the gable-skylit gallery between them, shopfronts down both sides, that you can walk through.
 // Colliders follow each outline in strips, so the neighbours stay; the survey's block is dropped by `replaces`.
 
 const LIME = [0.84, 0.8, 0.72];
@@ -833,6 +838,271 @@ function atomicObject(B, T) {
   return { s, maxY: Y(H + 2.4) };
 }
 
+// Nickels Arcade (326-330 S State St, Herman Pipp, 1915-18; National Register 1987): a three-storey block with a
+// 261 ft skylit gallery through it from State St to Maynard St. As Wikipedia and SAH Archipedia describe it: on State a
+// three-bay front in buff glazed terra cotta, the middle bay the open portico (here its tall round arch between giant
+// pilasters, shop and office windows in the flanking bays); on Maynard a plainer front of yellow brick with terra cotta
+// trim; inside, a gable skylight of metal-framed wire-glass panels over the passage, shopfronts two storeys high (with
+// a mezzanine) down both sides with office windows above, the gallery split into three by segmental arches (the State
+// St third carrying on the front's terra cotta, the Maynard one a vestibule), and a floor of square red tiles in black
+// borders. No shop names: the shopfronts are plain. Walkable: its colliders are the two shop ranges either side of the
+// passage, the arches' piers and the roof over the gallery, so you can walk it end to end.
+const NA_TERRA = [0.86, 0.8, 0.66];
+const NA_TERRA_DARK = [0.74, 0.68, 0.55];
+const NA_BRICK = [0.8, 0.67, 0.43];
+const NA_PLASTER = [0.82, 0.78, 0.69];
+const NA_WOOD = [0.16, 0.2, 0.17];
+const NA_IRON = [0.13, 0.14, 0.14];
+const NA_TILE = [0.52, 0.18, 0.13];
+const NA_JOINT = [0.05, 0.05, 0.05];
+const NA_SHOP = [0.42, 0.34, 0.24];
+const NA_OFFICE = [0.3, 0.33, 0.36];
+function nickelsArcade(B, T) {
+  const s = surveyAt(576, 140.25);
+  if (!s) return null;
+  // u along the passage from Maynard (west, u 0) to State (east, u L); v across it, south positive
+  const F = wallFrame(535.5, 141, 616.25, 139.75, 0, 1), L = F.L;
+  const HW = 10.1, PW = 2.4; // the block's half width, the passage's (between the shopfronts' walls)
+  const P = (u, v) => [F.ax + F.tx * u + F.nx * v, F.az + F.tz * u + F.nz * v];
+  const gAt = (u, v = 0) => groundHeight(...P(u, v));
+  const gW = gAt(-1.5), gE = gAt(L + 1.5);
+  let gMin = Math.min(gW, gE);
+  for (let u = 0; u <= L; u += 4) for (const v of [-HW, 0, HW]) gMin = Math.min(gMin, gAt(u, v));
+  // the floors are level from the higher street; the shopfronts and fronts come down to the ground in front of them
+  const gT = Math.max(gW, gE), H = (y) => gT + y;
+  // (over the city's paved slab, which is drawn 0.16 m over the ground: ground-lifts.js)
+  const floorAt = (u) => gAt(Math.max(0, Math.min(L, u))) + LIFT.lawn + 0.03;
+  const bx = (u0, u1, y0, y1, v0, v1, col, m = B.stone) => T.ebox(F, u0, u1, y0, y1, v0, v1, col, m);
+  const W3 = (u, y, v) => { const [x, z] = P(u, v); return [x, y, z]; };
+  const ROOF_Y = 10.6, EAVE = 10.6, RIDGE = 12.0, TOP = 12.4;
+
+  // the two ranges either side of the passage, the roof over them, parapets round the outside
+  for (const sg of [-1, 1]) {
+    bx(0, L, gMin - 1, H(ROOF_Y), sg * PW, sg * HW, NA_PLASTER);
+    bx(0, L, H(ROOF_Y), H(ROOF_Y + 0.05), sg * PW, sg * HW, ROOF);
+    bx(0, L, H(ROOF_Y), H(TOP - 0.9), sg * (HW - 0.3), sg * HW, NA_PLASTER);
+    // the skylight's curb along the passage
+    bx(0, L, H(ROOF_Y - 0.1), H(ROOF_Y + 0.3), sg * PW, sg * (PW + 0.35), NA_TERRA_DARK);
+    // rooftop units back from the streets
+    bx(30 + sg * 12, 34 + sg * 12, H(ROOF_Y), H(ROOF_Y + 1.4), sg * 5.5, sg * 8, [0.6, 0.61, 0.61]);
+  }
+
+  // the floor: red square tiles set in black, a row every 0.6 m following the ground (and a little out of each end)
+  const TL = 0.6, TN = 8, tw = (2 * PW) / TN;
+  const flat = (ua, ub, va, vb, yy, col) => B.quad(B.stone, W3(ua, yy, va), W3(ua, yy, vb), W3(ub, yy, vb), W3(ub, yy, va), col);
+  for (let u = -0.6; u < L + 0.6; u += TL) {
+    const y = floorAt(u + TL / 2);
+    flat(u, u + TL, -PW, PW, y, NA_JOINT);
+    for (let k = 0; k < TN; k++) flat(u + 0.035, u + TL - 0.035, -PW + k * tw + 0.035, -PW + (k + 1) * tw - 0.035, y + 0.012, NA_TILE);
+  }
+
+  // a box between two points in the (v, y) plane at u, w along u, t thick (a rafter or a bar)
+  const beam = (u, va, ya, vb, yb, w, t, col) => {
+    const dv = vb - va, dy = yb - ya, l = Math.hypot(dv, dy) || 1, ov = (-dy / l) * t, oy = (dv / l) * t;
+    const c = [[va, ya], [vb, yb], [vb - ov, yb - oy], [va - ov, ya - oy]];
+    const p = (k, du) => W3(u + du, c[k][1], c[k][0]);
+    for (let k = 0; k < 4; k++) { const j = (k + 1) % 4; B.quad(B.stone, p(k, -w / 2), p(j, -w / 2), p(j, w / 2), p(k, w / 2), col); }
+    B.quad(B.stone, p(0, -w / 2), p(3, -w / 2), p(2, -w / 2), p(1, -w / 2), col);
+    B.quad(B.stone, p(0, w / 2), p(1, w / 2), p(2, w / 2), p(3, w / 2), col);
+  };
+  // the gable skylight: wire glass between iron rafters every 1.5 m, glazing bars, purlins, the ridge and eave bars
+  const n = Math.round(L / 1.5), du = L / n;
+  for (let k = 0; k < n; k++) {
+    const u0 = k * du, u1 = u0 + du;
+    for (const sg of [-1, 1]) {
+      B.quad(B.skylight, W3(u0, H(EAVE), sg * PW), W3(u1, H(EAVE), sg * PW), W3(u1, H(RIDGE), 0), W3(u0, H(RIDGE), 0), [0.8, 0.86, 0.82]);
+      beam(u0 + du / 2, sg * PW, H(EAVE) + 0.02, 0, H(RIDGE) + 0.02, 0.04, 0.05, NA_IRON);
+      beam(u0, sg * PW, H(EAVE) - 0.02, 0, H(RIDGE) - 0.02, 0.09, 0.16, NA_IRON);
+    }
+  }
+  for (const sg of [-1, 1]) beam(L, sg * PW, H(EAVE) - 0.02, 0, H(RIDGE) - 0.02, 0.09, 0.16, NA_IRON);
+  bx(0, L, H(RIDGE) - 0.1, H(RIDGE) + 0.08, -0.08, 0.08, NA_IRON);
+  for (const sg of [-1, 1]) {
+    bx(0, L, H(EAVE) - 0.16, H(EAVE) + 0.02, sg * (PW - 0.1), sg * PW, NA_IRON);
+    for (const f of [1 / 3, 2 / 3]) {
+      const v = sg * PW * (1 - f), y = H(EAVE + (RIDGE - EAVE) * f);
+      bx(0, L, y - 0.08, y - 0.02, v - 0.03, v + 0.03, NA_IRON);
+    }
+  }
+
+  // an arch's soffit: segmental, half span hs rising `rise` from the spring at ys (round when rise = hs)
+  const soffit = (hs, rise, ys) => {
+    const R = (hs * hs + rise * rise) / (2 * rise), yc = ys + rise - R;
+    return (v) => yc + Math.sqrt(Math.max(0, R * R - v * v));
+  };
+  // the wall over an arch, from its soffit (and a band `ring` deep round it) up to yt, in slices across it
+  // (each slice's underside runs straight from one end's height on the curve to the other's, so the arch reads smooth)
+  const vyPrism = (u0, u1, q, col, m = B.stone) => {
+    const p = (k, u) => W3(u, q[k][1], q[k][0]);
+    for (let k = 0; k < 4; k++) { const j = (k + 1) % 4; B.quad(m, p(k, u0), p(j, u0), p(j, u1), p(k, u1), col); }
+    B.quad(m, p(0, u0), p(1, u0), p(2, u0), p(3, u0), col);
+    B.quad(m, p(3, u1), p(2, u1), p(1, u1), p(0, u1), col);
+  };
+  const archFill = (u0, u1, hs, rise, ys, yt, col, m, ring, ringCol, ringU) => {
+    const f = soffit(hs, rise, ys), N = Math.max(16, Math.round(hs * 8));
+    for (let k = 0; k < N; k++) {
+      const va = -hs + (2 * hs * k) / N, vb = va + (2 * hs) / N, ya = f(va), yb = f(vb);
+      vyPrism(u0, u1, [[va, ya + ring], [vb, yb + ring], [vb, yt], [va, yt]], col, m);
+      vyPrism(ringU[0], ringU[1], [[va, ya], [vb, yb], [vb, yb + ring], [va, ya + ring]], ringCol);
+    }
+  };
+
+  // the segmental arches across the gallery: at the State St third, and the Maynard vestibule's
+  const arches = [7.3, L - 26.7];
+  for (const ua of arches) {
+    const a0 = ua - 0.35, a1 = ua + 0.35;
+    for (const sg of [-1, 1]) {
+      bx(a0, a1, floorAt(ua) - 0.1, H(7.6), sg * PW, sg * (PW - 0.45), NA_TERRA);
+      bx(a0 - 0.08, a1 + 0.08, floorAt(ua) - 0.1, floorAt(ua) + 0.5, sg * PW, sg * (PW - 0.52), NA_TERRA_DARK);
+      bx(a0 - 0.08, a1 + 0.08, H(7.45), H(7.75), sg * PW, sg * (PW - 0.55), NA_TERRA_DARK);
+    }
+    archFill(a0, a1, PW - 0.45, 1.0, H(7.6), H(EAVE), NA_TERRA, B.stone, 0.3, NA_TERRA_DARK, [a0 - 0.06, a1 + 0.06]);
+    bx(a0 - 0.1, a1 + 0.1, H(8.45), H(9.0), -0.25, 0.25, NA_TERRA_DARK);
+  }
+
+  // the shopfronts down each side, in bays of about 4.2 m between terra cotta piers, and the office windows over them
+  const sections = [[0.6, 7.3 - 0.45], [7.3 + 0.45, L - 26.7 - 0.45], [L - 26.7 + 0.45, L - 0.6]];
+  for (const sg of [-1, 1]) {
+    const v = (d) => sg * (PW - d);
+    for (const [si, [s0, s1]] of sections.entries()) {
+      const face = si === 2 ? NA_TERRA : NA_PLASTER;
+      // the gallery's wall over the shops, and its cornices
+      bx(s0 - 0.3, s1 + 0.3, H(5.2), H(EAVE), v(0), v(0.02), face);
+      bx(s0 - 0.3, s1 + 0.3, H(5.15), H(5.5), v(0), v(0.3), NA_TERRA_DARK);
+      bx(s0 - 0.3, s1 + 0.3, H(9.0), H(9.4), v(0), v(0.38), NA_TERRA_DARK);
+      const nb = Math.max(1, Math.round((s1 - s0) / 4.2)), w = (s1 - s0) / nb;
+      for (let k = 0; k <= nb; k++) bx(s0 + k * w - 0.2, s0 + k * w + 0.2, floorAt(s0 + k * w) - 0.1, H(9.0), v(0), v(0.2), NA_TERRA);
+      for (let k = 0; k < nb; k++) {
+        const u0 = s0 + k * w + 0.2, u1 = u0 + w - 0.4, c = (u0 + u1) / 2, f = floorAt(c);
+        const left = (k + (sg > 0 ? 1 : 0) + si) % 2 === 0, door = left ? [u0 + 0.1, u0 + 1.15] : [u1 - 1.15, u1 - 0.1];
+        const g0 = left ? door[1] + 0.06 : u0 + 0.05, g1 = left ? u1 - 0.05 : door[0] - 0.06;
+        // a dark-painted wooden front: bulkhead, display glass, the door, the transom lights, a fascia and the mezzanine
+        bx(u0, u1, f - 0.06, H(5.2), v(0), v(0.02), NA_WOOD);
+        bx(g0, g1, f - 0.06, f + 0.5, v(0), v(0.16), NA_WOOD);
+        bx(g0, g1, f + 0.5, f + 2.7, v(0.1), v(0.12), NA_SHOP, B.glass);
+        bx(door[0], door[1], f, f + 2.25, v(0.04), v(0.06), [0.25, 0.22, 0.18], B.glass);
+        for (const ue of [door[0] - 0.06, door[1]]) bx(ue, ue + 0.06, f, f + 2.7, v(0), v(0.14), NA_WOOD);
+        bx(door[0], door[1], f + 2.25, f + 2.32, v(0), v(0.14), NA_WOOD);
+        bx(u0, u1, f + 2.7, f + 2.82, v(0), v(0.16), NA_WOOD);
+        bx(u0, u1, f + 2.82, f + 3.4, v(0.1), v(0.12), [0.62, 0.6, 0.5], B.glass);
+        for (let t = u0 + 0.45; t < u1 - 0.2; t += 0.45) bx(t - 0.02, t + 0.02, f + 2.82, f + 3.4, v(0.1), v(0.15), NA_WOOD);
+        bx(u0, u1, f + 3.4, f + 3.95, v(0), v(0.22), NA_WOOD);
+        bx(u0, u1, f + 3.95, H(4.95), v(0.1), v(0.12), NA_OFFICE, B.glass);
+        for (const t of [u0 + (u1 - u0) / 3, u0 + (2 * (u1 - u0)) / 3]) bx(t - 0.04, t + 0.04, f + 3.95, H(4.95), v(0.1), v(0.16), NA_WOOD);
+        bx(u0, u1, H(4.95), H(5.15), v(0), v(0.18), NA_WOOD);
+        // two office windows above, a sash bar and a stone sill each
+        for (const o of [-0.25, 0.25]) {
+          const wc = c + o * (u1 - u0), a = wc - 0.6, b = wc + 0.6;
+          bx(a, b, H(6.0), H(8.3), v(0.0), v(0.03), NA_OFFICE, B.glass);
+          bx(a - 0.06, b + 0.06, H(5.9), H(6.0), v(0), v(0.12), NA_TERRA_DARK);
+          bx(a - 0.06, b + 0.06, H(8.3), H(8.4), v(0), v(0.08), NA_WOOD);
+          for (const e of [a - 0.06, b]) bx(e, e + 0.06, H(6.0), H(8.3), v(0), v(0.08), NA_WOOD);
+          bx(a, b, H(7.12), H(7.18), v(0), v(0.06), NA_WOOD);
+        }
+      }
+    }
+  }
+  // lamps hung down the middle on rods from the ridge
+  for (let u = 4; u < L - 2; u += 6.5) {
+    if (arches.some((a) => Math.abs(a - u) < 1.2)) continue;
+    bx(u - 0.02, u + 0.02, H(7.7), H(RIDGE - 0.1), -0.02, 0.02, NA_IRON);
+    bx(u - 0.2, u + 0.2, H(7.2), H(7.7), -0.2, 0.2, [1, 0.86, 0.62], B.glass);
+    bx(u - 0.26, u + 0.26, H(7.65), H(7.75), -0.26, 0.26, NA_IRON);
+  }
+
+  // State St: buff terra cotta in three bays, giant pilasters, the round-arched portico in the middle, a cornice and
+  // a raised parapet over the arch (no lettering)
+  const fe = (u0, u1, y0, y1, v0, v1, col, m) => bx(L + u0, L + u1, y0, y1, v0, v1, col, m);
+  fe(-0.02, 0.02, gE - 0.5, H(11.75), -HW, -2.5, NA_TERRA);
+  fe(-0.02, 0.02, gE - 0.5, H(11.75), 2.5, HW, NA_TERRA);
+  archFill(L - 0.6, L + 0.02, 2.5, 2.5, H(5.6), H(11.75), NA_TERRA, B.stone, 0.4, NA_TERRA_DARK, [L, L + 0.18]);
+  fe(0, 0.3, H(7.85), H(8.6), -0.3, 0.3, NA_TERRA_DARK); // the keystone
+  // a fanlight in the arch's head over an iron transom bar
+  {
+    const f = soffit(2.5, 2.5, H(5.6)), N = 16;
+    fe(-0.3, -0.18, H(5.5), H(5.68), -2.5, 2.5, NA_IRON);
+    for (let k = 0; k < N; k++) {
+      const va = -2.5 + (5 * k) / N, vb = va + 5 / N;
+      fe(-0.28, -0.26, H(5.68), f((va + vb) / 2), va, vb, [0.55, 0.6, 0.62], B.aoGlass);
+    }
+    for (const vv of [-1.25, 0, 1.25]) fe(-0.3, -0.24, H(5.68), f(vv), vv - 0.03, vv + 0.03, NA_IRON);
+  }
+  for (const sg of [-1, 1]) {
+    // giant pilasters either side of the arch and at the corners, base blocks and capitals
+    for (const [a, b] of [[2.5, 3.5], [HW - 0.8, HW]]) {
+      fe(0, 0.4, gE - 0.4, H(10.5), sg * a, sg * b, NA_TERRA);
+      fe(0, 0.5, gE - 0.4, H(0.9), sg * (a - 0.08), sg * (b + 0.08), NA_TERRA_DARK);
+      fe(0, 0.55, H(10.2), H(10.6), sg * (a - 0.1), sg * (b + 0.1), NA_TERRA_DARK);
+    }
+    // the flanking bay: shop window and transom, a panel, then the second- and third-floor windows in threes
+    const v0 = sg * 3.6, v1 = sg * (HW - 0.9), vm = (v0 + v1) / 2, hw = Math.abs(v1 - v0) / 2;
+    const gs = gAt(L + 1.5, vm);
+    fe(0, 0.16, gs - 0.3, gs + 0.5, v0, v1, NA_TERRA_DARK);
+    fe(0.04, 0.06, gs + 0.5, H(3.4), v0, v1, NA_SHOP, B.glass);
+    for (const t of [-hw / 3, hw / 3]) fe(0.04, 0.12, gs + 0.5, H(3.4), vm + t - 0.04, vm + t + 0.04, NA_WOOD);
+    fe(0, 0.14, H(3.4), H(3.55), v0, v1, NA_WOOD);
+    fe(0.04, 0.06, H(3.55), H(4.5), v0, v1, [0.62, 0.6, 0.5], B.glass);
+    for (let t = -hw + 0.5; t < hw - 0.2; t += 0.5) fe(0.04, 0.1, H(3.55), H(4.5), vm + t - 0.02, vm + t + 0.02, NA_WOOD);
+    fe(0, 0.2, H(4.5), H(4.7), v0, v1, NA_TERRA_DARK);
+    fe(0, 0.12, H(4.9), H(5.6), vm - hw + 0.3, vm + hw - 0.3, NA_TERRA_DARK);
+    for (const [y0, y1] of [[6.0, 8.3], [8.9, 10.0]]) {
+      fe(-0.2, -0.18, H(y0), H(y1), vm - hw + 0.25, vm + hw - 0.25, NA_OFFICE, B.aoGlass);
+      for (const t of [-hw + 0.25, -hw / 3, hw / 3, hw - 0.25]) fe(-0.2, 0.02, H(y0), H(y1), vm + t - 0.18, vm + t + 0.18, NA_TERRA);
+      fe(-0.2, 0.12, H(y0 - 0.15), H(y0), vm - hw + 0.1, vm + hw - 0.1, NA_TERRA_DARK);
+      fe(-0.2, 0.02, H(y1), H(y1 + 0.15), vm - hw + 0.25, vm + hw - 0.25, NA_TERRA);
+    }
+  }
+  // the entablature, cornice and parapet over all three bays, raised over the arch
+  fe(0, 0.45, H(10.6), H(11.3), -HW, HW, NA_TERRA);
+  fe(0, 0.75, H(11.3), H(11.55), -HW - 0.1, HW + 0.1, NA_TERRA_DARK);
+  fe(-0.3, 0.3, H(11.55), H(TOP), -HW, HW, NA_TERRA);
+  fe(-0.3, 0.35, H(TOP), H(TOP + 0.12), -HW, HW, NA_TERRA_DARK);
+  fe(-0.3, 0.3, H(TOP), H(13.1), -3.5, 3.5, NA_TERRA);
+  fe(-0.32, 0.36, H(13.1), H(13.25), -3.6, 3.6, NA_TERRA_DARK);
+  fe(0.3, 0.36, H(11.8), H(12.9), -2.9, 2.9, NA_TERRA_DARK);
+
+  // Maynard: yellow brick, terra cotta trim, a lower round arch into the vestibule, shop windows either side, two rows
+  // of paired windows, a terra cotta cornice
+  const fw = (u0, u1, y0, y1, v0, v1, col, m) => bx(-u1, -u0, y0, y1, v0, v1, col, m);
+  fw(-0.02, 0.02, gW - 0.5, H(TOP - 0.3), -HW, -2.4, NA_BRICK, B.brick);
+  fw(-0.02, 0.02, gW - 0.5, H(TOP - 0.3), 2.4, HW, NA_BRICK, B.brick);
+  archFill(-0.02, 0.5, 2.4, 2.4, H(3.6), H(TOP - 0.3), NA_BRICK, B.brick, 0.35, NA_TERRA, [-0.15, 0]);
+  fw(0, 0.22, H(5.65), H(6.3), -0.28, 0.28, NA_TERRA_DARK);
+  for (const sg of [-1, 1]) {
+    fw(0, 0.3, gW - 0.4, H(3.6), sg * 2.4, sg * 3.0, NA_TERRA);
+    const v0 = sg * 3.6, v1 = sg * (HW - 0.8), vm = (v0 + v1) / 2, hw = Math.abs(v1 - v0) / 2;
+    const gs = gAt(-1.5, vm);
+    fw(0, 0.14, gs - 0.3, gs + 0.5, v0, v1, NA_TERRA_DARK);
+    fw(0.03, 0.05, gs + 0.5, H(3.3), v0, v1, NA_SHOP, B.glass);
+    fw(0, 0.12, H(3.3), H(3.5), v0 - sg * 0.1, v1 + sg * 0.1, NA_TERRA);
+    for (const [y0, y1] of [[5.0, 7.3], [8.1, 10.0]]) {
+      for (const o of [-0.5, 0.5]) {
+        const c = vm + o * hw, a = c - 0.75, b = c + 0.75;
+        fw(-0.18, -0.16, H(y0), H(y1), a, b, NA_OFFICE, B.aoGlass);
+        fw(-0.18, 0.12, H(y0 - 0.15), H(y0), a - 0.1, b + 0.1, NA_TERRA);
+        fw(-0.18, 0.06, H(y1), H(y1 + 0.25), a - 0.15, b + 0.15, NA_TERRA);
+        for (const e of [a - 0.15, b]) fw(-0.18, 0.0, H(y0), H(y1), e, e + 0.15, NA_BRICK, B.brick);
+        fw(-0.16, -0.12, H(y0 + (y1 - y0) * 0.55), H(y0 + (y1 - y0) * 0.55 + 0.05), a, b, NA_WOOD);
+      }
+    }
+  }
+  fw(0, 0.1, gW - 0.5, H(TOP - 0.3), -HW, -HW + 0.5, NA_BRICK, B.brick);
+  fw(0, 0.1, gW - 0.5, H(TOP - 0.3), HW - 0.5, HW, NA_BRICK, B.brick);
+  fw(0, 0.4, H(10.6), H(10.9), -HW - 0.05, HW + 0.05, NA_TERRA);
+  fw(-0.3, 0.3, H(TOP - 0.3), H(TOP - 0.15), -HW, HW, NA_TERRA_DARK);
+
+  // colliders: the two ranges (to their shopfronts' faces), the arches' piers, and the roof over the gallery
+  const poly = (u0, u1, v0, v1, y0, y1) => {
+    const outer = [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)].map(([x, z]) => ({ x, z }));
+    const xs = outer.map((q) => q.x), zs = outer.map((q) => q.z);
+    return { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs), minY: y0, maxY: y1, polygon: { outer, holes: [] }, keepsSurvey: true };
+  };
+  const colliders = [poly(0, L, -HW, -(PW - 0.12), gMin - 1, H(TOP)), poly(0, L, PW - 0.12, HW, gMin - 1, H(TOP))];
+  for (const ua of arches) for (const sg of [-1, 1]) colliders.push(poly(ua - 0.4, ua + 0.4, sg * PW, sg * (PW - 0.5), gMin - 1, H(EAVE)));
+  colliders.push(poly(0, L, -PW, PW, H(9.6), H(RIDGE)));
+  return { s, maxY: H(13.25), colliders };
+}
+
 const MODELS = [
   ['Michigan League', michiganLeague],
   ['Rackham Building', rackham],
@@ -847,7 +1117,8 @@ const MODELS = [
   ['Gandy Dancer', gandyDancer],
   ['Amtrak Station', amtrakStation],
   ['Huron High School', huronHigh],
-  ['Atomic Object', atomicObject]
+  ['Atomic Object', atomicObject],
+  ['Nickels Arcade', nickelsArcade]
 ];
 
 // Face brick in running bond (modular courses 68 mm, bricks 203 mm), joints a little darker and each brick a shade off
@@ -876,16 +1147,27 @@ function clearGlass() {
   return m;
 }
 
+// Wire glass, one see-through material (on the Xbox a pale opaque tint): a little green, a little milky, and lit from
+// below at dusk and night as the gallery's lamps come on
+function skylightGlass() {
+  const m = new THREE.MeshStandardNodeMaterial({ color: 0xd4e2dc, roughness: 0.35, metalness: 0.1, side: THREE.DoubleSide,
+    transparent: !XBOX, opacity: XBOX ? 1 : 0.34, depthWrite: XBOX });
+  m.emissiveNode = color(0xffd7a0).mul(mix(float(XBOX ? 0.05 : 0.01), float(0.55), smoothstep(0.35, 1.3, cityUniforms.uInteriorGlow)));
+  return m;
+}
+
 function buildMoreLandmarks(group, colliders) {
   const B = builder(), T = tools(B), built = [];
   B.brick = { pos: [], col: [] };
   B.aoGlass = { pos: [], col: [] };
+  B.skylight = { pos: [], col: [] };
   for (const [name, make] of MODELS) {
     const made = make(B, T);
     if (!made) continue;
-    for (const { s, maxY, open } of [].concat(made)) {
-      // the first strip carries the survey block it replaces (an open shed's strip is only a post's footprint)
-      const c = open ? [{ minX: s.b.cx - 0.2, maxX: s.b.cx + 0.2, minZ: s.b.cz - 0.2, maxZ: s.b.cz + 0.2, maxY, keepsSurvey: true }] : strips(s.ring, maxY);
+    for (const { s, maxY, open, colliders: own } of [].concat(made)) {
+      // the first strip carries the survey block it replaces (an open shed's strip is only a post's footprint; a model
+      // with a way through it, as Nickels Arcade, gives its own walls)
+      const c = own || (open ? [{ minX: s.b.cx - 0.2, maxX: s.b.cx + 0.2, minZ: s.b.cz - 0.2, maxZ: s.b.cz + 0.2, maxY, keepsSurvey: true }] : strips(s.ring, maxY));
       if (!c.length) continue;
       c[0].replaces = s.b;
       colliders.push(...c);
@@ -909,6 +1191,14 @@ function buildMoreLandmarks(group, colliders) {
     mesh(B.glass, landmarkGlass(), 'MoreLandmarksGlass'),
     mesh(B.brick, brickMaterial(), 'MoreLandmarksBrick'),
     mesh(B.aoGlass, clearGlass(), 'MoreLandmarksClearGlass'));
+  // the arcade's wire-glass skylight lets the sun through (no shadow of its own, only its iron's) and glows at night
+  if (B.skylight.pos.length) {
+    const sky = mesh(B.skylight, skylightGlass(), 'MoreLandmarksSkylight');
+    sky.castShadow = false;
+    sky.receiveShadow = false;
+    sky.renderOrder = 2;
+    group.add(sky);
+  }
   return built;
 }
 

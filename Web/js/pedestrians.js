@@ -734,6 +734,8 @@ function buildPersonGeometry(detail = 1) {
 // 3. TSL MATERIAL: GPU SKINNING + PROCEDURAL CLOTHES
 // ============================================================================
 const PACK_COLORS = [0x1f2a44, 0x1c1c1e, 0x55585d, 0xb8952a, 0x5e2430, 0x2f4a3a, 0x00274c, 0x3a3a3a];
+const MAIZE = 0xffcb05, MICHIGAN_BLUE = 0x00274c;
+const STYLE = { MAIZE_BLUE: 2, CASUAL: 4 }; // flags added to info.y (female 0/1) in a rig's pose
 const COAT_COLORS = [0x2b3a52, 0x33332f, 0x8a6a44, 0x5a2f2f, 0x4f5238, 0x6a6a66, 0x222024, 0x7d3f22];
 const COAT_COLORS_F = [0x7a2630, 0xb89a72, 0x2e3e5c, 0x1f1d22, 0xc9c1b2, 0x5b6b4a, 0x8c5a7a, 0x3c3c40];
 const SHIRT_COLORS = [0xe8e6e0, 0xb8c4d8, 0xcfc8b8, 0x9aa7b8];
@@ -765,7 +767,10 @@ const qrot = (q, v) => v.add(cross(q.xyz, cross(q.xyz, v).add(v.mul(q.w))).mul(2
 function createPersonMaterial(pose, detail = 1) {
   const mat = new THREE.MeshStandardNodeMaterial({ metalness: 0 });
   const base = int(instanceIndex).mul(STRIDE);
-  const info = pose.element(base.add(STRIDE - 1)); // seed, female, girth, hair
+  const info = pose.element(base.add(STRIDE - 1)); // seed, female (+ style flags: STYLE), girth, hair
+  // Lamp: female is the 1s bit of info.y, wearing maize or Michigan blue the 2s, dressed casually (no tailored jacket
+  // whatever the hash says) the 4s; pedestrian-system.js sets the flags by where and when each one's out
+  const femaleOf = fract(info.y.mul(0.5)).mul(2.0);
 
   mat.positionNode = Fn(() => {
     const skin = attribute('skin', 'vec4');
@@ -774,7 +779,7 @@ function createPersonMaterial(pose, detail = 1) {
     const hairAmount = mix(clamp(info.w.mul(2.0), 0.0, 1.0), clamp(info.w.mul(2.0).sub(1.0), 0.0, 1.0), step(PART.LONG_HAIR - 0.5, skin.w));
     const p = attribute('position', 'vec3')
       .add(vec3(extra.x, 0.0, extra.y).mul(info.z.sub(1.0)))
-      .add(attribute('femaleDelta', 'vec3').mul(info.y))
+      .add(attribute('femaleDelta', 'vec3').mul(femaleOf))
       .add(attribute('hairDelta', 'vec3').mul(hairAmount))
       .toVar();
     const noPack = step(abs(skin.w.sub(PART.PACK)), 0.25).mul(step(PACK_SHARE, fract(sin(info.x.add(83.0).mul(12.9898)).mul(43758.5453))));
@@ -804,19 +809,26 @@ function createPersonMaterial(pose, detail = 1) {
   const isHairPart = step(PART.HAIR - 0.5, partId);
   const isPack = isPart(PART.PACK);
 
-  const female = info.y;
+  const female = femaleOf;
+  const maizeBlue = fract(info.y.mul(0.5).floor().mul(0.5)).mul(2.0);
+  const casual = step(3.5, info.y);
   const lane = (salt) => fract(sin(info.x.add(salt).mul(12.9898)).mul(43758.5453));
   const skinCol = vertexStage(pickColorFromPalette(SKIN_COLORS, lane(17.0))).toVar();
   const hairCol = vertexStage(pickColorFromPalette(HAIR_COLORS, lane(3.0))).toVar();
-  const coatCol = vertexStage(
-    mix(pickColorFromPalette(COAT_COLORS, lane(29.0)), pickColorFromPalette(COAT_COLORS_F, lane(29.0)), female)
-  ).toVar();
+  // (a maize or Michigan-blue jacket or hoodie: about two blue to every maize)
+  const coatCol = vertexStage(mix(
+    mix(pickColorFromPalette(COAT_COLORS, lane(29.0)), pickColorFromPalette(COAT_COLORS_F, lane(29.0)), female),
+    mix(color(MAIZE), color(MICHIGAN_BLUE), step(0.36, lane(97.0))),
+    maizeBlue
+  )).toVar();
   const shirtCol = vertexStage(pickColorFromPalette(SHIRT_COLORS, lane(71.0))).toVar();
   const legsCol = vertexStage(
     mix(pickColorFromPalette(LEG_COLORS, lane(47.0)), pickColorFromPalette(LEG_COLORS_F, lane(47.0)), female)
   ).toVar();
   const bald = vertexStage(step(lane(41.0), 0.08).mul(float(1.0).sub(female))).toVar();
-  const tailored = vertexStage(step(0.42, lane(89.0))).toVar();
+  // Lamp: a tailored jacket (lapels, shirt V) on about three in ten (the New York original's 58% was a Manhattan
+  // office crowd's), on none in maize and blue, and on fewer on campus and in the neighbourhoods (`casual`)
+  const tailored = vertexStage(step(0.7, lane(89.0)).mul(float(1.0).sub(maizeBlue)).mul(float(1.0).sub(casual))).toVar();
   const hemY = vertexStage(mix(mix(0.955, 0.88, female), 1.0, lane(61.0))).toVar();
   const sneaker = vertexStage(step(0.4, lane(5.0))).toVar();
   const upperCol = vertexStage(
@@ -1311,6 +1323,22 @@ class PersonRig {
     this.feet = [makeFoot(1), makeFoot(-1)];
     this.pose = new Float32Array(STRIDE * 4);
     this.pose.set([seed, this.female, girth, hair], (STRIDE - 1) * 4);
+    this.hold = 0; // Lamp: 1 holds an umbrella up in the right hand (solve)
+  }
+
+  // Lamp: dressed by the PERSON_STYLE flags (maize and blue, casual), kept beside the female bit in the pose's info
+  setStyle(flags) {
+    this.pose[(STRIDE - 1) * 4 + 1] = this.female + flags;
+  }
+
+  // Lamp: where hand i (0 left, 1 right) is in the world as last posed: the wrist's bind point through its forearm's
+  // transform in the pose (as the shader skins it), a little on into the palm
+  handAt(i, out) {
+    const b = LIMB.forearm[i], o = b * 8, a = this.pose, side = SIDES[i], f = FOREARM + 0.06;
+    const j = this.bind[b];
+    _v2.set(j.x + side * Math.sin(ARM_BIND_ABDUCTION) * f, j.y - Math.cos(ARM_BIND_ABDUCTION) * f, j.z);
+    _q.set(a[o], a[o + 1], a[o + 2], a[o + 3]);
+    return out.copy(_v2).applyQuaternion(_q).multiplyScalar(a[o + 7]).add(_v.set(a[o + 4], a[o + 5], a[o + 6]));
   }
 
   get legLength() {
@@ -2475,13 +2503,18 @@ class PersonRig {
         ? lerp(0.88, 0.22, descendReach)
         : lerp(-0.56, -0.14, descendReach);
       const airFlex = lerp(jumpStandFlex, jumpRunFlex, moveJump);
-      const flex = lerp(groundFlex, airFlex, airB);
+      // Lamp: an umbrella held up in the right hand (`hold`, pedestrian-system.js): the upper arm a little forward and
+      // in, the forearm bent up before the chest, steady through the stride
+      const hold = i === 1 ? this.hold : 0;
+      const flex = lerp(lerp(groundFlex, airFlex, airB), 0.42, hold);
 
       const jumpAbd = 0.14 + 0.2 * Math.sin(Math.PI * jumpProg) + (oppLead < 0 ? 0.08 * moveJump : 0);
-      const abduction = 0.095 + (this.girth - 1) * 0.35 + run * (0.06 + 0.03 * sprint) + this.back * run * 0.05
+      const abduction0 = 0.095 + (this.girth - 1) * 0.35 + run * (0.06 + 0.03 * sprint) + this.back * run * 0.05
         + 0.1 * prepSquat + airB * jumpAbd + landNorm * 1.65;
-      const crossIn = -side * ((0.05 * g + (0.16 + 0.08 * sprint) * fwdRun) * Math.min(1.1, posD) * (1 - airB)
+      const abduction = lerp(abduction0, 0.16, hold);
+      const crossIn0 = -side * ((0.05 * g + (0.16 + 0.08 * sprint) * fwdRun) * Math.min(1.1, posD) * (1 - airB)
         + (0.1 * (1 - moveJump) + 0.18 * moveJump) * airB * Math.max(0, airFlex));
+      const crossIn = lerp(crossIn0, -side * 0.32, hold);
       this.jointFrom(BONE.CHEST, LIMB.upperArm[i], _qChest, _chest, _shoulder);
       _qUpper.copy(_qChest)
         .multiply(qZ(_q, side * (abduction - ARM_BIND_ABDUCTION)))
@@ -2495,7 +2528,7 @@ class PersonRig {
       const standAirElbow = (1.28 * launchUp + 0.48 * ascentArc) * (1 - 0.8 * descendReach) + 0.2 * descendReach;
       const runAirElbow = oppLead > 0 ? lerp(1.38, 1.1, descendReach) : lerp(0.95, 1.08, descendReach);
       const airElbow = lerp(standAirElbow, runAirElbow, moveJump);
-      const elbow = lerp(groundElbow, airElbow, airB);
+      const elbow = lerp(lerp(groundElbow, airElbow, airB), 1.85, hold);
       this.jointFrom(LIMB.upperArm[i], LIMB.forearm[i], _qUpper, _shoulder, _v);
       this.writeBone(LIMB.forearm[i], _q2.copy(_qUpper).multiply(qX(_q, -elbow)), _v);
     }
@@ -2646,4 +2679,4 @@ class PersonRig {
 }
 
 
-export { BONE as PERSON_BONES, buildPersonGeometry, createPersonMaterial, PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION };
+export { STYLE as PERSON_STYLE, BONE as PERSON_BONES, buildPersonGeometry, createPersonMaterial, PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION };
