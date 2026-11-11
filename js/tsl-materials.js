@@ -56,6 +56,8 @@ import {
   If,
   sqrt,
   specularColor,
+  bool,
+  screenCoordinate,
   specularColorBlended,
   specularF90,
   int,
@@ -68,6 +70,7 @@ import { CASCADE_WAVES } from './cascades.js';
 import { hot } from '../lamp-game.js';
 import { onSeason } from './seasons.js';
 import { TIER } from './device-tier.js';
+import { SHOP, SHOP_TYPES, SHOP_CUISINES, SHOP_LOOK_TABLES, shopBayMap, SHOP_BAY_COLS, SHOP_BAY_ROWS, BAY_WIDTH, shopOpenShares, noteShopHour } from './shop-types.js';
 
 // Procedural city materials: facades and interiors, vegetation, roads, water and lighting effects.
 
@@ -85,6 +88,9 @@ const cityUniforms = hot(import.meta).keep('cityUniforms', () => ({
 // Lamp: how much of the ground lies under snow, 0 to 1 (snow-cover.js); added after the others, so a city kept from
 // before it gets it too
 cityUniforms.uSnow ??= uniform(0);
+// Lamp: how far from the camera a named shopfront with a room behind it (shop-interiors.js) leaves its glass out, so
+// the room shows: the glass comes back (dithered) over the last 10 m of it; 0 none (no rooms: the painted room only)
+cityUniforms.uShopGlass ??= uniform(0);
 // Lamp: the season (seasons.js, set by trees.js on each new day). Per tree species (trees.js SPECIES, 7 the shrubs):
 // how much of a tree's leaves are on it, max(z, clamp(x + y * the tree's random fraction, 0, 1)), so the trees of a
 // kind drop (or open) their leaves one by one over a couple of weeks. And how dormant the lawns are, 0 green to 1 straw
@@ -562,30 +568,115 @@ const GHOST_ADS = false;
 // Lamp: shopfront frame colors a street photo can give a shop (build-building-looks.py SHOP_COLORS, in order)
 const SHOP_FRAMES = [0x263831, 0x463b30, 0x242a32, 0x1d1e21, 0xe9e4d6, 0xe6dcc0, 0x7a2a24, 0x2b3f5a, 0x7a5a3c, 0x8a8d88];
 
+// Lamp: the kinds of business (shop-types.js): each kind's look as rows of numbers the shader reads by the kind of the
+// business in the bay, and the share of each kind open at the town's hour (main.js sets it with the time shown)
+// (one array for all of them, a table after a table: each uniform array is a buffer of its own, and a shader may bind
+// only a dozen)
+const SHOP_LOOK_NAMES = [...Object.keys(SHOP_LOOK_TABLES).filter((n) => n !== 'cuisine'), 'open'];
+// (after them, the kinds of restaurant: a table after a table again, a row per cuisine)
+const CUISINE_LOOK_NAMES = Object.keys(SHOP_LOOK_TABLES.cuisine), CUISINE_BASE = SHOP_LOOK_NAMES.length * SHOP_TYPES.length;
+const shopLookRows = hot(import.meta).keep('shopLookRows2', () => uniformArray([
+  ...SHOP_LOOK_NAMES.flatMap((name) => SHOP_TYPES.map((_, i) => new THREE.Vector4(...(SHOP_LOOK_TABLES[name]?.[i] || [1, 0, 0, 0])))),
+  ...CUISINE_LOOK_NAMES.flatMap((name) => SHOP_CUISINES.map((_, i) => new THREE.Vector4(...SHOP_LOOK_TABLES.cuisine[name][i])))], 'vec4'));
+CUISINE_LOOK_NAMES.forEach((name, t) => SHOP_CUISINES.forEach((_, i) => shopLookRows.array[CUISINE_BASE + t * SHOP_CUISINES.length + i].set(...SHOP_LOOK_TABLES.cuisine[name][i])));
+SHOP_LOOK_NAMES.forEach((name, t) => SHOP_TYPES.forEach((_, i) => {
+  if (SHOP_LOOK_TABLES[name]) shopLookRows.array[t * SHOP_TYPES.length + i].set(...SHOP_LOOK_TABLES[name][i]); // (a look changed while it runs)
+}));
+function setShopHour(hour) {
+  noteShopHour(hour);
+  const shares = shopOpenShares(hour), at = SHOP_LOOK_NAMES.indexOf('open') * SHOP_TYPES.length;
+  for (let i = 0; i < shares.length; i++) shopLookRows.array[at + i].x = shares[i];
+}
+
+// OPEN and ATM in tube letters, for a window's neon sign and a bank's cash machine: 128 x 64, the one small texture
+let _shopGlyphTexture;
+function getShopGlyphTexture() {
+  if (_shopGlyphTexture) return _shopGlyphTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 96;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 128, 96);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 27px "Arial Rounded MT Bold", "Helvetica Neue", Arial, sans-serif';
+  ctx.fillText('OPEN', 64, 17, 116);
+  ctx.fillText('ATM', 64, 49, 116);
+  ctx.fillText('PIZZA', 64, 81, 116);
+  _shopGlyphTexture = new THREE.CanvasTexture(canvas);
+  _shopGlyphTexture.colorSpace = THREE.NoColorSpace;
+  _shopGlyphTexture.generateMipmaps = false;
+  _shopGlyphTexture.minFilter = _shopGlyphTexture.magFilter = THREE.LinearFilter;
+  return _shopGlyphTexture;
+}
+
+// a many-colored thing's color from a random number: around the color wheel
+const hueOf = (h) => cos(vec3(0.0, 0.33, 0.67).add(h).mul(6.2832)).mul(0.8).add(0.42).clamp(0.03, 1.0);
+
 function createStorefront(facade, seed, local) {
-  const { wallS, wallW, boxSeed, uCoord, vCoord, isGroundFloor, isRoof, solid, coping, kind } = facade;
-  // Lamp: the shop's look (building-footprints.js), 0 where its photo said nothing: display windows 1 small, 2 medium,
-  // 3 large; frame 1 + an index into SHOP_FRAMES
-  const look = floor(kind.mul(128).add(0.5));
+  const { wallS, wallW, wallH, boxSeed, uCoord, vCoord, isGroundFloor, isRoof, solid, coping, kind } = facade;
+  // Lamp: a shop wall's `kind` (building-footprints.js) is its look / 128 less the wall's row in the bays' texture
+  // (shop-types.js; 0 none). The look, 0 where its photo said nothing: display windows 1 small, 2 medium, 3 large;
+  // frame 1 + an index into SHOP_FRAMES
+  const row = max(floor(float(0.75).sub(kind)), 0);
+  const look = floor(kind.add(row).mul(128).add(0.5));
   const frameSeen = mod(look, 16), windowsSeen = floor(look.div(16));
-  const smallWindows = step(abs(windowsSeen.sub(1)), 0.1), largeWindows = step(abs(windowsSeen.sub(3)), 0.1);
-  const width = local ? wallW.div(max(floor(wallW.div(7.5).add(0.5)), 1)) : float(7.5);
+  const bays = local ? max(floor(wallW.div(BAY_WIDTH).add(0.5)), 1) : float(1);
+  const width = local ? wallW.div(bays) : float(BAY_WIDTH);
   const horizontal = local ? wallS : uCoord.mul(mix(sign(facadeWorldNormal.z), sign(facadeWorldNormal.x).negate(), facadeAlongZ));
   const grid = horizontal.div(width);
   const x = fract(grid).mul(width), y = vCoord;
   const fw = vec2(fwidth(grid).mul(width), fwidth(y)).toVar();
-  const mask = isGroundFloor.mul(float(1).sub(max(max(solid, isRoof), coping))).mul(step(2.4, width));
+  // (a low building's one storey may be short of a whole one, and so solid wall: not where a named business is)
+  const mask = isGroundFloor.mul(float(1).sub(max(max(solid.mul(float(1).sub(step(0.5, row))), isRoof), coping))).mul(step(2.4, width)).toVar();
   const id = vec2(floor(grid), boxSeed.add(seed));
   const choice = hash2D(id.add(vec2(3.1, 17.2)));
-  const lit = step(0.28, hash2D(id.add(vec2(37.1, 9.8))));
   const band = (p, a, b, w) => boxCoverage(p, a, b, w.mul(0.5));
-  const doorX = mix(float(0.24), width.sub(1.36), step(0.5, choice));
+  // Fine things disappear before becoming subpixel; distant shops keep their average light level.
+  const detail = float(1).sub(smoothstep(0.06, 0.20, max(fw.x, fw.y))).toVar();
+
+  // Lamp: whose bay this is: the business's kind (0 nobody's), whether its sign hangs here, its variant, and a number
+  // of its own
+  const bay = !local ? vec3(0) : Fn(() => {
+    const t = vec3(0).toVar();
+    If(mask.greaterThan(0.001).and(row.greaterThan(0.5)), () => {
+      const col = clamp(floor(grid), 0, min(bays, SHOP_BAY_COLS).sub(1));
+      const at = vec2(col.add(0.5).div(SHOP_BAY_COLS), row.add(0.5).div(SHOP_BAY_ROWS));
+      t.assign(floor(texture(shopBayMap, at).level(0).rgb.mul(255).add(0.5)));
+    });
+    return t;
+  })().toVar();
+  const type = mod(bay.x, 32).toVar();
+  const typeI = int(type);
+  const shopLook = Object.fromEntries(SHOP_LOOK_NAMES.map((name, t) => [name, { element: () => shopLookRows.element(typeI.add(t * SHOP_TYPES.length)) }]));
+  // (a restaurant's kind of cooking, 0 none: its own walls, floor and what stands in the room)
+  const cuisineI = int(bay.z), cuisined = step(0.5, bay.z);
+  const cuisineLook = (t) => shopLookRows.element(cuisineI.add(CUISINE_BASE + t * SHOP_CUISINES.length));
+  const typed = step(0.5, type), own = step(31.5, mod(bay.x, 64)), variant = step(63.5, mod(bay.x, 128));
+  const roomy = step(127.5, bay.x); // a room is built behind this bay when the camera is near (shop-interiors.js)
+  const biz = hash2D(vec2(bay.y, type.add(5.3)));
+  const pal = mix(choice, biz, typed).toVar(); // a business's own choice of colors, the same in each of its bays
+  const flags = shopLook.flags.element(typeI).toVar(), flags2 = shopLook.flags2.element(typeI).toVar();
+  const typeFrame = shopLook.frame.element(typeI).toVar();
+  // open (its lights on): a nameless shop as ever (most are), a named one by its kind's hours
+  const share = shopLook.open.element(typeI).x;
+  const lit = mix(step(float(1).sub(share.mul(0.72)), hash2D(id.add(vec2(37.1, 9.8)))), step(fract(bay.y.mul(0.6180339)), share.sub(0.001)), typed).toVar(); // (a named one as shop-interiors.js has it too)
+
+  const windowStyle = mix(flags.z.add(1).mul(step(0.5, flags.z)), windowsSeen, step(0.5, windowsSeen));
+  const smallWindows = step(abs(windowStyle.sub(1)), 0.1), largeWindows = step(abs(windowStyle.sub(3)), 0.1);
+  // (a named business's door by its own number and the bay's, so the room behind knows the side: bayDoorLeft)
+  const bayCol = local ? clamp(floor(grid), 0, min(bays, SHOP_BAY_COLS).sub(1)) : float(0);
+  const doorLeft = mix(float(1).sub(step(0.5, choice)), step(0.5, mod(bay.y.add(bayCol), 2)), typed).toVar();
+  const doorX = mix(width.sub(1.36), float(0.24), doorLeft);
   const door = band(x, doorX, doorX.add(1.12), fw.x);
   const doorPane = band(x, doorX.add(0.06), doorX.add(1.06), fw.x).mul(band(y, 0.32, 2.42, fw.y));
   // display windows: over a knee wall; small ones set in solid wall; large ones from near the sidewalk, narrow piers
   const sideWall = mix(mix(float(0.18), width.mul(0.22), smallWindows), float(0.08), largeWindows);
   const sill = mix(mix(float(0.58), float(0.95), smallWindows), float(0.22), largeWindows);
-  const head = mix(float(2.88), float(2.3), smallWindows);
+  const headSeen = mix(float(2.88), float(2.3), smallWindows);
+  const head = local ? min(headSeen, wallH.sub(0.72)) : headSeen; // (lower on a low building, under its sign)
   const display = band(x, sideWall, width.sub(sideWall), fw.x).mul(band(y, sill, head, fw.y));
   const transom = band(y, 2.46, 2.52, fw.y);
   const glass = max(display.mul(float(1).sub(max(door, transom))), doorPane)
@@ -593,11 +684,12 @@ function createStorefront(facade, seed, local) {
   const handle = band(x, doorX.add(0.85), doorX.add(0.89), fw.x).mul(band(y, 1.05, 1.46, fw.y));
   const kickplate = door.mul(band(y, 0.23, 0.32, fw.y));
   const metal = max(handle, kickplate);
-  const glazing = glass.mul(float(1).sub(handle));
+  const glazing = glass.mul(float(1).sub(handle)).toVar();
   let seenPaint = color(SHOP_FRAMES[0]);
   for (let i = 1; i < SHOP_FRAMES.length; i++) seenPaint = mix(seenPaint, color(SHOP_FRAMES[i]), step(i + 0.5, frameSeen));
-  const paint = mix(mix(mix(color(0x263831), color(0x463b30), step(0.38, choice)), color(0x242a32), step(0.72, choice)),
-    seenPaint, step(0.5, frameSeen));
+  const anyPaint = mix(mix(color(0x263831), color(0x463b30), step(0.38, choice)), color(0x242a32), step(0.72, choice));
+  // the frame its photo showed, else its kind's (a bank's stone, a bar's black), else any
+  const paint = mix(mix(anyPaint, typeFrame.rgb, typeFrame.a), seenPaint, step(0.5, frameSeen));
   const signWidth = min(width.mul(0.82), 5.5);
   const signUV = vec2(x.sub(width.mul(0.5)).div(signWidth).add(0.5), y.sub(2.96).div(0.6));
   const signLod = log2(max(fw.x.mul(512).div(signWidth), fw.y.mul(64 / 0.6)));
@@ -614,68 +706,339 @@ function createStorefront(facade, seed, local) {
   })().toVar();
   const frame = mix(mix(paint, color(0x92958d), metal), color(0xe0d7bb), signInk);
 
+  // Lamp: the room behind the glass, by the kind of business (shop-types.js LOOKS): the same few flat layers for every
+  // kind (the back wall's rows of things, what stands 1.5 m in, lamps), each kind's own numbers
   const interior = Fn(() => {
     const result = vec4(0).toVar();
     If(mask.greaterThan(0.001), () => {
-      const light = mix(color(0xffd49a), color(0xe0edee), step(0.58, choice));
-      const room = color(0x343330).toVar();
-      const fixture = float(0).toVar();
-      // Fine displays disappear before becoming subpixel; distant shops keep their average light level.
-      const detail = float(1).sub(smoothstep(0.06, 0.20, max(fw.x, fw.y)));
+      const wallRow = shopLook.wall.element(typeI).toVar(), floorRow = shopLook.floor.element(typeI).toVar();
+      wallRow.assign(vec4(mix(wallRow.rgb, cuisineLook(0).rgb, cuisined), wallRow.a));
+      floorRow.assign(vec4(mix(floorRow.rgb, cuisineLook(1).rgb, cuisined), floorRow.a));
+      const lightRow = shopLook.light.element(typeI).toVar();
+      const light = mix(mix(color(0xffd49a), color(0xe0edee), step(0.58, choice)), lightRow.rgb, typed).toVar();
+      const wallColor = mix(mix(color(0x716557), color(0x596462), choice), wallRow.rgb, typed).toVar();
+      const room = mix(color(0x343330), wallColor.mul(0.5).add(floorRow.rgb.mul(0.15)), typed).toVar();
+      const glow = float(0).toVar(); // how much what's seen shines by itself (a lamp 1)
       If(detail.greaterThan(0.001).and(glazing.greaterThan(0.001)), () => {
         const ray = positionWorld.sub(cameraPosition);
         const normal = facadeWorldNormal;
         const inward = max(abs(dot(ray, normal)), 0.1);
-        const dx = dot(ray, vec3(normal.z, 0, normal.x.negate())).div(inward);
-        const dy = ray.y.div(inward);
+        const dx = dot(ray, vec3(normal.z, 0, normal.x.negate())).div(inward).toVar();
+        const dy = ray.y.div(inward).toVar();
         const ox = x.sub(width.mul(0.5)), oy = y.sub(1.55);
         const tx = width.mul(0.5).sub(ox.mul(sign(dx))).div(max(abs(dx), 0.001));
         const ty = float(1.55).sub(oy.mul(sign(dy))).div(max(abs(dy), 0.001));
-        const depth = min(min(tx, ty), 3.6);
-        const px = x.add(dx.mul(depth)), py = y.add(dy.mul(depth));
+        const depth = min(min(tx, ty), 3.6).toVar();
+        const px = x.add(dx.mul(depth)).toVar(), py = y.add(dy.mul(depth)).toVar();
         const onSide = step(tx, min(ty, 3.6));
         const onHorizontal = step(ty, min(tx, 3.6));
         const ceiling = onHorizontal.mul(step(0, dy));
         const floorMask = onHorizontal.mul(float(1).sub(step(0, dy)));
-        const back = float(1).sub(max(onSide, onHorizontal));
-        const roomFw = fw.mul(float(1).add(float(3.6).div(inward)));
-        const shelfY = py.div(0.55);
-        const shelves = filteredPulse(fract(shelfY), 0.05, 0.13, roomFw.y.div(0.55))
-          .mul(band(py, 0.5, 2.3, roomFw.y)).mul(band(px, 0.3, width.sub(0.3), roomFw.x)).mul(back);
-        const goodsX = px.div(0.28);
-        const goodsSeed = hash2D(vec2(floor(goodsX), floor(shelfY)).add(choice.mul(31)));
-        const goods = filteredPulse(fract(goodsX), 0.12, 0.88, roomFw.x.div(0.28))
-          .mul(filteredPulse(fract(shelfY), 0.14, goodsSeed.mul(0.28).add(0.5), roomFw.y.div(0.55)))
-          .mul(band(py, 0.5, 2.3, roomFw.y)).mul(back).mul(step(0.3, choice));
-        const wall = mix(color(0x716557), color(0x596462), choice);
-        const shell = mix(mix(wall, color(0x33302b), floorMask), color(0x9b9689), ceiling);
-        const stock = mix(color(0x88654a), color(0x617b80), goodsSeed);
-        const stocked = mix(mix(shell, stock, goods), color(0x30251b), shelves);
-        // A counter sits nearer the glass than the rear shelves, so they shift at different rates as we pass.
-        const displayX = x.add(dx.mul(1.3)), displayY = y.add(dy.mul(1.3));
-        const counter = band(displayY, 0.65, 1.10, fw.y.mul(1.5))
-          .mul(band(displayX, 0.2, width.sub(0.2), fw.x.mul(1.5))).mul(step(1.3, depth)).mul(float(1).sub(door));
-        const furnished = mix(stocked, color(0x453a2d), counter.mul(0.82));
+        const back = float(1).sub(max(onSide, onHorizontal)).toVar();
+        const roomFw = fw.mul(float(1).add(float(3.6).div(inward))).toVar();
+
+        // the back wall: rows of things (shelves of goods, book spines, bottles, menu boards, mirrors, pictures)
+        const B = shopLook.back.element(typeI).toVar(), B2 = shopLook.back2.element(typeI).toVar();
+        const colorA = shopLook.a.element(typeI).toVar(), colorB = shopLook.b.element(typeI).toVar();
+        const shelfOn = mod(colorB.a, 2), linesOn = step(1.5, colorB.a);
+        const gx = px.div(B.x), gy = py.sub(B.z).div(B.y);
+        const cell = vec2(floor(gx), floor(gy)).add(vec2(floor(pal.mul(31)), type.mul(7)));
+        const h1 = hash2D(cell).toVar(), h2 = fract(h1.mul(57.31)), h3 = hash2D(cell.add(vec2(11.7, 3.3))).toVar();
+        const gwx = roomFw.x.div(B.x), gwy = roomFw.y.div(B.y);
+        const rows = band(py, B.z, B.w, roomFw.y).mul(band(px, 0.25, width.sub(0.25), roomFw.x)).mul(back).toVar();
+        const gap = float(1).sub(B2.x).mul(0.5);
+        const thing = filteredPulse(fract(gx), gap, float(1).sub(gap), gwx)
+          .mul(filteredPulse(fract(gy), 0.1, mix(B2.y, 0.97, h2), gwy)).mul(step(h3, colorA.a)).mul(rows).toVar();
+        const shelves = filteredPulse(fract(gy), 0.0, 0.08, gwy).mul(rows).mul(shelfOn);
+        const thingColor = mix(mix(colorA.rgb, colorB.rgb, h1), hueOf(h3.add(h1)).mul(0.6).add(0.08), B2.z).toVar();
+        // rows of writing (or a cooler's shelves) on them, light on a dark thing, dark on a light one
+        const lineY = fract(gy).mul(8);
+        const writing = filteredPulse(fract(lineY), 0.3, 0.62, gwy.mul(8))
+          .mul(step(fract(gx), hash2D(vec2(floor(lineY), h1.mul(91))).mul(0.5).add(0.38))).mul(step(0.16, fract(gx)))
+          .mul(step(1, lineY)).mul(linesOn);
+        const ink = mix(vec3(0.9), vec3(0.07), step(0.2, dot(thingColor, vec3(0.3, 0.6, 0.1))));
+        const shell = mix(mix(mix(wallColor, wallColor.mul(0.82), onSide), floorRow.rgb, floorMask), wallColor.mul(0.45).add(0.34), ceiling);
+        const lined = mix(shell, light.mul(0.9), rows.mul(flags2.y)); // the wall behind them lit (a back-bar)
+        const stocked = mix(mix(lined, wallColor.mul(0.3), shelves), mix(thingColor, ink, writing.mul(0.6)), thing).toVar();
+        glow.assign(thing.mul(B2.w).add(rows.mul(float(1).sub(thing)).mul(flags2.y)));
+        // a bar's neon tube along the back wall, pink or blue
+        const neonOn = lightRow.a.mul(typed);
+        const tube = band(py, 2.4, 2.45, roomFw.y).mul(band(px, 0.7, width.sub(0.7), roomFw.x)).mul(back).mul(neonOn);
+        const halo = float(1).sub(smoothstep(0.0, 0.3, abs(py.sub(2.425)))).mul(back).mul(neonOn).mul(0.45);
+        const neonColor = mix(color(0xff3a8c), color(0x3ad8ff), step(0.5, pal));
+        stocked.assign(mix(stocked, neonColor, max(tube, halo)));
+        glow.addAssign(tube.mul(1.6).add(halo.mul(0.8)));
+
+        // what stands in the room, 1.5 m in: nearer the glass than the back wall, so they shift at different rates as
+        // we pass
+        const M = mix(shopLook.mid.element(typeI), cuisineLook(2), cuisined).toVar(), midRow = mix(shopLook.midColor.element(typeI), cuisineLook(3), cuisined).toVar();
+        const mx = x.add(dx.mul(1.5)).toVar(), my = y.add(dy.mul(1.5)).toVar();
+        const mfw = fw.mul(1.5).toVar();
+        const inRoom = band(mx, 0.2, width.sub(0.2), mfw.x).mul(step(1.5, depth)).toVar();
+        const mid = vec4(0).toVar(); // color, cover
+        const midGlow = float(0).toVar();
+        const xb = (a, b) => band(mx, a, b, mfw.x), yb = (a, b) => band(my, a, b, mfw.y);
+        If(inRoom.greaterThan(0.001), () => {
+          If(M.x.lessThan(1.5), () => {
+            // a counter: maybe a glass case of many-colored things in its top, stools along it, things standing on it
+            const body = yb(M.y, M.z).mul(float(1).sub(door));
+            const edge = yb(M.z.sub(0.05), M.z);
+            const caseTop = M.z.sub(0.05), caseH = M.w;
+            const inCase = yb(caseTop.sub(caseH), caseTop).mul(step(0.01, caseH));
+            const cx = mx.div(0.17), cy = my.sub(caseTop.sub(caseH)).div(0.2);
+            const ch = hash2D(vec2(floor(cx), floor(cy).add(type)));
+            const sweet = filteredPulse(fract(cx), 0.12, 0.88, mfw.x.div(0.17)).mul(filteredPulse(fract(cy), 0.08, 0.72, mfw.y.div(0.2)));
+            const caseColor = mix(vec3(0.42, 0.47, 0.47), mix(mix(colorA.rgb, colorB.rgb, ch), hueOf(ch.mul(3.7)).mul(0.6).add(0.2), max(B2.z, 0.3)), sweet);
+            const counterColor = mix(mix(midRow.rgb, midRow.rgb.mul(1.6).add(0.05), edge), caseColor, inCase);
+            const sx = fract(mx.div(0.62)).mul(0.62);
+            const stool = max(band(sx, 0.14, 0.48, mfw.x).mul(yb(0.7, 0.78)), band(sx, 0.29, 0.33, mfw.x).mul(yb(0.0, 0.7))).mul(midRow.a);
+            const T = shopLook.top.element(typeI).toVar();
+            const period = max(T.x, 0.1);
+            const tpx = fract(mx.div(period).add(pal)).mul(period);
+            const topper = band(tpx, 0.3, T.y.add(0.3), mfw.x).mul(yb(M.z, M.z.add(T.z))).mul(step(0.01, T.x)).mul(float(1).sub(door));
+            mid.assign(vec4(mix(mix(counterColor, vec3(0.05), stool), vec3(T.w), topper), max(max(body, stool), topper)));
+            midGlow.assign(inCase.mul(body).mul(0.45));
+          }).ElseIf(M.x.lessThan(2.5), () => {
+            // tables for four, a cloth and a candle on each, a chair either side
+            const period = M.y;
+            const ax = abs(fract(mx.div(period).add(pal)).sub(0.5).mul(period)).toVar();
+            const aw = mfw.x;
+            const top = band(ax, -1, 0.44, aw).mul(yb(mix(float(0.71), float(0.52), M.z), 0.77));
+            const leg = band(ax, -1, 0.04, aw).mul(yb(0.0, 0.72));
+            const seat = band(ax, 0.54, 0.93, aw).mul(yb(0.42, 0.49));
+            const chairBack = band(ax, 0.88, 0.94, aw).mul(yb(0.42, 0.98));
+            const legs = max(band(ax, 0.55, 0.59, aw), band(ax, 0.88, 0.92, aw)).mul(yb(0.0, 0.42));
+            const candle = band(ax, -1, 0.035, aw).mul(yb(0.77, 0.9));
+            const chair = max(max(seat, chairBack), legs);
+            const tableColor = mix(midRow.rgb.mul(1.7), vec3(0.86, 0.84, 0.78), M.z);
+            mid.assign(vec4(mix(mix(midRow.rgb, tableColor, top), vec3(1.0, 0.82, 0.5), candle),
+              max(max(max(top, leg), chair), candle)));
+            midGlow.assign(candle.mul(1.5));
+          }).ElseIf(M.x.lessThan(3.5), () => {
+            // garment racks: clothes of every color and length hanging from a rail
+            const period = M.y;
+            const rackId = floor(mx.div(period).add(pal));
+            const rx = fract(mx.div(period).add(pal)).mul(period).toVar();
+            const span = band(rx, 0.3, period.sub(0.5), mfw.x);
+            const rail = yb(1.52, 1.56).mul(span);
+            const posts = max(band(rx, 0.3, 0.35, mfw.x), band(rx, period.sub(0.55), period.sub(0.5), mfw.x)).mul(yb(0.0, 1.56));
+            const g = rx.div(0.115);
+            const gh = hash2D(vec2(floor(g), rackId.add(type))).toVar();
+            const garment = filteredPulse(fract(g), 0.08, 0.92, mfw.x.div(0.115)).mul(yb(float(0.98).sub(gh.mul(0.45)), 1.5))
+              .mul(band(rx, 0.4, period.sub(0.6), mfw.x));
+            const cloth = mix(mix(colorA.rgb, colorB.rgb, gh), hueOf(gh.mul(7.3)).mul(0.6).add(0.08), 0.5);
+            mid.assign(vec4(mix(midRow.rgb, cloth, garment), max(max(rail, posts), garment)));
+          }).ElseIf(M.x.lessThan(4.5), () => {
+            // bikes in a row: two wheels and a diamond frame each
+            const period = M.y;
+            const bikeId = floor(mx.div(period).add(pal));
+            const p = vec2(fract(mx.div(period).add(pal)).sub(0.5).mul(period), my).toVar();
+            const aa = max(mfw.x, mfw.y);
+            const seg = (ax0, ay0, bx0, by0) => {
+              const pa = p.sub(vec2(ax0, ay0)), ba = vec2(bx0 - ax0, by0 - ay0);
+              return length(pa.sub(ba.mul(clamp(dot(pa, ba).div(dot(ba, ba)), 0, 1))));
+            };
+            const wheels = min(abs(length(p.sub(vec2(-0.52, 0.36))).sub(0.33)), abs(length(p.sub(vec2(0.52, 0.36))).sub(0.33)));
+            let d = seg(-0.52, 0.36, -0.06, 0.33);
+            for (const s of [[-0.06, 0.33, -0.2, 0.9], [-0.2, 0.84, 0.36, 0.86], [-0.06, 0.33, 0.36, 0.86], [-0.52, 0.36, -0.19, 0.84],
+              [0.36, 0.86, 0.52, 0.36], [-0.3, 0.92, -0.1, 0.92], [0.36, 0.86, 0.33, 0.98], [0.26, 0.99, 0.42, 0.97]]) d = min(d, seg(...s));
+            const tyre = float(1).sub(smoothstep(0.022, aa.add(0.03), wheels));
+            const tubes = float(1).sub(smoothstep(0.018, aa.add(0.026), d));
+            mid.assign(vec4(mix(vec3(0.05), hueOf(hash2D(vec2(bikeId, 4.1))).mul(0.85).add(0.08), tubes), max(tyre, tubes)));
+          }).ElseIf(M.x.lessThan(5.5), () => {
+            // blocks of goods across the floor: a grocer's aisles, or (on a table) piles of books
+            const period = M.y, table = midRow.a;
+            const blockId = floor(mx.div(period).add(pal));
+            const bx = fract(mx.div(period).add(pal)).mul(period).toVar();
+            const span = band(bx, 0.25, period.sub(0.55), mfw.x);
+            const cw = mix(float(0.14), float(0.25), table), ch = mix(float(0.3), float(0.05), table);
+            const qx = bx.div(cw), qy = my.sub(M.z).div(ch);
+            const qh = hash2D(vec2(floor(qx).add(blockId.mul(13)), floor(qy).add(type))).toVar();
+            const item = filteredPulse(fract(qx), 0.06, 0.94, mfw.x.div(cw)).mul(filteredPulse(fract(qy), 0.1, mix(float(0.78), float(1.0), table), mfw.y.div(ch)));
+            const goods = mix(mix(colorA.rgb, colorB.rgb, qh), hueOf(qh.mul(5.1)).mul(0.6).add(0.08), max(B2.z, 0.6));
+            const body = span.mul(yb(M.z, M.w));
+            const stand = max(band(bx, 0.15, period.sub(0.45), mfw.x).mul(yb(M.z.sub(0.07), M.z)),
+              max(band(bx, 0.2, 0.27, mfw.x), band(bx, period.sub(0.57), period.sub(0.5), mfw.x)).mul(yb(0.0, M.z))).mul(table);
+            mid.assign(vec4(mix(mix(midRow.rgb.mul(0.5), goods, item), midRow.rgb, stand.mul(float(1).sub(body))), max(body, stand)));
+          }).Else(() => {
+            // chairs in a row: a waiting room's, or (bigger, apart) a salon's
+            const period = M.y, s = M.z;
+            const ax = abs(fract(mx.div(period).add(pal)).sub(0.5).mul(period)).toVar();
+            const seat = band(ax, -1, s.mul(0.25), mfw.x).mul(yb(s.mul(0.4), s.mul(0.52)));
+            const chairBack = band(ax, -1, s.mul(0.22), mfw.x).mul(yb(s.mul(0.52), s));
+            const foot = max(band(ax, -1, 0.04, mfw.x).mul(yb(0.0, s.mul(0.4))), band(ax, -1, s.mul(0.2), mfw.x).mul(yb(0.0, 0.05)));
+            mid.assign(vec4(mix(midRow.rgb, midRow.rgb.mul(1.5).add(0.04), chairBack.mul(yb(s.mul(0.86), s))), max(max(seat, chairBack), foot)));
+          });
+        });
+        const cover = mid.a.mul(inRoom).mul(step(0.5, M.x));
+        const furnished = mix(stocked, mid.rgb, cover.mul(mix(0.82, 1.0, typed))).toVar();
+        glow.assign(mix(glow, midGlow, cover));
+
+        // a clothes shop's mannequins in the window, 0.5 m in
+        If(type.equal(SHOP.apparel).and(depth.greaterThan(0.5)), () => {
+          const nx = x.add(dx.mul(0.5)), ny = y.add(dy.mul(0.5));
+          const nw = fw.mul(1.2);
+          const figure = floor(nx.div(2.3).add(pal));
+          const ax = abs(fract(nx.div(2.3).add(pal)).sub(0.5).mul(2.3)).toVar();
+          const yn = (a, b) => band(ny, a, b, nw.y);
+          const head = float(1).sub(smoothstep(0.09, nw.x.add(0.1), length(vec2(ax, ny.sub(1.7)))));
+          const torso = band(ax, -1, 0.2, nw.x).mul(yn(1.02, 1.55));
+          const legs = band(ax, 0.02, 0.17, nw.x).mul(yn(0.12, 1.02));
+          const base = band(ax, -1, 0.24, nw.x).mul(yn(0.05, 0.12));
+          const neck = band(ax, -1, 0.045, nw.x).mul(yn(1.55, 1.64));
+          const dress = hueOf(hash2D(vec2(figure, 8.7))).mul(0.7).add(0.12);
+          const mannequin = mix(mix(mix(vec3(0.78, 0.76, 0.72), vec3(0.16, 0.19, 0.27), legs), dress, torso), vec3(0.2), base);
+          furnished.assign(mix(furnished, mannequin, max(max(max(head, neck), torso), max(legs, base))));
+        });
+
+        // lamps hanging over the room, 1 m in
+        const lampPeriod = max(flags.y, 0.1);
+        const lx = x.add(dx).toVar(), ly = y.add(dy).toVar();
+        const lax = abs(fract(lx.div(lampPeriod).add(pal)).sub(0.5).mul(lampPeriod)).toVar();
+        const hung = step(0.01, flags.y).mul(step(1, depth)).mul(band(lx, 0.3, width.sub(0.3), fw.x));
+        const shade = band(lax, -1, 0.17, fw.x.mul(1.3)).mul(band(ly, 2.02, 2.25, fw.y.mul(1.3))).mul(hung);
+        const cord = band(lax, -1, 0.012, fw.x.mul(1.3)).mul(band(ly, 2.25, 3.1, fw.y.mul(1.3))).mul(hung);
+        furnished.assign(mix(mix(furnished, vec3(0.04), cord), light, shade));
+        glow.assign(mix(glow, float(1.3), shade));
+
         const edgeShade = smoothstep(0, 0.5, min(px, width.sub(px))).mul(0.35).add(0.65);
-        room.assign(mix(room, furnished.mul(edgeShade).mul(mix(0.58, 1, lit)), detail));
-        const lamp = band(px, width.mul(0.18), width.mul(0.82), roomFw.x)
-          .mul(band(depth, 0.65, 0.82, roomFw.y)).mul(ceiling);
-        const backLight = band(py, 2.45, 2.52, roomFw.y).mul(back)
-          .mul(band(px, 0.5, width.sub(0.5), roomFw.x));
-        fixture.assign(max(lamp, backLight).mul(detail));
+        room.assign(mix(room, furnished.mul(mix(edgeShade, float(1), glow.clamp(0, 1))).mul(mix(0.58, 1, lit)), detail));
+        // the ceiling's lights: one strip, strips, or spots
+        const C = shopLook.ceil.element(typeI).toVar();
+        const alongWall = mix(band(px, width.mul(0.18), width.mul(0.82), roomFw.x),
+          filteredPulse(fract(px.div(max(C.x, 0.1))), float(0.5).sub(C.y.mul(0.5)), C.y.mul(0.5).add(0.5), roomFw.x.div(max(C.x, 0.1))), step(0.01, C.x));
+        const intoRoom = mix(band(depth, 0.65, 0.82, roomFw.y),
+          filteredPulse(fract(depth.div(max(C.z, 0.1))), float(0.5).sub(C.w.mul(0.5)), C.w.mul(0.5).add(0.5), roomFw.y.div(max(C.z, 0.1))), step(0.01, C.z));
+        const lamp = alongWall.mul(intoRoom).mul(ceiling).mul(step(0.01, C.y));
+        const backLight = band(py, 2.45, 2.52, roomFw.y).mul(back).mul(band(px, 0.5, width.sub(0.5), roomFw.x)).mul(float(1).sub(typed));
+        const fixture = max(lamp, backLight).mul(detail);
+        room.assign(mix(room, vec3(1), fixture));
+        glow.assign(max(glow.mul(detail), fixture));
       });
+      // on the glass: frosted below a height (a dispensary, with a stripe of its color), blinds half down (a clinic)
+      const frostTop = flags.w;
+      const frosted = float(1).sub(step(frostTop, y)).mul(step(0.01, frostTop));
+      const stripe = band(y, frostTop.sub(0.09), frostTop, fw.y).mul(step(0.01, frostTop));
+      const slats = step(flags2.x, y).mul(filteredPulse(fract(y.div(0.07)), 0.12, 0.95, fw.y.div(0.07)));
+      room.assign(mix(mix(mix(room, vec3(0.78, 0.82, 0.8), frosted.mul(0.9)), shopLook.a.element(typeI).rgb, stripe), vec3(0.84, 0.84, 0.8), slats.mul(0.92)));
+      glow.mulAssign(float(1).sub(max(frosted, slats).mul(0.9)));
+
       const view = normalize(cameraPosition.sub(positionWorld));
       const fresnel = pow(clamp(float(1).sub(abs(dot(view, facadeWorldNormal))), 0, 1), 2);
-      const glassColor = mix(room.mul(light).mul(mix(0.35, 0.95, lit)), cityUniforms.uSkyHorizonColor, fresnel.mul(0.65).add(0.10));
-      result.assign(vec4(mix(glassColor, light, fixture.mul(lit)), lit.mul(float(0.55).add(fixture.mul(2.2))).mul(float(1).sub(fresnel.mul(0.8)))));
+      const shine = glow.clamp(0, 1);
+      const day = mix(float(1), wallRow.a, typed), night = mix(float(0.55), floorRow.a, typed);
+      const lighted = room.mul(mix(light.mul(mix(0.35, 0.95, lit)).mul(day), vec3(1), shine.mul(lit)));
+      const glassColor = mix(lighted, cityUniforms.uSkyHorizonColor, fresnel.mul(0.65).add(0.10));
+      // after dark: an open shop by its kind's light; a closed one of a known kind dim (the lights left on over the
+      // window display, a lamp by the door)
+      const lights = mix(lit, mix(doorPane.mul(0.15).add(0.2), float(1), lit), typed);
+      result.assign(vec4(glassColor, lights.mul(mix(night.add(glow.mul(2.2)), night.mul(0.3).add(glow.mul(0.6)), typed)).mul(float(1).sub(fresnel.mul(0.8)))));
     });
     return result;
   })().toVar();
 
+  // Lamp: what a kind of business puts on its own front, where its sign hangs: a neon OPEN in the window (lit while
+  // it's open), a menu in a box by a restaurant's door, a bank's cash machine, a barber's pole, a cinema's posters.
+  // (color, then its cover in 255ths + a quarter of how much it shines)
+  const extras = !local ? vec4(0) : Fn(() => {
+    const result = vec4(0).toVar(); // color, cover
+    const shine = float(0).toVar();
+    If(mask.mul(own).mul(detail).greaterThan(0.001), () => {
+      // beside the door, on the display window's side of it
+      const beside = (gap, w) => mix(doorX.sub(gap).sub(w), doorX.add(1.12).add(gap), doorLeft);
+      const put = (rgb, cover, light) => {
+        result.assign(vec4(mix(result.rgb, rgb, cover), max(result.a, cover)));
+        shine.assign(mix(shine, light, cover));
+      };
+      const glyphs = (u, v, line) => texture(getShopGlyphTexture(), vec2(u.clamp(0, 1), float(1).sub(float(line).add(float(1).sub(v.clamp(0, 1))).div(3)))).level(0).r;
+      If(type.equal(SHOP.bank), () => {
+        const x0 = beside(0.22, 0.8);
+        const u = x.sub(x0).div(0.8), v = y.sub(0.62).div(1.45);
+        const wu = fw.x.div(0.8), wv = fw.y.div(1.45);
+        const body = band(u, 0, 1, wu).mul(band(v, 0, 1, wv));
+        const header = band(v, 0.84, 0.97, wv).mul(band(u, 0.06, 0.94, wu));
+        const word = glyphs(u.sub(0.2).div(0.6), v.sub(0.84).div(0.13), 1).mul(header);
+        const screen = band(u, 0.2, 0.8, wu).mul(band(v, 0.52, 0.76, wv));
+        const keys = band(u, 0.3, 0.7, wu).mul(band(v, 0.3, 0.44, wv))
+          .mul(filteredPulse(fract(u.mul(10)), 0.2, 0.8, wu.mul(10))).mul(filteredPulse(fract(v.mul(29)), 0.2, 0.8, wv.mul(29)));
+        const slot = band(u, 0.3, 0.7, wu).mul(band(v, 0.18, 0.2, wv));
+        const face = mix(mix(mix(mix(color(0x39424c), color(0x1d4f8f), header), vec3(0.95), word), color(0x9fd0ff), screen), vec3(0.72), keys);
+        put(mix(face, vec3(0.03), slot), body, screen.mul(1.3).add(header.mul(0.5)).add(word));
+      }).ElseIf(type.equal(SHOP.restaurant), () => {
+        const x0 = beside(0.16, 0.36);
+        const u = x.sub(x0).div(0.36), v = y.sub(1.2).div(0.5);
+        const wu = fw.x.div(0.36), wv = fw.y.div(0.5);
+        const box = band(u, 0, 1, wu).mul(band(v, 0, 1, wv));
+        const page = band(u, 0.1, 0.9, wu).mul(band(v, 0.07, 0.93, wv));
+        const lineId = floor(v.mul(14));
+        const text = filteredPulse(fract(v.mul(14)), 0.3, 0.62, wv.mul(14)).mul(step(0.2, u))
+          .mul(step(u, hash2D(vec2(lineId, floor(biz.mul(40)))).mul(0.4).add(0.42))).mul(page);
+        put(mix(mix(color(0x23201c), color(0xefe6cf), page), color(0x3a3028), text), box, page.mul(0.5).mul(lit));
+      }).ElseIf(type.equal(SHOP.theatre), () => {
+        // two poster cases
+        const x0 = beside(0.2, 1.75);
+        const s = x.sub(x0).div(0.875), u = fract(s), v = y.sub(0.82).div(1.2);
+        const wu = fw.x.div(0.875), wv = fw.y.div(1.2);
+        const box = band(s, 0, 2, wu).mul(band(v, 0, 1, wv)).mul(band(u, 0.06, 0.94, wu));
+        const sheet = band(u, 0.11, 0.89, wu).mul(band(v, 0.05, 0.95, wv));
+        const ph = hash2D(vec2(floor(s).add(bay.y), 3.7));
+        const art = mix(hueOf(ph).mul(0.7).add(0.1), hueOf(ph.add(0.45)).mul(0.9).add(0.1), band(v, 0.4, 0.82, wv).mul(band(u, 0.24, 0.76, wu)));
+        const title = filteredPulse(fract(v.mul(9)), 0.3, 0.7, wv.mul(9)).mul(step(v, 0.3)).mul(band(u, 0.2, 0.8, wu));
+        put(mix(color(0x8a6a2c), mix(art, vec3(0.95, 0.9, 0.8), title), sheet), box, sheet.mul(0.9).mul(lit));
+      }).ElseIf(type.equal(SHOP.salon).and(variant.greaterThan(0.5)), () => {
+        // a barber's pole on the pier by the door
+        const x0 = mix(doorX.add(1.19), doorX.sub(0.2), doorLeft);
+        const u = x.sub(x0).div(0.13), v = y.sub(1.2).div(0.9);
+        const pole = band(u, 0, 1, fw.x.div(0.13)).mul(band(v, 0, 1, fw.y.div(0.9)));
+        const turn = fract(v.mul(3.2).add(u.mul(0.7)));
+        const stripes = mix(mix(color(0xc8202a), vec3(0.93), step(0.33, turn)), color(0x2040a8), step(0.66, turn));
+        const caps = float(1).sub(band(v, 0.08, 0.92, fw.y.div(0.9)));
+        put(mix(stripes.mul(float(1).sub(abs(u.sub(0.5)).mul(0.9))), vec3(0.62), caps), pole, float(0.35));
+      });
+      // OPEN in neon in the display window's far top corner: red letters in a blue ring, dark when it's shut
+      If(flags.x.greaterThan(0.5).and(type.notEqual(SHOP.grocery).or(variant.lessThan(0.5))), () => {
+        const x0 = mix(sideWall.add(0.3), width.sub(sideWall).sub(1.0), doorLeft);
+        const u = x.sub(x0).div(0.7), v = y.sub(1.9).div(0.32);
+        const wu = fw.x.div(0.7), wv = fw.y.div(0.32);
+        const plate = band(u, 0, 1, wu).mul(band(v, 0, 1, wv));
+        const ring = plate.mul(float(1).sub(band(u, 0.045, 0.955, wu).mul(band(v, 0.1, 0.9, wv))));
+        const word = glyphs(u.sub(0.1).div(0.8), v.sub(0.14).div(0.72), step(abs(bay.z.sub(1)), 0.25).mul(2)).mul(band(u, 0.1, 0.9, wu)).mul(band(v, 0.14, 0.86, wv));
+        const tubes = max(ring, word);
+        const onNow = mix(0.22, 1.0, lit);
+        put(mix(vec3(0.02), mix(color(0x2a6cff), color(0xff2a1a), word).mul(onNow), tubes), plate.mul(mix(0.55, 1.0, tubes)), tubes.mul(lit).mul(2.4));
+      });
+    });
+    return vec4(result.rgb, floor(result.a.mul(255)).add(shine.mul(0.25).clamp(0, 0.99)));
+  })().toVar();
+  const extraCover = floor(extras.a).div(255).mul(detail), extraShine = fract(extras.a).mul(4);
+
+  // a named business's room is seen mostly by its own light (so it looks the same on the sunny side of the street as
+  // on the shady one), and shows dim through the glass by day
+  const sunlit = mix(float(1), float(0.34), typed);
+  const ownLight = mix(cityUniforms.uInteriorGlow, max(cityUniforms.uInteriorGlow, 0.8), typed);
+  // Lamp: near the camera the glass of a bay with a room behind it isn't drawn at all (the room's own pane of glass is,
+  // shop-interiors.js): everything on the glass stays (a neon OPEN, a clinic's blinds, a dispensary's frosting), and
+  // the glass comes back in a dither over the last 10 m
+  const open = !local ? float(0) : Fn(() => {
+    const o = float(0).toVar();
+    If(roomy.mul(mask).mul(glazing).greaterThan(0.5).and(cityUniforms.uShopGlass.greaterThan(1)), () => {
+      const reach = cityUniforms.uShopGlass;
+      const near = float(1).sub(smoothstep(reach.sub(10), reach, length(positionWorld.sub(cameraPosition))));
+      const grain = fract(fract(dot(screenCoordinate.xy, vec2(0.06711056, 0.00583715))).mul(52.9829189));
+      const frostTop = flags.w;
+      const frosted = float(1).sub(step(frostTop, y)).mul(step(0.01, frostTop));
+      const slats = step(flags2.x, y).mul(step(0.12, fract(y.div(0.07))));
+      o.assign(step(grain, near.mul(1.02).sub(0.001)).mul(float(1).sub(max(frosted, slats))).mul(float(1).sub(step(0.3, extraCover))));
+    });
+    return o;
+  })();
   return {
     mask,
-    color: mix(frame, interior.rgb, glazing),
-    emissive: interior.rgb.mul(interior.a).mul(glazing).add(color(0xe0d7bb).mul(signInk).mul(lit).mul(0.12)).mul(cityUniforms.uInteriorGlow),
+    open,
+    color: mix(mix(frame, interior.rgb.mul(sunlit), glazing), extras.rgb, extraCover),
+    // (a neon tube shows a little by day too)
+    emissive: interior.rgb.mul(interior.a).mul(glazing).mul(float(1).sub(extraCover)).add(color(0xe0d7bb).mul(signInk).mul(lit).mul(0.12))
+      .mul(ownLight).add(extras.rgb.mul(extraCover).mul(extraShine).mul(max(cityUniforms.uInteriorGlow, 0.3))),
     roughness: mix(float(0.58), float(0.14).add(float(1).sub(smoothstep(0.3, 0.9, y)).mul(0.16)), glazing),
     relief: float(1).sub(glazing).mul(0.008).add(handle.mul(0.004))
   };
@@ -798,6 +1161,11 @@ function createCurtainWallMaterial(opts = {}) {
     .mul(float(1.0).sub(isRoof)).mul(float(1.0).sub(solid)).mul(float(1.0).sub(coping));
   const aptRoom = apartmentInteriorBehind(isGlassPane, uCoord, vCoord, winUV, cellId, bayWidth, uFloorHeight, uSeed, uWarmth, uLitProbability.mul(0.65), fw);
   const storefront = createStorefront(facade, uSeed, boxLocal || footprintLocal);
+  // Lamp: a shopfront's glass left out where a room shows behind it; the wall's shadow stays whole
+  if (footprintLocal && TIER.name !== 'phone') {
+    mat.maskNode = storefront.open.lessThan(0.5);
+    mat.maskShadowNode = bool(true);
+  }
   const entrance = createBuildingEntrance(facade, cFrame, boxLocal || footprintLocal, true);
   const floorIdx = floor(gridV);
   const isMechFloor = float(1.0).sub(step(1.0, mod(floorIdx.add(uSeed), 16.0))).mul(step(4.0, floorIdx));
@@ -994,6 +1362,11 @@ function createPreWarBuildingMaterial(opts = {}) {
     .mul(filteredPulse(cellUV.y, effHalfY, float(1.0).sub(effHalfY), fw.y)).mul(float(1.0).sub(isRoof));
   const aptRoom = apartmentInteriorBehind(windowOpening, uCoord, vCoord, winUV, cellId, bayWidth, uFloorHeight, uSeed, uWarmth, uLitProbability.mul(0.62), fw);
   const storefront = createStorefront(facade, uSeed, boxLocal || footprintLocal);
+  // Lamp: a shopfront's glass left out where a room shows behind it; the wall's shadow stays whole
+  if (footprintLocal && TIER.name !== 'phone') {
+    mat.maskNode = storefront.open.lessThan(0.5);
+    mat.maskShadowNode = bool(true);
+  }
   const entrance = createBuildingEntrance(facade, cTrim, boxLocal || footprintLocal);
   // Window AC units (~12% of upper-floor windows), none in the floor the band course covers
   const beltFloor = step(5.0, mod(floor(gridV), 6.0)).mul(front);
@@ -3567,6 +3940,7 @@ export {
   waterDisturb,
   WATER_RIPPLES,
   WALL_KINDS,
+  setShopHour,
   filteredPulse,
   createCurtainWallMaterial,
   createPreWarBuildingMaterial,

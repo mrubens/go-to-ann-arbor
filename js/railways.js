@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GEO } from './city-geodata.js';
-import { groundHeight, riverbedHeight } from './terrain.js';
+import { groundHeight, riverbedHeight, deckTop, bridgeDecks } from './terrain.js';
 import { localTime } from './theride.js';
 import { HORN_PATTERN } from './rail-sounds.js';
 
@@ -31,6 +31,24 @@ function tinted(geo, hex) {
 // averaged over 30 m either way (a railroad doesn't follow every bump), and a straight run across a bridge between
 // `ends` (the heights of the track meeting it at each end, else the ground there). A bridge over the river runs on the
 // deck terrain.js lays there (river.js draws it; groundHeight is its top), so trains ride on the bridge that is drawn.
+// The ends of the level railway bridges over roads (terrain.js `level`): the track climbs to them on an embankment at
+// most 2.5% (rampUp), so a train never leaps up a bridge's end
+let RAMPS = null;
+const RAMP_GRADE = 0.025;
+function ramps() {
+  return RAMPS ??= bridgeDecks().filter((d) => d.level && d.kind === 1).flatMap((d) => [d.points[0], d.points.at(-1)])
+    .map((p) => ({ x: p[0], z: p[1], y: p[3] - 0.1 }));
+}
+function rampUp(xs, zs, y, skip = null) {
+  for (const r of ramps()) {
+    for (let i = 0; i < y.length; i++) {
+      if (skip && skip(i)) continue;
+      const lift = r.y - RAMP_GRADE * Math.hypot(xs[i] - r.x, zs[i] - r.z);
+      if (lift > y[i]) y[i] = lift;
+    }
+  }
+}
+
 function railPath(flat, bridge, step = 5, ends = null) {
   const pts = [];
   for (let i = 0; i < flat.length; i += 2) pts.push([flat[i], flat[i + 1]]);
@@ -51,7 +69,8 @@ function railPath(flat, bridge, step = 5, ends = null) {
     const [mx, mz] = out[n >> 1];
     river = groundHeight(mx, mz) - riverbedHeight(mx, mz) > 0.3;
     const y0 = ends?.[0] ?? g[0], y1 = ends?.[1] ?? g[n - 1];
-    for (let i = 0; i < n; i++) y[i] = river ? g[i] - 0.1 : y0 + (y1 - y0) * (n > 1 ? i / (n - 1) : 0);
+    // (on the deck all the way, over the roads it crosses as well as the water)
+    for (let i = 0; i < n; i++) y[i] = river ? deckTop(out[i][0], out[i][1]) - 0.1 : y0 + (y1 - y0) * (n > 1 ? i / (n - 1) : 0);
   } else {
     const R = Math.max(1, Math.round(30 / step));
     for (let i = 0; i < n; i++) {
@@ -60,10 +79,11 @@ function railPath(flat, bridge, step = 5, ends = null) {
       // never buried more than a little
       y[i] = Math.max(s / c, g[i] - 0.15);
     }
+    rampUp(out.map((p) => p[0]), out.map((p) => p[1]), y);
   }
   const d = new Float32Array(n);
   for (let i = 1; i < n; i++) d[i] = d[i - 1] + Math.hypot(out[i][0] - out[i - 1][0], out[i][1] - out[i - 1][1]);
-  return { x: out.map((p) => p[0]), z: out.map((p) => p[1]), y, d, length: d[n - 1], river };
+  return { x: out.map((p) => p[0]), z: out.map((p) => p[1]), y, d, length: d[n - 1], river, g };
 }
 
 // A train's route (one long line over its bridges): on a bridge of its own (one it runs along, not one crossing over
@@ -98,6 +118,7 @@ function routePath(flat, bridges) {
     for (let j = Math.max(0, i - R); j <= Math.min(n - 1, i + R); j++) if (Number.isNaN(deck[j])) { s += g[j]; c++; }
     p.y[i] = Math.max(s / c, g[i] - 0.15);
   }
+  rampUp(p.x, p.z, p.y, (i) => !Number.isNaN(deck[i]));
   return p;
 }
 
@@ -139,6 +160,22 @@ function trackGeometry(p, bridge, quads, railsOnly = false) {
     strip(-2.2, -1.45, 0.0, 0.2, 0x8a847c);       // ballast shoulders and top
     strip(-1.45, 1.45, 0.2, 0.2, 0x7a746c);
     strip(1.45, 2.2, 0.2, 0.0, 0x8a847c);
+    // where the track is raised up to a bridge, a concrete retaining wall either side from the ballast's edge straight
+    // down to the ground (a sloped fill folds over itself on a curve), capped along its top
+    if (p.g) {
+      for (let i = 0; i + 1 < n; i++) {
+        const ha = p.y[i] - p.g[i], hb = p.y[i + 1] - p.g[i + 1];
+        if (ha < 0.4 && hb < 0.4) continue;
+        const [ax, az] = side(i), [bx, bz] = side(i + 1);
+        for (const s of [-1, 1]) {
+          const P = (j, sd, o, y) => [p.x[j] + sd[0] * o * s, y, p.z[j] + sd[1] * o * s];
+          quads.push([P(i, [ax, az], 2.25, p.y[i] + 0.05), P(i + 1, [bx, bz], 2.25, p.y[i + 1] + 0.05),
+            P(i + 1, [bx, bz], 2.25, Math.min(p.y[i + 1], p.g[i + 1]) - 0.3), P(i, [ax, az], 2.25, Math.min(p.y[i], p.g[i]) - 0.3), 0x9b978e]);
+          quads.push([P(i, [ax, az], 2.05, p.y[i] + 0.12), P(i + 1, [bx, bz], 2.05, p.y[i + 1] + 0.12),
+            P(i + 1, [bx, bz], 2.4, p.y[i + 1] + 0.12), P(i, [ax, az], 2.4, p.y[i] + 0.12), 0xa8a49b]);
+        }
+      }
+    }
   }
   for (const r of [-GAUGE / 2, GAUGE / 2]) {
     strip(r - 0.035, r + 0.035, TOP, TOP, 0xb8b4ae); // the polished top
@@ -302,7 +339,8 @@ function buildRailways(group, crossings = [], wolverine = null) {
       for (let s = 9; s < p.length - 4; s += 18) {
         sample(p, s, at);
         const g = groundHeight(at.x, at.z), h = at.y - 1.3 - g;
-        if (h < 0.8) continue;
+        // (none in a road the bridge crosses: there the deck stands over the road, deckTop above groundHeight)
+        if (h < 0.8 || deckTop(at.x, at.z) - g > 3) continue;
         const b = {};
         sample(p, s + 0.5, b);
         const yaw = Math.atan2(b.x - at.x, b.z - at.z);

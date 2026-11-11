@@ -14,6 +14,7 @@ import { buildCityGrid, restoreCityGrid } from './city-grid.js';
 import { buildOutskirts } from './outskirts.js';
 import { buildLandmarks } from './landmarks.js';
 import { buildRailways } from './railways.js';
+import { pumpSpots } from './gas-stations.js';
 import { buildParkedCars } from './parked-cars.js';
 import { buildCityBlocks } from './buildings.js';
 import { setDistricts, setNeighborhoods } from './districts.js';
@@ -24,6 +25,8 @@ import { loadCityClosures } from './city-closures.js';
 import { buildRoadPaint } from './road-paint.js';
 import { buildTrafficControls } from './traffic-controls.js';
 import { buildShopSigns } from './shop-signs.js';
+import { setShopTypes } from './shop-types.js';
+import { createShopInteriors } from './shop-interiors.js';
 import { ThirdPersonControllerManager } from './controllers.js';
 import { TouchControls } from './touch-controls.js';
 import { reportTriangles, showTriangles } from './triangle-report.js';
@@ -80,7 +83,7 @@ import { buildMtbTrails } from './mtb-trails.js';
 import { buildBikeRoutes } from './bike-routes.js';
 import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
-import { waterDisturb } from './tsl-materials.js';
+import { waterDisturb, setShopHour } from './tsl-materials.js';
 import { refreshSeason } from './seasons.js';
 import { buildRoadWork } from './road-work.js';
 import { buildPotholes } from './potholes.js';
@@ -367,8 +370,11 @@ async function initApp() {
   // how houses and shopfronts really look: the assessor's records and street photos (build-building-looks.py)
   const looksBytes = await asset('data/building-looks.json');
   setBuildingLooks(looksBytes ? JSON.parse(new TextDecoder().decode(looksBytes)) : null);
+  // what kind of business each named storefront is (build-shop-types.py), before the shop walls are built
+  const shopTypeBytes = await asset('data/shop-types.json');
+  setShopTypes(shopTypeBytes ? JSON.parse(new TextDecoder().decode(shopTypeBytes)) : null);
   const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarkColliders, addresses, gasStations), { cull: setupSceneCulling, still: true }),
-    { inputs: [heights, landmarks, parkingPart, bandShellPart, restroomsPart, draftedPart], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json', 'js/houses.js', 'js/trees.js'] });
+    { inputs: [heights, landmarks, parkingPart, bandShellPart, restroomsPart, draftedPart], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json', 'data/shop-types.json', 'js/shop-types.js', 'js/building-footprints.js', 'js/houses.js', 'js/trees.js'] });
   const cityBlocks = blocks.made;
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...outskirts.colliders, ...(cityGrid.colliders || [])];
@@ -425,7 +431,7 @@ async function initApp() {
   // Traffic lights and stop & yield signs where the road network put them (traffic-controls.js)
   const controlsPart = live.keep('trafficControls', () => cityPart((g) => buildTrafficControls(g, traffic.made.network), { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic, details], from: ['js/traffic-controls.js'] });
   // Signs over the real shops, restaurants and cafes (shop-signs.js, from OpenStreetMap)
-  const signsPart = live.keep('shopSigns', () => cityPart((g) => buildShopSigns(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/shop-signs.js'] });
+  const signsPart = live.keep('shopSigns', () => cityPart((g) => buildShopSigns(g), { cull: setupSceneCulling, still: true }), { inputs: [heights, blocks], from: ['js/shop-signs.js', 'js/shop-types.js', 'data/shop-types.json'] });
   await showLoadingStage('Laying the railroads...');
   // The tracks and the trains on them, stood on the ground where they're built (railways.js)
   // where streets cross the tracks at grade, with gates (build-rail-crossings.py, OpenStreetMap)
@@ -449,7 +455,7 @@ async function initApp() {
   // run of this file, as either part may have been made again by a change
   trafficSystem.setRailCrossings?.(railways.crossings || []);
   // Cars parked in the lots and along the main streets downtown, solid to the player (parked-cars.js)
-  const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack, parkingPart.made.stalls)), { inputs: [heights, parkingPart], from: ['js/parked-cars.js', 'js/curb-parking.js', 'js/railways.js', 'data/curb-cuts.bin.gz'] });
+  const parkedPart = live.keep('parkedCars', () => cityPart((g) => buildParkedCars(g, railways.nearTrack, [...parkingPart.made.stalls, ...pumpSpots(gasStations)])), { inputs: [heights, parkingPart], from: ['js/parked-cars.js', 'js/curb-parking.js', 'js/railways.js', 'js/gas-stations.js', 'data/curb-cuts.bin.gz'] });
   const parkedCars = parkedPart.made;
   // Kayaks pulled up on the river's banks at the parks, to get into there (kayak-launches.js)
   const launchesPart = live.keep('kayakLaunches', () => cityPart((g) => buildKayakLaunches(g)), { inputs: [heights], from: ['js/kayak-launches.js'] });
@@ -602,7 +608,9 @@ async function initApp() {
   // Lamp: Ann Arbor's animals, near the player only; never anyone's obstacle (animals.js)
   // (none on the Xbox, where they're never shown: an empty part, so their models and shaders aren't made there at all)
   const animalsPart = live.keep('animals', () => cityPart((g) => (XBOX ? { update() {} } : buildAnimals(g))), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
-  const parts = [grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
+  // the rooms behind the shopfronts' glass, near the player: furniture and people (shop-interiors.js)
+  const shopRoomsPart = live.keep('shopRooms', () => cityPart((g) => createShopInteriors(g)), { inputs: [blocks], from: ['js/shop-interiors.js', 'js/shop-kits.js', 'js/shop-kits-b.js', 'js/shop-kits-c.js', 'js/shop-kit-core.js', 'js/shop-types.js'] });
+  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -1677,6 +1685,7 @@ async function initApp() {
   function selectTime(timeId) {
     lightingSystem.applyPreset(timeId, timeId === 'now');
     setStreetLife(timeId, lightingSystem.weather); // the hour, date and weather the people go by (street-life.js)
+    setShopHour(townTime(timeId).hour); // which kinds of business are open (shop-types.js)
     trafficSystem.setCrowdBusy?.(...crowdBusy(timeId));
     // rain or snow falls only under the real sky, and only then are the roads wet or slippery (road-feel.js)
     precipitation.set(timeId === 'now' ? lightingSystem.weather : null);
@@ -2655,6 +2664,7 @@ async function initApp() {
     liveryPart.made.update(dt, elapsed, cameraSystem.currentPos,
       controllerManager.activeMode === 'person' ? controllerManager.entities.person.position : null);
     planesPart.made.update(dt, lightingSystem.lookId);
+    shopRoomsPart.made.update(dt, cameraSystem.currentPos, split.drawn ? split.second.camera.position : null);
     scootersPart.made.update(dt, cameraSystem.currentPos, controllerManager.getActiveEntity(), controllerManager.activeMode, rackCue);
     racksPart.made.update(dt, cameraSystem.currentPos, controllerManager.getActiveEntity(), controllerManager.activeMode, rackCue);
     airportPart.made.update?.(dt, cameraSystem.currentPos);

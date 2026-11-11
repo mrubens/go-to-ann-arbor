@@ -34,6 +34,7 @@ import {
 import { GEO } from './city-geodata.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
 import { createBuildingFootprints } from './building-footprints.js';
+import { beginShopBays, shopBayStats } from './shop-types.js';
 import { buildHouses, streamHouses, shopLook } from './houses.js';
 import { TIER } from './device-tier.js';
 import { groundStreamCenter } from './terrain.js';
@@ -513,10 +514,19 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     group.add(gas.group);
     colliders.push(...gas.colliders);
   }
+  // Lamp: as the shop walls are built, each named business takes its bays (shop-types.js)
+  // A building that isn't one of shopfronts (a one-storey shop or strip mall, an office block) still gets one on a
+  // wall a named business's sign hangs on (`signFronts`): not the University's or the city's, nor a house-colored block
+  beginShopBays();
   surveyedBuckets.forEach((items, i) => {
     if (!items.length) return;
+    for (const r of items) r.signFronts = !r.storefronts && r.kind !== 5 && r.kind !== 6 && (i < 5 || i > 7) && r.height >= 3.1;
     group.add(createBuildingFootprints(materials[i], items, i < 2 || i >= 5 ? b => nearbyReserves(b, 2) : undefined));
   });
+  {
+    const s = shopBayStats();
+    log(`[shop bays] ${s.signs} named businesses over their own bays, ${s.bays} bays theirs on ${s.rows} walls`);
+  }
 
   // Narrow empty lots become sitting areas with trees.
   {

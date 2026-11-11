@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { WALL_KINDS } from './tsl-materials.js';
 import { polygonContains } from './building-collision.js';
+import { shopWallRow } from './shop-types.js';
 
 function partyWallHeight(record, a, b, neighbours) {
   const dx = b.x - a.x, dz = b.y - a.y, length = Math.hypot(dx, dz);
@@ -55,8 +56,11 @@ function createBuildingFootprints(material, records, getNeighbours) {
           // Lamp: a shop wall carries its shopfront's look (createStorefront) under the next kind: display windows and
           // frame color, (windows * 16 + frame) / 128
           const look = record.shopLook || 0;
+          // less the wall's row among the named businesses' bays (shop-types.js), which says what kind each bay is
+          // (a wall of another building becomes a shop wall where a named business's sign hangs on it: `signFronts`)
+          const signRow = !i && !adjacentHeight && (record.storefronts || record.signFronts) ? shopWallRow(a, b, record, polygon) : 0;
           const kind = i ? WALL_KINDS.rear : adjacentHeight ? WALL_KINDS.lotLine
-            : record.storefronts ? WALL_KINDS.shop + ((look >> 5 & 3) * 16 + (look >> 7 & 15)) / 128 : WALL_KINDS.front;
+            : record.storefronts || signRow ? WALL_KINDS.shop + ((look >> 5 & 3) * 16 + (look >> 7 & 15)) / 128 - signRow : WALL_KINDS.front;
           const exposedHeight = adjacentHeight ? Math.max(0, top - adjacentHeight) : height;
           // Match the positive-world-axis tangent used by the shared interior-map view ray.
           const reverse = (Math.abs(dz) >= Math.abs(dx) ? dz : dx) < 0;

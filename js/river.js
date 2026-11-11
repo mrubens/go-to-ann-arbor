@@ -303,6 +303,13 @@ function buildBridges(group) {
       }
       i = j;
     }
+    // a level deck over a road (terrain.js): a concrete abutment at each end, from the ground up to the deck
+    if (d.level && d.kind !== 2) {
+      for (const i of [0, P.length - 1]) {
+        const gnd = riverbedHeight(P[i][0], P[i][1]);
+        if (P[i][3] + under - gnd > 0.6) pier(concrete, i, hw * 2 + 0.6, 2.4, gnd - 0.6, P[i][3] + 0.05);
+      }
+    }
     // Piers in the water every 25 m or so, and an abutment where each end meets the bank
     const wet = P.map((p) => riverDepth(p[0], p[1]) > 0.05);
     const first = wet.indexOf(true), last = wet.lastIndexOf(true);
@@ -314,7 +321,7 @@ function buildBridges(group) {
       let i = first;
       while (i < last && P[i][2] < s) i++;
       const top = P[i][3] + under, bed = riverbedHeight(P[i][0], P[i][1]) - 0.4;
-      if (top - bed > 1) {
+      if (top - bed > 1 && !P[i][5]) {
         if (d.kind === 2) {
           footPier(fb, P[i], T[i], hw, bed, P[i][3] - 0.62);
           for (const s of [-1, 1]) addPier({ x: P[i][0] - T[i][1] * s * (hw - 0.4), z: P[i][1] + T[i][0] * s * (hw - 0.4), r: 0.26 });
@@ -324,7 +331,10 @@ function buildBridges(group) {
         }
       }
     }
-    for (const i of [Math.max(0, first - 1), Math.min(P.length - 1, last + 1)]) {
+    // (an abutment never stands in a road the bridge crosses: it moves out past the road, terrain.js roadsUnder)
+    const clearOfRoad = (i, way) => { while (P[i]?.[5] && i + way >= 0 && i + way < P.length) i += way; return P[i]?.[5] ? -1 : i; };
+    for (const i of [clearOfRoad(Math.max(0, first - 1), -1), clearOfRoad(Math.min(P.length - 1, last + 1), 1)]) {
+      if (i < 0) continue;
       const top = P[i][3] + under, bed = riverbedHeight(P[i][0], P[i][1]) - 0.5;
       if (d.kind === 2) {
         if (P[i][3] - 0.62 - bed > 0.3) {

@@ -24,6 +24,32 @@ export function canopyFootprints(data) {
   return out;
 }
 
+/** Cars filling up: a spot either side of each pump island, about two in five taken (parked-cars.js draws them, as
+ *  it does the cars in the lots: they can be bumped and taken) */
+export function pumpSpots(data) {
+  const list = (data && data.canopies) || [];
+  const spots = [];
+  for (let i = 0; i < list.length; i += 6) {
+    const [cx, cz, angle, L, W] = list.slice(i, i + 5);
+    const ux = Math.cos(angle), uz = Math.sin(angle), vx = -uz, vz = ux;
+    const n = Math.max(1, Math.round(L / 7.5));
+    if (W < 4.5) continue;
+    for (let k = 0; k < n; k++) {
+      const s = (k + 0.5) / n * L - L / 2;
+      for (const side of [-1, 1]) {
+        // (between two islands only one car fits the lane: the next island's near side stays clear)
+        if (side < 0 && k > 0 && L / n < 6.2) continue;
+        const x = cx + ux * (s + side * 1.95), z = cz + uz * (s + side * 1.95);
+        const h = Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1;
+        if (h > 0.42) continue;
+        const along = (h * 7 % 1 - 0.5) * 1.2;
+        spots.push({ x: x + vx * along, z: z + vz * along, yaw: Math.atan2(vx, vz) + (h * 13 % 1 < 0.5 ? Math.PI : 0), pump: true });
+      }
+    }
+  }
+  return spots;
+}
+
 export function insideCanopy(footprints, x, z) {
   return footprints.some((f) => {
     const dx = x - f.cx, dz = z - f.cz;

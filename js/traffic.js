@@ -141,7 +141,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   // Synchronous notification: listeners must copy any fields they retain. Normal points from b toward a.
   function reportCollision(a, b, x, y, z, nx, nz, speed) {
-    if (speed > 6 && player.mode === 'car' && player.entity && (a === player.entity || b === player.entity)) reportOffense?.('careless driving');
+    if (player.entity && (a === player.entity || b === player.entity)) {
+      const other = a === player.entity ? b : a;
+      // hitting a cruiser itself, at any speed worth the name, brings that very car after them
+      if (other?.cruiser && !other.trap && speed > 1.5 && trap.state === 'idle') { rammedCop = other; reportOffense('hitting a police car'); }
+      else if (speed > 6 && player.mode === 'car') reportOffense('careless driving');
+    }
     if (!collisionListener || speed <= 0.5) return;
     collisionEvent.a = a; collisionEvent.b = b;
     collisionEvent.x = x; collisionEvent.y = y; collisionEvent.z = z;
@@ -216,6 +221,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   // Ann Arbor's police cruisers: white, the blue stripe and lettering on the doors
   const policeWhite = new THREE.Color(0xf6f9fc);
+  const policeBlack = new THREE.Color(0x0b0c0f);
+  const policeNavy = new THREE.Color(0x131c3a);
   // Of every 20 cars: 6 sedans (Priuses, Civics, Camrys, the odd old Volvo), 5 SUVs and crossovers (Subarus, RAV4s,
   // CR-Vs), 2 minivans, 3 pickups and a van; no cabs. Every 20th sedan is a sports car. Colours in annArborCar().
   // Lamp: and electric ones, Ann Arbor having plenty: of every 20, two Teslas, an Ioniq 5 and, now and then, a
@@ -241,7 +248,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const curb = !isPolice && (i % 10 === 7 || extraEbike);
     const moto = curb || (!isPolice && i % 10 === 3);
     let bodyType;
-    if (isPolice) bodyType = !trap && (i % 100) === 56 ? 'suv' : 'sedan';
+    // Lamp: AAPD's patrol cars are Ford Police Interceptor Utilities in dark navy (and an electric one, black and
+    // white): every cruiser an SUV
+    if (isPolice) bodyType = 'suv';
     else if (extraEbike) bodyType = 'ebike';
     else if (curb) bodyType = CURB_KINDS[Math.floor(i / 10) % CURB_KINDS.length];
     else if (moto) bodyType = MOTO_KINDS[Math.floor(i / 10) % MOTO_KINDS.length];
@@ -266,8 +275,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       col = new THREE.Color(paints[(i * 7 + 3) % paints.length]);
       style = 0;
     } else if (isPolice) {
-      col = policeWhite;
-      style = carStyleCode({ livery: 1, metallic: 0, trim: 2, wheel: 3, plate: i });
+      // (one of them AAPD's electric patrol car, black with white doors: livery 6, and an electric motor's sound)
+      const electric = !trap && (i % 100) === 56;
+      col = electric ? policeBlack : policeNavy;
+      style = carStyleCode({ livery: electric ? 6 : 1, metallic: 1, trim: 2, wheel: 3, plate: i });
       policeCounts[bodyType]++;
     } else {
       const look = annArborCar(bodyType, counts[bodyType] * 7 + i);
@@ -286,6 +297,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     Object.assign(car, { isPolice: false, cruiser: isPolice, nextCall: isPolice ? 60 + Math.random() * 240 : 0, callUntil: 0,
       trap, ambulance, nextRun: ambulance ? 90 + Math.random() * 180 : 0, pullUntil: 0, pullOff: 0, rank: 0,
       bodyType, paint, style, halfL: kind.halfL, mass: kind.mass, engine: kind.engine, moto, curb });
+    if (isPolice && (style & 7) === 6) car.engine = 'electric';
     if (curb) car.curbSpeed = MOTO_SPECS[bodyType].curbSpeed * (0.85 + (i % 7) * 0.05);
     cars.push(car);
   }
@@ -866,7 +878,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     // has turned off it.
     // Lamp: the ambulance on a run takes the shortest way to the hospital; the corridor's cruiser the way to the player
     if (v.goal && toHospital) { const m = hospitalMove(v, fromLane); if (m) return m; }
-    if (v.chase) { const m = chaseMove(v, fromLane); if (m) return m; }
+    // (a turn its own lane can make first: it goes straight through junctions, with no time to change lanes)
+    if (v.chase) { const m = chaseMove(v, true) || chaseMove(v, fromLane); if (m) return m; }
     if (v.route) {
       const next = v.route.edges[v.ri + 1];
       const m = next && e.moves.find((o) => o.to === next);
@@ -1079,7 +1092,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // May v, its front bumper d metres before the stop line, enter the intersection now? Sets the exit lane.
   // Once too close to stop, v is committed: it goes, and holds the intersection from then on.
   function mayEnter(v, d) {
-    if (v.chase) return true; // (the cruiser after the player goes through, siren clearing the way)
+    // (the cruiser after the player goes through, siren clearing the way, when its lane can make its turn)
+    if (v.chase && v.move.out[v.lane] >= 0) return true;
     const e = v.edge;
     const n = e.to;
     const phase = n.signal ? phaseOf(e) : 'green';
@@ -2548,6 +2562,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // a warning; drive off, and it chases a while, then gives up. `offense` is the last crash or knock-down, for a moment.
   const offense = { text: null, at: -Infinity };
   function reportOffense(text) { offense.text = text; offense.at = clock; }
+  // the cruiser the player just hit, which goes after them itself (patrolWatch)
+  let rammedCop = null;
   let onNotice = null;
   let corridors = null;
   function trapPlace(v, c) {
@@ -2700,7 +2716,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     return true;
   }
   function patrolWatch() {
-    if (trap.state !== 'idle' || clock < trap.cooldown || !(player.active && player.mode === 'car')) return;
+    // (hitting a police car counts even while the patrols rest)
+    if (trap.state !== 'idle' || (clock < trap.cooldown && !rammedCop) || !(player.active && player.mode === 'car')) return;
     const mph = Math.hypot(player.vx, player.vz) / 0.44704;
     let why = null, limit = 0;
     if (clock - offense.at < 4) why = offense.text;
@@ -2709,8 +2726,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       if (limit && mph > limit + 15) why = 'speed';
     }
     if (!why) return;
-    // the nearest cruiser on patrol, close enough to have seen it
+    // the cruiser they hit, or else the nearest on patrol close enough to have seen it
     let best = null, bestD = why === 'speed' ? 60 : 90;
+    if (rammedCop?.edge && !rammedCop.parked) { best = rammedCop; bestD = Math.hypot(rammedCop.x - player.x, rammedCop.z - player.z); }
+    rammedCop = null;
+    if (!best)
     for (const c of cars) {
       if (!c.cruiser || c.trap || !c.edge || c.isPolice || c.parked || c.conn) continue;
       const d = Math.hypot(c.x - player.x, c.z - player.z);
