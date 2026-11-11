@@ -633,6 +633,7 @@ class ThirdPersonControllerManager {
       person.fallen = null;
       if (person.rig) person.rig.ragdolling = false;
       if (person.sitting) { person.sitting = null; person.rig.placed = false; }
+      if (person.swing) this.leaveSwing(false);
       this._personStanding?.clear();
     } else person.riding = null;
     const before = this.activeMode;
@@ -1769,6 +1770,9 @@ class ThirdPersonControllerManager {
     // a bench, a chair or a place on the bleachers (seats.js), sat on from beside it; nearer than anything else in reach
     const chair = !p.swimming && (p.grounded ?? true) ? this.seats?.nearest(p.position.x, p.position.z, 1.5, p.position.y, facing) : null;
     if (chair && chair.d / 1.5 * facing(chair.seat.x, chair.seat.z) * 0.8 < score) return { mode: 'person', sit: chair.seat };
+    // a playground swing's seat (playgrounds.js swings), sat on from beside it
+    const swing = !p.swimming && (p.grounded ?? true) ? this.swings?.nearest(p.position.x, p.position.z, 1.6, facing) : null;
+    if (swing && swing.d / 1.6 * facing(swing.x, swing.z) * 0.8 < score) return { mode: 'person', swing: swing.seat };
     if (best && !peek) {
       p.riding = best.mode;
       this.entities[best.mode].leftEmpty = false;
@@ -2239,6 +2243,7 @@ class ThirdPersonControllerManager {
         const jumpAir = p.jumping ? Math.max(0.006, air) : p.jumpPrep > 0 ? -(1 - p.jumpPrep / 0.085) : air > 0.3 ? air : 0;
         if (p.golf) p.rig.perch(this._sitRoot(p), p.golf.pose);
         else if (p.sitting) p.rig.perch(this._sitRoot(p), this._sitPose(p.sitting));
+        else if (p.swing) p.rig.perch(p.swing.root, p.swing.pose);
         else if (p.chute) p.rig.skydive(dt, p.position.x, p.position.y + 0.5 + 0.45 * p.chute.open, p.position.z, p.heading, p.chute.flat || 0, p.chute.bank || 0, p.chute.track || 0, p.chute.open);
         else if (p.fallen?.getUp >= 0) p.rig.update(dt, p.position.x, p.position.z, p.heading, personGround, this, 0, true, DIVE_GET_UP + p.fallen.getUp);
         else if (p.swimming) p.rig.swim(dt, p.position.x, (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1) + Math.min(0, p.position.y + 1 - (waterLevel(p.position.x, p.position.z) ?? p.position.y + 1)), p.position.z, p.heading, Math.min(1, Math.abs(p.speed) / 1.8));
@@ -2358,7 +2363,7 @@ class ThirdPersonControllerManager {
     if (this.activeMode === 'person') {
       this.updatePerson(dt, elapsed);
       const p = this.entities.person;
-      if (!p.riding && !p.sitting && !p.golf && !p.onBus) this.trainStrike(p, 0.4);
+      if (!p.riding && !p.sitting && !p.swing && !p.golf && !p.onBus) this.trainStrike(p, 0.4);
     } else if (this.entities.person.riding) {
       // In something: carried along with it, out of sight
       const p = this.entities.person;
@@ -2821,6 +2826,106 @@ class ThirdPersonControllerManager {
     log('[seats] stood up');
   }
 
+  // On a playground swing (playgrounds.js swings, from enterOrExit): sat on the seat holding its chains, facing the way
+  // they came from; forward and back pump it (in time with the swing it goes higher, against it it slows), and F
+  // jumps off with the seat's swing at that moment (leaveSwing). `p.position` follows the seat loosely, for the camera.
+  _swingState() {
+    return this._swingSt || (this._swingSt = { pivot: new THREE.Vector3(), along: new THREE.Vector3(), point: new THREE.Vector3(), vel: new THREE.Vector3() });
+  }
+  boardSwing(seat) {
+    const p = this.entities.person, sw = this.swings;
+    if (!sw || seat.rider) return;
+    const st = sw.state(seat, this._swingState());
+    const side = (p.position.x - st.pivot.x) * st.along.x + (p.position.z - st.pivot.z) * st.along.z >= 0 ? 1 : -1;
+    sw.take(seat, p);
+    const root = new THREE.Object3D();
+    root.rotation.order = 'YXZ';
+    p.swing = { seat, side, from: { x: p.position.x, y: p.position.y, z: p.position.z }, extend: 0, root, at: null,
+      pose: { hip: [0, 0, -0.02], shoulder: [0, 0.55, -0.06], hand: [0.21, 0.4, 0.05], foot: [0.1, -0.36, 0.28], standing: false } };
+    p.heading = Math.atan2(st.along.x * side, st.along.z * side);
+    p.speed = p.verticalVel = 0;
+    p.jumping = false;
+    p.grounded = true;
+    this.updateSwing(0);
+    log('[swings] sat on a swing');
+  }
+  // false once they're off it (moved away some other way: a teleport, a reset)
+  updateSwing(dt) {
+    const p = this.entities.person, sw = p.swing, seat = sw.seat;
+    if (this.activeMode !== 'person' || !this.swings || (sw.at && Math.hypot(p.position.x - sw.at.x, p.position.z - sw.at.z) > 0.3)) {
+      this.swings?.release(seat);
+      p.swing = null;
+      p.rig.placed = false;
+      return false;
+    }
+    const k = this.keys;
+    seat.pump = Math.max(-1, Math.min(1, (k.forward || 0) - (k.backward || 0))) * sw.side;
+    const st = this.swings.state(seat, this._swingState());
+    const th = seat.theta * sw.side, om = seat.omega * sw.side;
+    // legs out ahead on the way forward, tucked under on the way back, leaning back against the chains as they go out
+    sw.extend += (Math.max(-1, Math.min(1, om / 1.6)) - sw.extend) * Math.min(1, dt * 6);
+    const e = sw.extend, o = sw.pose, out = Math.max(0, e), back = Math.max(0, -e);
+    o.shoulder[2] = -0.06 - 0.12 * out + 0.06 * back;
+    o.foot[1] = -0.36 + 0.42 * out - 0.06 * back;
+    o.foot[2] = 0.28 + 0.44 * out - 0.4 * back;
+    o.hand[1] = 0.4 + 0.04 * out;
+    sw.root.position.copy(st.point);
+    sw.root.rotation.set(-th, p.heading, 0);
+    // the camera's mark: under the beam, carried part way with the seat, eased
+    const tx = st.pivot.x + (st.point.x - st.pivot.x) * 0.35, tz = st.pivot.z + (st.point.z - st.pivot.z) * 0.35;
+    const ty = st.pivot.y - 2.3 + (st.point.y - st.pivot.y + 1.9) * 0.35;
+    if (!sw.at) p.position.set(tx, ty, tz);
+    else {
+      const a = 1 - Math.exp(-dt * 4);
+      p.position.x += (tx - p.position.x) * a; p.position.y += (ty - p.position.y) * a; p.position.z += (tz - p.position.z) * a;
+    }
+    sw.at = { x: p.position.x, z: p.position.z };
+    p.speed = p.verticalVel = 0;
+    p.grounded = true;
+    return true;
+  }
+  // Off the swing: with `jump`, launched at the seat's velocity (and a push of their own), landing on their feet from
+  // a gentle one, tumbling from a big one (knockDown); the seat swings on empty. Without, just stood beside it.
+  leaveSwing(jump = true) {
+    const p = this.entities.person, sw = p.swing;
+    if (!sw) return;
+    p.swing = null;
+    p.rig.placed = false;
+    const seat = sw.seat;
+    if (!this.swings) { seat.rider = null; return; }
+    const st = this.swings.state(seat, this._swingState());
+    this.swings.release(seat);
+    if (!jump) {
+      if (this.activeMode === 'person') {
+        p.position.set(sw.from.x, sw.from.y, sw.from.z);
+        p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
+      }
+      return;
+    }
+    const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
+    const vx = st.vel.x + fx * 0.9, vz = st.vel.z + fz * 0.9, vy = st.vel.y + 1.3;
+    const ground = this.getGroundHeight(st.point.x, st.point.z, 'person');
+    p.position.set(st.point.x, Math.max(ground, st.point.y - 0.42), st.point.z);
+    p.prevX = p.position.x; p.prevZ = p.position.z;
+    const v = Math.hypot(vx, vy, vz);
+    // a little kick back on the seat as they push off it
+    seat.omega -= sw.side * 0.25;
+    if (v > 3.4) {
+      p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
+      this.knockDown(vx, vy, vz, (hash01(v * 7.3) - 0.5) * 3, 0.8 + v * 0.15);
+      log(`[swings] flew off a swing at ${v.toFixed(1)} m/s, tumbling`);
+      return;
+    }
+    p.speed = vx * fx + vz * fz;
+    p.verticalVel = vy;
+    p.jumping = true;
+    p.jumpPrep = 0;
+    p.grounded = false;
+    p.launched = true;
+    p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
+    log(`[swings] jumped off a swing at ${v.toFixed(1)} m/s`);
+  }
+
   _sitRoot(p) {
     const r = this._sitRootObj || (this._sitRootObj = new THREE.Object3D());
     r.position.copy(p.position);
@@ -2855,6 +2960,7 @@ class ThirdPersonControllerManager {
         else return;
       }
     }
+    if (p.swing && this.updateSwing(dt)) return;
     if (p.onBus) {
       const ride = this.traffic?.busRide();
       if (ride && !ride.gone) { this.rideAlong(ride); p.speed = 0; return; }
@@ -2899,7 +3005,9 @@ class ThirdPersonControllerManager {
 
     const accelerating = Math.abs(targetSpeed) > Math.abs(p.speed) && p.speed * targetSpeed >= 0;
     const acceleration = accelerating ? 5.5 * Math.abs(targetSpeed) / maxSpeed : 12;
-    p.speed += Math.max(-acceleration * dt, Math.min(acceleration * dt, targetSpeed - p.speed));
+    // flying off a swing (leaveSwing), they carry its speed until they land
+    if (p.launched && !p.jumping) p.launched = false;
+    if (!p.launched) p.speed += Math.max(-acceleration * dt, Math.min(acceleration * dt, targetSpeed - p.speed));
 
     const prevX = p.position.x;
     const prevZ = p.position.z;

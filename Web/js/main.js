@@ -726,6 +726,8 @@ async function initApp() {
   controllerManager.roadWork = roadWork;
   // the playgrounds' wave slides and decks, driven up like ramps (playgrounds.js)
   controllerManager.playTop = cityGrid.playTop || null;
+  // and their swings, sat on and pumped (playgrounds.js swings, controllers.js boardSwing)
+  controllerManager.swings = cityGrid.swings || null;
   controllerManager.potholes = potholes;
   controllerManager.speedHumps = humpsPart.made;
   controllerManager.railways = railways;
@@ -835,8 +837,8 @@ async function initApp() {
   function savePlayerState() {
     try {
       // one sitting down is kept where they stood to sit
-      const entities = Object.fromEntries(Object.entries(controllerManager.entities).map(([mode, entity]) => [mode, entity.sitting ? {
-        ...entity.sitting.from, heading: entity.heading
+      const entities = Object.fromEntries(Object.entries(controllerManager.entities).map(([mode, entity]) => [mode, entity.sitting || entity.swing ? {
+        ...(entity.sitting || entity.swing).from, heading: entity.heading
       } : {
         x: entity.position.x, y: entity.position.y, z: entity.position.z, heading: entity.heading
       }]));
@@ -1144,6 +1146,9 @@ async function initApp() {
   const carRadio = new CarRadio();
   // split screen's state (see showSplit), here before anything that reads it
   const split = { on: false, second: null, view: null, offered: false, kept: null, drawn: false };
+  const swingFoci = [null, null];
+  // a swing's chain creaking on its hook at the end of its arc (audio-events.js creak)
+  const swingCreak = (at, loud) => audioSystem?.cue('creak', at, loud);
   // each camera as wide as what it draws into: the whole drawing, or a half of it side by side
   function fitCameras() {
     const two = split.drawn;
@@ -1185,6 +1190,8 @@ async function initApp() {
   // Lined up over a golf ball (golf-play.js): the stick or the turn keys aim, forward and back change the club, and
   // swing is held to fill the meter and let go to hit
   controlHints.golf = [{ keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Aim' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Swing' }, { keys: ['KeyF'], pad: [BUTTON.X], does: 'Stop golfing' }];
+  // On a playground swing: forward and back pump it, F jumps off
+  controlHints.swing = [{ keys: ['KeyW', 'KeyS'], pad: [STICK.LEFT], does: 'Pump' }, { keys: ['KeyF'], pad: [BUTTON.X], does: 'Jump off' }];
   // Getting out of a car on the move or the helicopter in the air is a jump, and its hint says so
   let jumpOut = false;
   // On foot, what F would do now (what's in reach, looked for each quarter second below): '' with nothing near hides it
@@ -1202,11 +1209,13 @@ async function initApp() {
     if (cm.activeMode !== 'person' || p.fallen || p.chute) return '';
     if (p.onBus) return 'Get off';
     if (golf.active) return 'Stop golfing';
+    if (p.swing) return 'Jump off';
     if (!p.sitting && teeToPlay(p) >= 0) return 'Play golf';
     if (trafficSystem.boardBus(p.position.x, p.position.z, 5, true)) return 'Board the bus';
     const c = cm.enterOrExit(parkedCars, trafficSystem, true);
     if (!c) return '';
     if (c.sit) return 'Sit';
+    if (c.swing) return 'Swing';
     if (c.rack || c.mode === 'cyclist') return 'Ride';
     return 'Get in';
   }
@@ -1270,6 +1279,7 @@ async function initApp() {
     if (!elControlsHint) return;
     if (mode === 'helicopter' && controllerManager.entities.helicopter.craft === 'plane') mode = 'plane';
     if (mode === 'person' && golf.active) mode = 'golf';
+    if (mode === 'person' && controllerManager.entities.person.swing) mode = 'swing';
     const pad = on.kind === 'controller';
     const items = (controlHints[mode] || []).filter((hint) => (pad ? hint.pad : hint.keys) && !(hint.getIn && !getInWords) && !(hint.siren && !sirenCan())).map((hint) => {
       const item = document.createElement('span');
@@ -1526,12 +1536,13 @@ async function initApp() {
     const p = cm.entities.person;
     // golf: from a tee, a round; while playing, stopped
     if (was === 'person' && golf.active) { golf.quit(); return; }
-    if (was === 'person' && !p.sitting && !p.fallen && !p.chute && !p.onBus) {
+    if (was === 'person' && !p.sitting && !p.swing && !p.fallen && !p.chute && !p.onBus) {
       const tee = teeToPlay(p);
       if (tee >= 0) { golf.start(tee); return; }
     }
-    // on a bench, a chair or the bleachers: up again
+    // on a bench, a chair or the bleachers: up again; on a swing, a jump off it
     if (was === 'person' && p.sitting) { cm.standUp(); return; }
+    if (was === 'person' && p.swing) { cm.leaveSwing(); return; }
     if (was === 'person' && p.onBus) {
       const ride = trafficSystem.busRide();
       if (ride && !ride.stopped && !ride.gone) { showNotice('The bus will stop at the next stop'); return; }
@@ -1554,6 +1565,7 @@ async function initApp() {
     const choice = cm.enterOrExit(parkedCars, trafficSystem);
     if (!choice) return;
     if (choice.sit) { cm.sitDown(choice.sit); return; }
+    if (choice.swing) { cm.boardSwing(choice.swing); return; }
     const car = cm.entities.car;
     let drop = null;
     if (choice.parked || choice.moving || choice.machine || choice.rack || choice.stairs) {
@@ -2589,7 +2601,7 @@ async function initApp() {
     const cm = controllerManager;
     split.second = createSecondPlayer({ scene, colliders: allColliders, beside: cm, map: mapSystem, kept: split.kept,
       share: { knockdowns: cm.knockdowns, parkedCars: cm.parkedCars, railways: cm.railways, potholes: cm.potholes, parking: cm.parking,
-        playTop: cm.playTop, skatePark: cm.skatePark, bleachers: cm.bleachers, mtbTrails: cm.mtbTrails, bikeRoutes: cm.bikeRoutes, pools: cm.pools, riverScale: cm.riverScale,
+        playTop: cm.playTop, swings: cm.swings, skatePark: cm.skatePark, bleachers: cm.bleachers, mtbTrails: cm.mtbTrails, bikeRoutes: cm.bikeRoutes, pools: cm.pools, riverScale: cm.riverScale,
         // the humps' jolts and the road work's dirt pile to drive up (its machines are the first player's to take)
         speedHumps: cm.speedHumps, roadWork: { pileTop: (x, z) => roadWork.pileTop(x, z), nearestMachine: () => null } } });
     // the boxes that come and go as the city streams are patched into their cells too (addColliders)
@@ -2657,6 +2669,12 @@ async function initApp() {
     gamepadControls.supply(f.pads[0]);
     gamepadControls.update(dt);
     golf.update(dt);
+    // the playground swings: those ridden or still swinging, and the empty ones near a player swaying in the wind
+    if (controllerManager.swings) {
+      swingFoci[0] = controllerManager.entities.person.position;
+      swingFoci[1] = split.drawn ? split.second?.cm.entities.person.position : null;
+      controllerManager.swings.update(dt, swingFoci, swingCreak);
+    }
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
     {
       const cm = controllerManager, look = cm.carLook;

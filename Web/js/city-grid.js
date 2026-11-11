@@ -2116,7 +2116,7 @@ function buildCityGrid(scene, yards = null) {
   // the module runs again in place (restoreCityGrid) instead of leaving them empty (the parks' and woods' trees)
   const shared = { bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes, pavedPlazaRects, sidewalkBlocks, fdrViaduct,
     streetGroundSurfaces };
-  return { group, sidewalks, footprints, highwayLanes, colliders, shared, playTop: playgrounds.top, yardLayers };
+  return { group, sidewalks, footprints, highwayLanes, colliders, shared, playTop: playgrounds.top, swings: playgrounds.swings, yardLayers };
 }
 
 // Puts back what a kept grid shared (buildCityGrid's `shared`) after this module ran again in place
