@@ -208,6 +208,16 @@ class CityAudioSources {
         // a motorbike is a voice of its own (the sound of a car the player had doesn't carry over)
         this.motor(entity.bike ? entity.chassisPivot ?? entity : entity, kind, x, y + (helicopter ? 2.66 : 0.7), z, player ? entity.speed : 0, load, entity.heading,
           false, player, seedAt(i), false, gain, range, verticalSpeed);
+        // the player's cruiser or ambulance with its siren on (main.js toggleSiren): first of the sirens, never dropped
+        // for traffic's; softer than a passing cruiser's from the follow view, softer still from inside
+        if (player && entity.type === 'car' && entity.siren) {
+          const siren = this.sirens.take(-1);
+          if (siren) {
+            writeMotor(siren, entity, 'siren', x, y + 1.2, z, entity.speed, 0, entity.heading, true, seedAt(i), false,
+              this.controllers.viewInside ? 0.32 : 0.5, 200);
+            siren.cabin = Boolean(this.controllers.viewInside);
+          }
+        }
       }
     }
 

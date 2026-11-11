@@ -1998,6 +1998,15 @@ class PersonRig {
     return out.copy(j[child]).sub(j[parent]).multiplyScalar(this.s).applyQuaternion(q).add(parentPos);
   }
 
+  // Lamp: where the head is now, whatever pose it's in (walking, riding, limp): its position and turn, from the pose
+  // the last update wrote (for a helmet to stay on it: controllers.js)
+  headTransform(outPos, outQuat) {
+    const o = BONE.HEAD * 8, a = this.pose;
+    outQuat.set(a[o], a[o + 1], a[o + 2], a[o + 3]);
+    outPos.copy(this.bind[BONE.HEAD]).applyQuaternion(outQuat).multiplyScalar(a[o + 7] || this.s).add(_v2.set(a[o + 4], a[o + 5], a[o + 6]));
+    return outPos;
+  }
+
   writeBone(b, q, p) {
     const s = this.s;
     _v2.copy(this.bind[b]).applyQuaternion(q).multiplyScalar(s);
@@ -2101,6 +2110,7 @@ class PersonRig {
     if (!this.diving && !this.ragdolling && !this.perched) this.solve();
     this.perched = false;
     const P = this.rag || (this.rag = { p: new Float32Array(RAG_N * 3), o: new Float32Array(RAG_N * 3), len: new Float32Array(RAG_LINKS.length), time: 0, still: 0 });
+    P.floorReady = false; // (each joint's ground looked up afresh on the first step: stepRagdoll)
     const joint = (b, out) => {
       const o = b * 8;
       _q.set(a[o], a[o + 1], a[o + 2], a[o + 3]);
@@ -2179,8 +2189,18 @@ class PersonRig {
         pp[k] = x + vx; pp[k + 1] = y + vy - g; pp[k + 2] = z + vz;
         motion = Math.max(motion, vx * vx + vy * vy + vz * vz);
         // the ground under it, looked up once a step (the joints move millimetres between the passes below)
-        fl[i] = ground(owner, pp[k], pp[k + 2]) + RAG_RADIUS[i] * this.s;
+        const was = fl[i];
+        let f = ground(owner, pp[k], pp[k + 2]) + RAG_RADIUS[i] * this.s;
+        // Lamp: ground that rises more than a curb's height (a step, a bench, a footbridge's or a roof's edge) under a
+        // joint that slid there is a wall to it, not a lift: it stays where it was across the ground, rather than
+        // being snapped up onto it, which yanked the whole body into the air
+        if (P.floorReady && f > Math.max(was, po[k + 1]) + 0.3) {
+          pp[k] = po[k]; pp[k + 2] = po[k + 2];
+          f = was;
+        }
+        fl[i] = f;
       }
+      P.floorReady = true;
       for (let it = 0; it < 4; it++) {
         for (let l = 0; l < RAG_LINKS.length; l++) {
           const link = RAG_LINKS[l];

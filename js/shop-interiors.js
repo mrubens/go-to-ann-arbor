@@ -142,10 +142,13 @@ function prepare() {
     r.light = style.light ?? look.light; r.day = style.day ?? look.day; r.night = style.night ?? look.night;
     r.floorKind = FLOORS[bay.variant && r.name === 'salon' ? 'checker' : style.floor];
     r.wallKind = WALLS[style.wall];
-    const same = (c) => { const o = at.get(key(r.wallRow, c)); return o && o.bay.sign === bay.sign ? 1 : 0; };
+    const same = (c) => { const o = at.get(key(r.wallRow, c)); return o && o.bay.sign === bay.sign ? o : null; };
     const before = same(bay.col - 1), after = same(bay.col + 1); // (to the left and right, seen from the street)
-    r.hideLeft = r.mirror > 0 ? before : after;
-    r.hideRight = r.mirror > 0 ? after : before;
+    // (the wall between them left out only while the room next door is drawn too: refresh)
+    r.leftMate = r.mirror > 0 ? before : after;
+    r.rightMate = r.mirror > 0 ? after : before;
+    r.hideLeft = r.leftMate ? 1 : 0;
+    r.hideRight = r.rightMate ? 1 : 0;
     r.openAt = (bay.biz * 0.6180339) % 1; // (as createStorefront's `lit`)
     r.people = [];
     r.shown = false;
@@ -195,6 +198,11 @@ const unpack = (v) => pow(vec3(floor(v.div(65536)), floor(mod(v, 65536).div(256)
 
 function createRoomMaterial() {
   const mat = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide });
+  // (drawn a hair in front of what shares its plane: a neighbour's wall built along the room's side wall, the same
+  // plane to the centimetre, flickered through it, its windows and all)
+  mat.polygonOffset = true;
+  mat.polygonOffsetFactor = -2;
+  mat.polygonOffsetUnits = -6;
   const A = attribute('roomA', 'vec4'), B = attribute('roomB', 'vec4'), Cc = attribute('roomC', 'vec4');
   const Dd = attribute('roomD', 'vec4'), Ee = attribute('roomE', 'vec4');
   const aux = attribute('aux', 'vec4'), p = positionGeometry;
@@ -565,9 +573,23 @@ export function createShopInteriors(group) {
     for (const k of kinds.values()) k.count = 0;
     let nPanes = 0, nPeople = 0;
     const keep = new Map();
+    // which rooms are drawn this time (a room's wall onto a neighbour of the same business is left out only if that
+    // one's drawn as well: else the gap showed the street behind it)
+    const drawn = new Set();
+    {
+      const counts = new Map();
+      for (const r of near) {
+        const k = kindOf(r.kitName), c = counts.get(k) || 0;
+        if (c >= k.cap) continue;
+        counts.set(k, c + 1);
+        drawn.add(r);
+      }
+    }
     for (const r of near) {
       const k = kindOf(r.kitName);
       if (k.count >= k.cap) { reach = Math.min(reach, r.dist - 2); continue; }
+      r.hideLeft = r.leftMate && drawn.has(r.leftMate) ? 1 : 0;
+      r.hideRight = r.rightMate && drawn.has(r.rightMate) ? 1 : 0;
       const open = r.openAt <= shares[r.type] - 0.001 ? 1 : 0;
       const a = k.array, o = k.count++ * STRIDE;
       a[o] = r.x; a[o + 1] = r.y; a[o + 2] = r.z; a[o + 3] = r.mirror;

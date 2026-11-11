@@ -10,6 +10,7 @@
 // under it, so nothing leans or floats. What moves asks groundHeight each frame.
 
 import { gpuOnly } from './gpu-only.js';
+import { b2bMissingBridges, b2bCrossings, onB2BBridge } from './b2b-route.js';
 import * as THREE from 'three/webgpu';
 import { float, texture, uniform, vec2, positionLocal, positionWorld, cameraPosition, normalize, abs, max, min } from 'three/tsl';
 import { hot, asset, log, work } from '../lamp-game.js';
@@ -138,6 +139,11 @@ async function readRiver(g, url) {
   }
 }
 
+// The river's bridges (GEO.riverBridges), and (Lamp) the Border to Border Trail's own the map's river data left out
+// (b2b-route.js: the Broadway Park footbridge, two short ones), as footbridges of their own
+let BRIDGES = null;
+const riverBridges = () => (BRIDGES ??= [...(GEO.riverBridges || []), ...b2bMissingBridges(GEO.riverBridges)]);
+
 // The map's water stops short of a footbridge on each side (it's drawn as two ponds, not one channel under the bridge),
 // so the channel under it is dug through: wherever open water lies within 18 m on both sides of the bridge, the bed
 // runs across between them, easing up to the banks at the channel's sides. Each opening's outline goes in `r.gaps`,
@@ -145,7 +151,7 @@ async function readRiver(g, url) {
 function joinUnderFootbridges(r) {
   r.gaps = [];
   const R = 18, OPEN = 170 / 255, EASE = 3;
-  for (const b of GEO.riverBridges || []) {
+  for (const b of riverBridges()) {
     if (b[0] !== 2) continue;
     for (let i = 2; i + 3 < b.length; i += 2) {
       const ax = b[i], az = b[i + 1], bx = b[i + 2], bz = b[i + 3], len = Math.hypot(bx - ax, bz - az);
@@ -229,7 +235,7 @@ function riverGaps() {
 // Each bridge's deck, sampled every 4 m along it: a street's (streetDeck), a railway's or a footbridge's (otherDeck).
 // Ways the map splits along a bridge are joined first, so the deck runs whole from bank to bank.
 function buildDecks(g, r) {
-  const list = (GEO.riverBridges || []).map((b) => {
+  const list = riverBridges().map((b) => {
     const pts = [];
     for (let i = 2; i + 1 < b.length; i += 2) pts.push([b[i], b[i + 1]]);
     return { kind: b[0], w: b[1], pts };
@@ -251,7 +257,15 @@ function buildDecks(g, r) {
   // the ground the decks meet: the city's fine mesh where it's read (the streets as they're drawn), else the 10 m heights
   const gh = (x, z) => (g.core && inCore(g.core, x, z) ? coreHeight(g.core, x, z) : baseHeight(g, x, z));
   for (const b of list) {
-    const made = b.kind === 0 ? streetDeck(g, r, b, gh) : otherDeck(g, r, b);
+    let made = b.kind === 0 ? streetDeck(g, r, b, gh) : otherDeck(g, r, b, gh);
+    // Lamp: a footbridge whose deck crosses the Border to Border Trail too low to pass under (under 3.2 m) ends at the
+    // trail's edge instead, its longer part kept (the span over the water): at Broadway the two footbridges' ramps
+    // stood across the trail under the arches, a wall the rider was thrown off against
+    const mid = b.pts[Math.floor(b.pts.length / 2)], mid2 = b.pts[Math.max(0, Math.floor(b.pts.length / 2) - 1)];
+    if (b.kind === 2 && made && !onB2BBridge((mid[0] + mid2[0]) / 2, (mid[1] + mid2[1]) / 2)) { // (not one of the trail's own)
+      const cut = trailCut(b.pts, made.deck, gh);
+      if (cut) { b.pts = cut; made = otherDeck(g, r, b, gh); console.log(`[terrain] a footbridge ends at the B2B trail's edge (${cut[0].map(Math.round)} to ${cut.at(-1).map(Math.round)})`); }
+    }
     if (!made) continue;
     const { S, deck } = made;
     r.bridges.push(deck);
@@ -477,11 +491,14 @@ function streetDeck(g, r, b, gh) {
 
 // A railway's bridge or a footbridge: from the ground at one end to the ground at the other, raised where it's over the
 // water to clear it (3.5 m under a railway's girders, 1.3 m under a footbridge's)
-function otherDeck(g, r, b) {
+function otherDeck(g, r, b, gh) {
   {
     const { S, L, s } = sampled(b.pts);
     if (s < 3) return null;
-    const ha = baseHeight(g, ...S[0]), hb = baseHeight(g, ...S.at(-1));
+    // (Lamp: a footbridge's ends on the ground as it's drawn, the paths leading onto it: on the 10 m heights they stood
+    // up to a metre over or under the path, a step or a wall to ride into)
+    const foot = b.kind === 2;
+    const ha = foot ? gh(...S[0]) : baseHeight(g, ...S[0]), hb = foot ? gh(...S.at(-1)) : baseHeight(g, ...S.at(-1));
     const clear = b.kind === 2 ? 2.6 : 4.6, reach = b.kind === 2 ? 0 : b.w / 2 + 2.5;
     const wet = S.map(([x, z], i) => {
       const j = Math.min(i + 1, S.length - 1), k = Math.max(i - 1, 0);
@@ -495,17 +512,31 @@ function otherDeck(g, r, b) {
     // over another road (one crossing it, not the bridge's own street along it) stands 5.6 m over that road's level,
     // so its underside leaves 4.5 m of headroom, and isn't the ground there (onDeck: the road runs on under it)
     const overRoad = b.kind === 2 ? S.map(() => false) : roadsUnder(S);
+    const need = S.map(() => -Infinity); // the height over the water each point must keep
     let H = S.map(([x, z], i) => {
       let h = ha + (hb - ha) * (L[i] / s);
       if (overRoad[i]) h = Math.max(h, baseHeight(g, x, z) + 5.6);
       // a footbridge clears the water as drawn: over the Argo Cascades' channel that's the channel's own pool, well above
       // the river's level there (the railway beside it already clears both, so its deck is left as it was)
       const lv = b.kind === 2 ? cascadeLevel(x, z, levelAt(r, x, z)) : levelAt(r, x, z);
+      if (wet[i]) need[i] = lv + clear;
       return wet[i] ? Math.max(h, lv + clear) : h;
     });
     // eased into a gentle arch, its ends kept on the ground
     for (let pass = 0; pass < 6; pass++) {
       H = H.map((h, i) => (i === 0 || i === H.length - 1 ? h : Math.max(h, (H[i - 1] + h + H[i + 1]) / 3)));
+    }
+    // Lamp: and a footbridge climbs off its ends no steeper than a ramp (12%), as the Border to Border Trail's do, so a
+    // bike rolls on and off it: its rise over the water was eased over a few samples only, a hump or a wall at an end
+    // (but never down into the water: over it the deck stays at least 0.4 m clear of it, keeping its full clearance
+    // where the ramp off its banks reaches that high: a short span over a channel between low banks is a low bridge,
+    // as they are, rather than a hump too steep to ride onto, which the bike passed under)
+    if (foot) {
+      const ramp = (i) => Math.min(ha + 0.12 * L[i], hb + 0.12 * (s - L[i]));
+      H = H.map((h, i) => Math.max(Number.isFinite(need[i]) ? need[i] - clear + 0.4 : -Infinity, Math.min(h, ramp(i))));
+      for (let pass = 0; pass < 6; pass++) {
+        H = H.map((h, i) => (i === 0 || i === H.length - 1 ? h : Math.max(h, (H[i - 1] + h + H[i + 1]) / 3)));
+      }
     }
     // over a road a bridge can't climb from the ground to clear it in a few metres: a railway's deck runs level end to
     // end at the height the road needs, on abutments (river.js), the track rising to it on embankments (railways.js); a
@@ -526,6 +557,41 @@ function otherDeck(g, r, b) {
       overRoad[i] || (level && !wet[i] && H[i] - baseHeight(g, p[0], p[1]) > 1.2)]) };
     return { S, deck };
   }
+}
+
+// The footbridge's points `pts` cut back to the trail's edge where its deck crosses the trail with too little headroom,
+// the longer side kept; null where it doesn't (b2b-route.js b2bCrossings)
+function trailCut(pts, deck, gh) {
+  const D = deck.points, cuts = [];
+  for (const s of b2bCrossings(pts)) {
+    let i = 0;
+    while (i + 2 < D.length && D[i + 1][2] < s) i++;
+    const f = Math.max(0, Math.min(1, (s - D[i][2]) / ((D[i + 1][2] - D[i][2]) || 1)));
+    const x = D[i][0] + (D[i + 1][0] - D[i][0]) * f, z = D[i][1] + (D[i + 1][1] - D[i][1]) * f, h = D[i][3] + (D[i + 1][3] - D[i][3]) * f;
+    if (h - gh(x, z) < 3.2) cuts.push(s);
+  }
+  if (!cuts.length) return null;
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const len = cum.at(-1), at = (s) => {
+    let i = 0;
+    while (i + 2 < pts.length && cum[i + 1] < s) i++;
+    const f = (s - cum[i]) / ((cum[i + 1] - cum[i]) || 1);
+    return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * f, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * f];
+  };
+  // the stretch between crossings (and the ends) that's longest, each end stopping 4.5 m short of the trail's middle (its
+  // railings clear of the trail where it meets it at a slant)
+  const marks = [0, ...cuts.sort((a, b) => a - b), len];
+  let best = null;
+  for (let k = 0; k + 1 < marks.length; k++) {
+    const s0 = marks[k] + (k > 0 ? 4.5 : 0), s1 = marks[k + 1] - (k + 1 < marks.length - 1 ? 4.5 : 0);
+    if (s1 - s0 > (best ? best[1] - best[0] : 3)) best = [s0, s1];
+  }
+  if (!best) return null;
+  const out = [at(best[0])];
+  for (let i = 1; i + 1 < pts.length; i++) if (cum[i] > best[0] && cum[i] < best[1]) out.push(pts[i]);
+  out.push(at(best[1]));
+  return out;
 }
 
 // For each point along a bridge, whether a road crosses under it there: within the road's half width (and 2 m) of one of
@@ -1831,7 +1897,7 @@ function drawOver(mat, lift = LIFT.over) {
 
 export {
   drawOver, cityGround,
-  GROUND_ORDER, loadTerrain, setPools, groundHeight, deckTop, groundUnderStreets, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
+  GROUND_ORDER, loadTerrain, riverBridges, setPools, groundHeight, deckTop, groundUnderStreets, riverbedHeight, riverDepth, riverFlow, nearestWater, waterLevel, bridgeDecks, footbridgeTop, riverGaps, groundUnder, stadiumGround, groundSlope, groundTilt, groundHeightNode,
   tessellate, drapeGeometry, liftGeometry, liftInstances, setOnTerrain,
   streamGround, updateGroundStreaming, putStreamedGround, groundStreamStats, groundStreamCenter, groundStreamBytes, streamFromSquares, streamNear
 };

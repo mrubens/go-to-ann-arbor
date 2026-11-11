@@ -32,6 +32,24 @@ function walker(flat) {
   return { len, at };
 }
 
+// Lamp: a timber (a post or a rail) into a {pos, idx} mesh: `len` along (tx, tz), `wide` across, `tall` up from y (or
+// centred on y when `centred`); its four sides and top, each face its own corners so its edges stay sharp
+function timber(m, x, y, z, tx, tz, len, wide, tall, centred = false) {
+  const ax = tx * len / 2, az = tz * len / 2, cx = -tz * wide / 2, cz = tx * wide / 2;
+  const y0 = centred ? y - tall / 2 : y, y1 = y0 + tall;
+  const c = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => [x + ax * a + cx * b, z + az * a + cz * b]);
+  const quad = (p) => {
+    const first = m.pos.length / 3;
+    for (const v of p) m.pos.push(...v);
+    m.idx.push(first, first + 1, first + 2, first, first + 2, first + 3);
+  };
+  for (let i = 0; i < 4; i++) {
+    const [a, b] = [c[i], c[(i + 1) % 4]];
+    quad([[a[0], y0, a[1]], [a[0], y1, a[1]], [b[0], y1, b[1]], [b[0], y0, b[1]]]);
+  }
+  quad(c.map(([px, pz]) => [px, y1, pz]).reverse());
+}
+
 // a BIKE ROUTE sign's face: white on green with a bicycle over the words
 function signTexture() {
   const c = document.createElement('canvas');
@@ -243,6 +261,27 @@ function buildBikeRoutes(group, network) {
       side.idx.push(sa + 2, sa + 3, sb + 2, sa + 3, sb + 3, sb + 2); // the right face
     }
     walks.push(walk);
+    // Lamp: along a long boardwalk (60 m and more: not a dock's), its railings either side, as on the Border to Border Trail's through the
+    // marshes: a 4x4 post every 2.4 m, a top rail at 42 inches, a mid rail and a toe board along the deck's edge,
+    // the timber of its sides (merged with them: no draw of their own)
+    if (w.len >= 60) {
+      for (const sg of [-1, 1]) {
+        const posts = Math.max(2, Math.round(w.len / 2.4) + 1);
+        let prev = null;
+        for (let k = 0; k < posts; k++) {
+          const s = Math.min(w.len - 0.15, Math.max(0.15, (w.len * k) / (posts - 1))), p = w.at(s);
+          const lift = SURF + DECK * Math.min(1, s / 2, (w.len - s) / 2);
+          const x = p.x - p.tz * (half - 0.06) * sg, z = p.z + p.tx * (half - 0.06) * sg;
+          const y = groundHeight(x, z) + lift;
+          timber(side, x, y, z, p.tx, p.tz, 0.09, 0.09, 1.07);
+          if (prev) for (const [h, t] of [[1.03, 0.09], [0.55, 0.06], [0.04, 0.12]]) {
+            const mx = (prev.x + x) / 2, mz = (prev.z + z) / 2, l = Math.hypot(x - prev.x, z - prev.z) || 1;
+            timber(side, mx, (prev.y + y) / 2 + h, mz, (x - prev.x) / l, (z - prev.z) / l, l + 0.08, 0.05, t, true);
+          }
+          prev = { x, y, z };
+        }
+      }
+    }
     for (let k = 0; k + 1 < walk.pts.length; k++) {
       const a = walk.pts[k], b = walk.pts[k + 1];
       const seg = { a, b, half };

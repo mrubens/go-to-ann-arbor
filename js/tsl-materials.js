@@ -49,6 +49,8 @@ import {
   exp2,
   sign,
   fwidth,
+  dFdx,
+  dFdy,
   texture,
   rotateUV,
   mrt,
@@ -62,7 +64,8 @@ import {
   specularF90,
   int,
   uniformArray,
-  vertexStage
+  vertexStage,
+  Discard
 } from 'three/tsl';
 import { TOWN_BOUNDS } from './city-config.js';
 import { groundHeightNode } from './terrain.js';
@@ -1841,10 +1844,14 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
   // changes its version and forces shader-cache checks for shadow casters.
   const mat = new TreeNodeMaterial({
     side: THREE.DoubleSide,
-    alphaToCoverage: true,
+    alphaToCoverage: TIER.antialias,
     metalness: 0.0,
     roughness: 0.8
   });
+  // Lamp: with smoothed edges (MSAA), a leaf's edge is a coverage ramp a pixel wide centred on the atlas's 0.5, so
+  // alpha-to-coverage gives it partial samples; three's own ramp (from 0.5 up by fwidth, then cut where fwidth is 0)
+  // left the edges hard, stepped along the atlas's texels. Without MSAA the hard 0.5 test as before
+  const smoothEdges = !!TIER.antialias;
 
   const aTree = attribute('aTree', 'vec4');
   const aData = attribute('aTreeData', 'vec4');
@@ -1903,8 +1910,9 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
   const kept = step(leaf.g, leavesOn);
   const shown = max(twig, kept);
   const haze = smoothstep(200.0, 600.0, dist).mul(0.6);
-  const alpha = mix(float(frontFacing), leaf.a.mul(nearFade).mul(max(shown, haze)), isLeaf);
-  mat.alphaTestNode = float(0.5);
+  const coverage = mix(float(frontFacing), leaf.a.mul(nearFade).mul(max(shown, haze)), isLeaf);
+  const alpha = smoothEdges ? clamp(coverage.sub(0.5).div(max(fwidth(coverage), 1e-4)).add(0.5), 0.0, 1.0) : coverage;
+  mat.alphaTestNode = smoothEdges ? null : float(0.5);
   mat.maskShadowNode = mix(float(frontFacing), leaf.a.mul(shown), isLeaf).greaterThan(0.5);
 
   mat.colorNode = Fn(() => {
@@ -1923,10 +1931,12 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
     const n1 = noise2D(vec2(bu.x.mul(5.0), bu.y.mul(1.1)).add(rnd.mul(17.0)));
     const n2 = noise2D(bu.mul(vec2(3.2, 1.9)).add(rnd.mul(31.0)));
     const ridge = float(1.0).sub(abs(n1.sub(0.5).mul(2.0)));
-    const furrowed = mix(color(0x2e261f), color(0x5c5043), smoothstep(0.35, 0.9, ridge));
-    const planeBark = mix(mix(color(0x645e4b), color(0x948c73), smoothstep(0.56, 0.66, n2)), color(0x4a3f31), smoothstep(0.3, 0.22, n2));
-    const bark = mix(furrowed, planeBark, step(species, 0.5)).mul(crownAO.mul(0.4).add(0.6));
+    // (lifted: under the crown's shade and the street's sky occlusion the old values read as black)
+    const furrowed = mix(color(0x2e261f), color(0x5c5043), smoothstep(0.35, 0.9, ridge)).mul(1.6);
+    const planeBark = mix(mix(color(0x645e4b), color(0x948c73), smoothstep(0.56, 0.66, n2)), color(0x4a3f31), smoothstep(0.3, 0.22, n2)).mul(1.2);
+    const bark = mix(furrowed, planeBark, step(species, 0.5)).mul(crownAO.mul(0.25).add(0.75));
 
+    if (smoothEdges) Discard(alpha.lessThan(0.01));
     return vec4(mix(bark, foliage, isLeaf), alpha);
   })();
 
@@ -1936,7 +1946,7 @@ function createTreeMaterial(leafAtlas, { merged = false } = {}) {
   mat.normalNode = normalViewGeometry;
 
   // Sky light: street-canyon occlusion, deep inside the crown far less
-  mat.aoNode = canyonSkyAONode().mul(crownAO.mul(0.75).add(0.25));
+  mat.aoNode = canyonSkyAONode().mul(crownAO.mul(mix(float(0.45), float(0.75), isLeaf)).add(mix(float(0.55), float(0.25), isLeaf)));
 
   // Light through the leaves: yellow-green, strongest out on the thin shell
   mat.translucencyNode = aData.xyz.mul(vec3(1.0, 1.2, 0.45)).mul(leaf.r.mul(1.5)).mul(crownAO.mul(0.8).add(0.2)).mul(isLeaf).mul(kept);
@@ -3565,6 +3575,116 @@ function createWaterMaterial() {
   return mat;
 }
 
+// Lamp: grass up close. A 512 px tile of grass blades seen from above, painted once (seeded, so it's the same every
+// time): thousands of short, slightly curved strokes, lighter tips over darker ones and soil-dark gaps between, drawn
+// across the tile's edges so it repeats without a seam. Mipmapped, so it averages to an even grey off in the distance
+// rather than shimmering; the lawns read it at two scales and multiply its light and dark into their colour.
+let _grassBladeTexture = null;
+function grassBladeTexture() {
+  if (_grassBladeTexture) return _grassBladeTexture;
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  let seed = 1234567;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  ctx.fillStyle = 'rgb(96,96,96)';
+  ctx.fillRect(0, 0, size, size);
+  ctx.lineCap = 'round';
+  const blade = (x, y, len, ang, bend, w, g) => {
+    for (const ox of [-size, 0, size]) for (const oy of [-size, 0, size]) {
+      const x0 = x + ox, y0 = y + oy;
+      if (x0 < -len || x0 > size + len || y0 < -len || y0 > size + len) continue;
+      const x1 = x0 + Math.cos(ang) * len, y1 = y0 + Math.sin(ang) * len;
+      const cx = (x0 + x1) / 2 + Math.cos(ang + Math.PI / 2) * bend, cy = (y0 + y1) / 2 + Math.sin(ang + Math.PI / 2) * bend;
+      const grad = ctx.createLinearGradient(x0, y0, x1, y1);
+      grad.addColorStop(0, `rgb(${g * 0.55 | 0},${g * 0.55 | 0},${g * 0.55 | 0})`);
+      grad.addColorStop(1, `rgb(${g},${g},${g})`);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = w;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.quadraticCurveTo(cx, cy, x1, y1); ctx.stroke();
+    }
+  };
+  // dark gaps first, then layers of blades, each lighter on top
+  for (let i = 0; i < 900; i++) {
+    ctx.fillStyle = `rgba(30,30,30,${0.25 + rnd() * 0.3})`;
+    ctx.beginPath(); ctx.arc(rnd() * size, rnd() * size, 1 + rnd() * 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let layer = 0; layer < 3; layer++) {
+    for (let i = 0; i < 2600; i++) {
+      const g = 70 + layer * 30 + rnd() * 60;
+      blade(rnd() * size, rnd() * size, 7 + rnd() * 14, rnd() * Math.PI * 2, (rnd() - 0.5) * 5, 1 + rnd() * 1.6, Math.min(235, g));
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.anisotropy = 8;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  _grassBladeTexture = tex;
+  return tex;
+}
+
+// Lamp: fallen leaves up close. A 512 px tile of leaves lying on the ground, painted once (seeded): pointed ovals and
+// three-lobed maple shapes in rust, ochre, brown, red and a few still yellow-green, each with a darker midrib and
+// a little shade under its edge, drawn across the tile's edges so it repeats without a seam; clear between them, so
+// the grass shows through where the leaves are thin. Mipmapped: far off its leaves blend into an even scatter.
+let _leafLitterTexture = null;
+function leafLitterTexture() {
+  if (_leafLitterTexture) return _leafLitterTexture;
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  let seed = 7654321;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const COLS = [[150, 70, 28], [176, 112, 36], [120, 72, 38], [156, 52, 26], [190, 140, 48], [104, 60, 30], [168, 150, 60], [140, 90, 40]];
+  const leafPath = (r, maple) => {
+    ctx.beginPath();
+    if (maple) {
+      // three lobes, each a point
+      for (let k = 0; k < 7; k++) {
+        const a = -Math.PI / 2 + (k - 3) * 0.55, rr = k % 2 ? r * 0.55 : r;
+        const x = Math.cos(a) * rr, y = Math.sin(a) * rr + r * 0.35;
+        k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.lineTo(r * 0.15, r * 0.6); ctx.lineTo(-r * 0.15, r * 0.6);
+    } else {
+      ctx.moveTo(0, -r);
+      ctx.quadraticCurveTo(r * 0.55, -r * 0.1, 0, r);
+      ctx.quadraticCurveTo(-r * 0.55, -r * 0.1, 0, -r);
+    }
+    ctx.closePath();
+  };
+  for (let i = 0; i < 1500; i++) {
+    const x = rnd() * size, y = rnd() * size, r = 9 + rnd() * 16, ang = rnd() * Math.PI * 2, maple = rnd() < 0.4;
+    const c = COLS[Math.floor(rnd() * COLS.length)], v = 0.8 + rnd() * 0.35;
+    const [cr, cg, cb] = c.map((n) => Math.min(255, n * v | 0));
+    for (const ox of [-size, 0, size]) for (const oy of [-size, 0, size]) {
+      const px = x + ox, py = y + oy;
+      if (px < -r * 1.5 || px > size + r * 1.5 || py < -r * 1.5 || py > size + r * 1.5) continue;
+      ctx.save();
+      ctx.translate(px, py); ctx.rotate(ang);
+      // its shadow on what's under it, then the leaf, then its midrib
+      ctx.translate(1.5, 2); leafPath(r, maple); ctx.fillStyle = 'rgba(20,14,8,0.35)'; ctx.fill(); ctx.translate(-1.5, -2);
+      leafPath(r, maple);
+      ctx.fillStyle = `rgb(${cr},${cg},${cb})`; ctx.fill();
+      ctx.strokeStyle = `rgba(${cr * 0.6 | 0},${cg * 0.6 | 0},${cb * 0.6 | 0},0.8)`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, -r * 0.8); ctx.lineTo(0, r * 0.9); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  _leafLitterTexture = tex;
+  return tex;
+}
+
 /**
  * Central Park & Manhattan Park Lush Multi-Octave Turf, Clover & Mowing Stripes TSL Material
  */
@@ -3587,12 +3707,28 @@ function createParkLawnMaterial(isMeadow = false, mown = null) {
     const microBlade = noise2D(wp.mul(3.8));
     const mowStripe = sin(wp.x.mul(0.55).add(wp.y.mul(0.25))).mul(0.5).add(0.5);
 
+    // (the patches gentle: big dark and light blotches read as splotchy, most of all on a course's manicured turf,
+    // and the painted blades below carry the close detail now)
+    const patchy = mown ? 0.35 : 1.0;
     const baseLawn = mix(
       cGrassDeep,
       cGrassMid,
-      macroPatch.mul(0.45).add(midClover.mul(0.35)).add(mowStripe.mul(0.20))
+      macroPatch.sub(0.5).mul(0.22 * patchy).add(midClover.sub(0.5).mul(0.14 * patchy)).add(mowStripe.mul(0.1)).add(0.55)
     );
-    const green = mix(baseLawn, cGrassSun, microBlade.mul(0.38));
+    const greenSoft = mix(baseLawn, cGrassSun, microBlade.sub(0.5).mul(0.12).add(0.16));
+    // the blades: the painted tile at about 45 cm and, turned and offset so the two don't line up, at about 1.6 m
+    // (a green's or tee's cut finer: smaller and fainter); each averages to 1 where its mips blur it away
+    const bladeTex = grassBladeTexture();
+    const fine = mown && mown.width < 4 ? 3.6 : 2.2;
+    // (one pair of slow noises, shared: it bends the blade tiles here and the leaf tiles and drifts below, so a lawn
+    // pixel costs six noises in all rather than fourteen)
+    const slow = vec2(noise2D(wp.mul(0.11).add(7.7)), noise2D(wp.mul(0.11).add(29.9))).sub(0.5);
+    const bend = slow.mul(2.6);
+    const b1 = texture(bladeTex, wp.mul(fine).add(bend)).r;
+    const b2 = texture(bladeTex, vec2(wp.x.mul(0.53).add(wp.y.mul(0.36)), wp.y.mul(0.53).sub(wp.x.mul(0.36))).add(0.37).sub(bend)).r;
+    const blades = b1.mul(0.6).add(b2.mul(0.4)).div(0.42); // about 1 on average
+    const bladeAmt = mown && mown.width < 4 ? 1.0 : 1.8;
+    const green = greenSoft.mul(mix(float(1), blades, bladeAmt));
     // Lamp: dormant in winter (cityUniforms.uLawnDormant, seasons.js): straw tan, in patches, a little green left in
     // the low spots (snow-cover.js whitens it over, as it does a green lawn)
     const straw = mix(color(0x7a6a45), color(0xa89466), macroPatch.mul(0.5).add(microBlade.mul(0.5)));
@@ -3602,18 +3738,53 @@ function createParkLawnMaterial(isMeadow = false, mown = null) {
     // (not on the phone/Xbox or slow tiers: a texture read and three noises on every lawn pixel, all year, for a
     // few weeks of leaves)
     const box = cityUniforms.uLitterBox;
-    const under = texture(cityUniforms.litterMap, vec2(wp.x.sub(box.x).mul(box.z), wp.y.sub(box.y).mul(box.w))).r;
-    const leafy = noise2D(wp.mul(8.0)).mul(0.5).add(noise2D(wp.mul(1.3)).mul(0.5));
-    const litter = smoothstep(0.52, 0.62, under.mul(cityUniforms.uLitter).mul(1.15).add(leafy.mul(0.6)));
-    const leafCol = mix(mix(color(0x6e4220), color(0xb07a2a), noise2D(wp.mul(9.0).add(3.7))), color(0x9a3a1a), smoothstep(0.55, 0.8, noise2D(wp.mul(6.0).add(9.3))));
-    const grass = TIER.name === 'phone' || TIER.name === 'slow' ? lawn : mix(lawn, leafCol.mul(microBlade.mul(0.35).add(0.75)), litter.mul(step(0.001, cityUniforms.uLitter)));
+    // (the map is coarse, about 10 m a texel: read it with a smooth, not straight-line, blend between texels, its
+    // edge bent by noise first, so a drift's outline is a soft curve, never the texels' diamonds and stripes)
+    const litterUv = vec2(wp.x.sub(box.x).mul(box.z), wp.y.sub(box.y).mul(box.w))
+      .add(vec2(macroPatch.sub(0.5), slow.x).mul(box.z.mul(14)));
+    const lp = litterUv.mul(LITTER_SIZE).sub(0.5), li = floor(lp), lf = fract(lp);
+    const under = texture(cityUniforms.litterMap, li.add(lf.mul(lf).mul(float(3).sub(lf.mul(2)))).add(0.5).div(LITTER_SIZE)).r;
+    // the leaves themselves from the painted tile (leafLitterTexture), in two layers turned against each other at
+    // about 70 cm and 1 m: the first laid down where there's any litter, the second over it where it lies thick,
+    // so a drift thins out leaf by leaf at its edge rather than in a smear
+    // (patchy, not an even carpet: blown into drifts and thinned between them)
+    const drift = slow.y.add(0.5).mul(0.6).add(noise2D(wp.mul(0.57).add(11.9)).mul(0.4)).add(midClover.mul(0.2)).sub(0.6);
+    const density = under.mul(cityUniforms.uLitter).mul(1.15).add(drift.mul(0.55));
+    const leafTex = leafLitterTexture();
+    // the tile's grid hidden: its coordinates bent by slow noise, each layer its own way, so no row of repeats lines up
+    // never the same tile twice: each patch of ground (a few metres, by a slow noise) reads the tile at its own
+    // random offset, and neighbouring patches fade into each other where they meet, the blend leaning on the
+    // leaves' own light and dark so the seam follows leaf edges rather than a soft smear (Quilez's "texture
+    // repetition"); the tile's mip is chosen from the unshifted coordinates, so the patches' edges don't shimmer
+    const unrepeated = (st, k) => {
+      const index = k.mul(8), i = floor(index), f = fract(index);
+      const offA = sin(vec2(3.0, 7.0).mul(i)).mul(43.17), offB = sin(vec2(3.0, 7.0).mul(i.add(1))).mul(43.17);
+      const dx = dFdx(st), dy = dFdy(st);
+      const A = texture(leafTex, st.add(offA)).grad(dx, dy), B = texture(leafTex, st.add(offB)).grad(dx, dy);
+      const lean = A.a.sub(B.a).mul(0.4);
+      return mix(A, B, smoothstep(0.25, 0.75, f.sub(lean)));
+    };
+    const st1 = wp.mul(1.45).add(slow.mul(1.6));
+    const st2 = vec2(wp.x.mul(0.62).add(wp.y.mul(0.71)), wp.y.mul(0.62).sub(wp.x.mul(0.71))).add(0.51).sub(slow.mul(1.6));
+    const l1 = unrepeated(st1, midClover);
+    const l2 = unrepeated(st2, noise2D(wp.mul(0.27).add(19.3)));
+    const thin = smoothstep(0.6, 0.95, midClover).mul(0.24); // here and there the grass shows through, a little
+    const a1 = l1.a.mul(smoothstep(0.18, 0.4, density.sub(thin))), a2 = l2.a.mul(smoothstep(0.42, 0.7, density.sub(thin)));
+    // and the litter itself uneven, as it lies: whole areas browner or redder (the trees over them differ), damp
+    // darker patches a few metres across, brighter fresh-fallen ones, so from a little way off it reads as ground
+    // with a history rather than one even carpet
+    const hue = mix(vec3(1.08, 0.93, 0.78), vec3(0.86, 0.82, 0.8), macroPatch).mul(mix(vec3(1.0, 0.86, 0.72), vec3(1.0), smoothstep(0.3, 0.7, slow.x.add(0.5))));
+    const damp = smoothstep(0.35, 0.75, midClover).mul(0.38).add(smoothstep(0.55, 0.85, noise2D(wp.mul(0.9).add(31.7))).mul(-0.18)).add(0.78);
+    const leafCol = mix(l1.rgb, l2.rgb, a2.div(a1.add(a2).max(0.001))).mul(hue).mul(damp);
+    const litter = a1.max(a2).mul(1.15).min(1);
+    const grass = TIER.name === 'phone' || TIER.name === 'slow' ? lawn : mix(lawn, leafCol, litter.mul(step(0.001, cityUniforms.uLitter)));
     if (!mown) return grass;
     const angle = attribute('mow', 'float');
     const v = dot(wp, vec2(angle.sin().negate(), angle.cos())).div(mown.width);
     const fw = max(fwidth(v), 0.001);
     // soft-edged stripes, fading to their average where they get thinner than a few pixels
     const band = mix(smoothstep(fw.negate(), fw, abs(fract(v).sub(0.5)).sub(0.25)), float(0.5), smoothstep(0.08, 0.3, fw));
-    return grass.mul(band.mul(0.12).add(1.0 + mown.lift));
+    return grass.mul(band.mul(0.2).add(1.0 + mown.lift - 0.04));
   })();
 
   mat.normalNode = Fn(() => {

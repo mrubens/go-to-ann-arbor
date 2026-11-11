@@ -5,9 +5,11 @@
 //   sharp. Under any other sky the roads are dry.
 // - the surface: brick and pavers where OpenStreetMap tags a street so (Detroit St by Kerrytown, N Fourth Ave by the
 //   Farmers Market, N Fifth Ave, Depot St; data/road-surfaces.json from Assets/Tools/build-road-surfaces.py), gravel
-//   and dirt lanes and lots, the parks' dirt and gravel trails and the boardwalks (GEO.trails kinds 1 and 3), and the
+//   and dirt lanes and lots, the parks' dirt and gravel trails and the boardwalks (GEO.trails kinds 1 and 3) and the
+//   footbridges' planks (GEO.riverBridges kind 2), and the
 //   mountain bike trails (data/mtb-trails.json). Everything else is plain pavement.
 import { GEO } from './city-geodata.js';
+import { riverBridges } from './terrain.js';
 import { cityUniforms } from './tsl-materials.js';
 import { asset, log } from '../lamp-game.js';
 
@@ -64,6 +66,13 @@ async function load() {
     addLine(t[0] === 3 ? SURFACE.boards : SURFACE.dirt, t[1] / 2 + 0.2, t, 2);
     n++;
   }
+  // Lamp: and the river's footbridges (river.js), plank decks like the boardwalks: the Border to Border Trail's over the
+  // Huron and its ponds knock under the wheels too
+  for (const b of riverBridges()) {
+    if (b[0] !== 2 || b.length < 6) continue;
+    addLine(SURFACE.boards, b[1] / 2 + 0.2, b, 2);
+    n++;
+  }
   const json = async (path) => {
     try { const b = await asset(path); return b ? JSON.parse(new TextDecoder().decode(b)) : null; } catch { return null; }
   };
@@ -76,7 +85,7 @@ async function load() {
   }
   for (const t of mtb?.trails || []) addLine(SURFACE.dirt, 0.9, t, 1);
   ready = true;
-  log(`[road feel] ${bricks} brick streets, ${loose} gravel or dirt ones, ${n} park trails and boardwalks, ${mtb?.trails?.length || 0} mountain bike trails`);
+  log(`[road feel] ${bricks} brick streets, ${loose} gravel or dirt ones, ${n} park trails, boardwalks and footbridges, ${mtb?.trails?.length || 0} mountain bike trails`);
 }
 
 // The surface at (x, z): a SURFACE kind (0, plain pavement, until the data has come)

@@ -1672,6 +1672,58 @@ function policeDecalTexture() {
   return _policeDecal;
 }
 
+// Lamp: an ambulance's box sides, painted once: the blue Star of Life (six arms, a white staff with its snake) at the
+// left, AMBULANCE in heavy red capitals beside it (in colour, with clear between: the van's shader lays it on its white)
+let _ambulanceDecal;
+function ambulanceDecalTexture() {
+  if (_ambulanceDecal) return _ambulanceDecal;
+  const c = document.createElement('canvas');
+  c.width = 1024;
+  c.height = 256;
+  const g = c.getContext('2d');
+  // the Star of Life: three bars crossed at 60 degrees, blue with a white edge, the staff and snake up its middle
+  const cx = 128, cy = 128, armL = 108, armW = 40;
+  g.save();
+  g.translate(cx, cy);
+  for (const pass of [0, 1]) {
+    for (let k = 0; k < 3; k++) {
+      g.save();
+      g.rotate((k * Math.PI) / 3);
+      g.fillStyle = pass ? '#1f5fbf' : '#ffffff';
+      const e = pass ? 0 : 6;
+      g.fillRect(-armW / 2 - e, -armL - e, armW + e * 2, (armL + e) * 2);
+      g.restore();
+    }
+  }
+  g.strokeStyle = '#ffffff';
+  g.lineWidth = 9;
+  g.beginPath(); g.moveTo(0, -80); g.lineTo(0, 82); g.stroke();
+  g.lineWidth = 6;
+  g.beginPath();
+  for (let t = 0; t <= 1.001; t += 0.02) {
+    const y = -62 + t * 128, x = Math.sin(t * Math.PI * 3.2) * 14;
+    t ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.stroke();
+  g.fillStyle = '#ffffff';
+  g.beginPath(); g.arc(Math.sin(0) * 14, -66, 7, 0, Math.PI * 2); g.fill();
+  g.restore();
+  // AMBULANCE
+  g.fillStyle = '#c41e24';
+  g.textBaseline = 'middle';
+  g.font = '900 150px "Arial Black", Arial, sans-serif';
+  const w = g.measureText('AMBULANCE').width, room = 1024 - 280;
+  g.save();
+  g.translate(272, 132);
+  g.scale(Math.min(1, room / w), 1);
+  g.fillText('AMBULANCE', 0, 0);
+  g.restore();
+  _ambulanceDecal = new THREE.CanvasTexture(c);
+  _ambulanceDecal.colorSpace = THREE.SRGBColorSpace;
+  _ambulanceDecal.anisotropy = 8;
+  return _ambulanceDecal;
+}
+
 /**
  * Creates the TSL material for lofted vehicles.
  * Instanced traffic reads the per-instance `paintColor` (vec3) and `carState` (vec4: brake (-1: parked, lamps off), left (+x) & right (-x)
@@ -1932,6 +1984,16 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
     const quarterA = texture(policeDecalTexture(), vec2(qu.clamp(0.002, 0.998), qv.clamp(0.004, 0.996).mul(0.5))).a
       .mul(step(0, qu).mul(step(qu, 1)).mul(step(0, qv)).mul(step(qv, 1)));
 
+    // Lamp: an ambulance's box sides (spec.cargo): the Star of Life and AMBULANCE over the red band, from just behind
+    // the cab to the tail, read the right way round from either side
+    let ambDecal = null;
+    if (spec.cargo) {
+      const az = (spec.cabin.roofRear + spec.zRear) / 2 - 0.1, aw = Math.min(3.0, spec.cabin.roofRear - spec.zRear - 0.5), ay = 1.75, ah = aw / 4;
+      const au = p.z.sub(az).div(aw).mul(sideU).add(0.5), av = p.y.sub(ay).div(ah).add(0.5);
+      ambDecal = texture(ambulanceDecalTexture(), vec2(au.clamp(0.002, 0.998), av.clamp(0.004, 0.996)))
+        .mul(step(0, au).mul(step(au, 1)).mul(step(0, av)).mul(step(av, 1)));
+    }
+
     If(isBody.greaterThan(0.5), () => {
       const bCol = vec3(basePaint.mul(ao)).toVar();
       if (spec.cladding > 0) {
@@ -1946,7 +2008,7 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
       bCol.assign(mix(bCol, color(0x2d2b28), grime));
 
       // Side doors, handles & liveries (evaluated only on side-facing body fragments)
-      If(isSide.greaterThan(0.05), () => {
+      If(abs(n.x).greaterThan(0.2), () => { // (wider than isSide: the ambulance band runs on round the curved panels)
         const hasLivery = max(max(max(isPolice, isPoliceEV), isAmbulance), max(isBoro, float(spec.sign ? 1.0 : 0.0)));
         If(hasLivery.greaterThan(0.5), () => {
           const along = smoothstep(spec.zRear + 0.22, spec.zRear + 0.3, p.z).mul(smoothstep(spec.zFront - 0.28, spec.zFront - 0.36, p.z));
@@ -1971,9 +2033,12 @@ function createLoftedCarMaterial(spec, fixedColorHex = null, { slot = null, styl
           const polBadge = cov(length(vec2(p.z.sub(doorMid + 0.5), p.y.sub(0.84))).sub(0.1), max(fwZ, fwY));
           bCol.assign(mix(bCol, color(0xf3f5f7), doorPanel.mul(evMask)));
           bCol.assign(mix(mix(bCol, color(0x14161a), decalA.mul(evMask)), color(0x9aa0a6), polBadge.mul(doorPanel).mul(evMask)));
-          const ambMask = isAmbulance.mul(isSide).mul(ao);
+          // (on the whole side at full strength, not faded face by face as isSide and ao are: on a van's curved panels
+          // those change from one face to the next and stepped the band's edges)
+          const ambMask = isAmbulance.mul(smoothstep(0.2, 0.3, abs(n.x)));
           const ambBand = band(p.y.sub(spec.cargo ? 1.12 : 0.72), 0.11, fwY).mul(along);
           bCol.assign(mix(mix(bCol, color(0xc41e24), max(stripe, ambBand).mul(ambMask)), color(0xc41e24), pin.mul(ambMask)));
+          if (ambDecal) bCol.assign(mix(bCol, ambDecal.rgb, ambDecal.a.mul(ambMask)));
 
           const hasTaxiBadge = max(float(spec.sign ? 1.0 : 0.0), isBoro).mul(isSide);
           const badge = rrect(vec2(p.z.sub(doorMid), p.y.sub(0.66)), vec2(0.21, 0.052), 0.012, fwZY).mul(hasTaxiBadge);

@@ -139,7 +139,10 @@ async function loadProblem(status) {
 export function work(path, message, transfer = []) {
     read(clean(path));
     return new Promise((done, fail) => {
-        const worker = new browser.Worker(`${addressOf(clean(path))}?lamp=${++versionCount}`, { type: 'module' });
+        // At the file's own address until something changes (`fresh`): a game starts its workers again and again, and a
+        // new address each time is a new request all the way to where the page is kept, which a shared link's host
+        // can't keep up with. After a change, the address changes with it, so the new version is the one that runs.
+        const worker = new browser.Worker(fresh(addressOf(clean(path))), { type: 'module' });
         worker.onmessage = e => { worker.terminate(); done(e.data); };
         worker.onerror = e => { worker.terminate(); fail(new Error(`${path}: ${e.message || 'the worker failed'}`)); };
         worker.postMessage(message, transfer);

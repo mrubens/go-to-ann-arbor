@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { drawOver } from './terrain.js';
-import { createParkLawnMaterial } from './tsl-materials.js';
+import { createParkLawnMaterial, treeWind } from './tsl-materials.js';
+import { uv, vec3, float, sin, cos, time, clamp, mix, positionGeometry, positionLocal, instanceIndex, transformNormalToView, varying, normalize, frontFacing } from 'three/tsl';
 import { GOLF_HOLES } from './golf-holes.js';
 
 // Ann Arbor's golf courses (GEO.golf from build-annarbor.py: OpenStreetMap's fairways, greens, tees and cart paths,
@@ -217,20 +218,59 @@ function buildGolf(group, golf, flatGeo, toRing, y) {
   const P = golf.pins;
   if (!P.length) return;
   const stick = new THREE.CylinderGeometry(0.02, 0.02, 2.3, 5).translate(0, 1.15, 0);
-  const flag = new THREE.BufferGeometry();
-  flag.setAttribute('position', new THREE.Float32BufferAttribute([0, 2.3, 0, 0, 1.85, 0, 0.55, 2.08, 0, 0, 2.3, 0, 0.55, 2.08, 0, 0, 1.85, 0], 3));
-  flag.computeVertexNormals();
+  // Lamp: a cloth flag, 50 x 36 cm (a pin flag's 20 x 14 in), on the stick's top, flown by the wind the trees feel
+  // (tsl-materials.js treeWind, KARB's report): out straight and snapping in a strong wind, rippling in a breeze,
+  // hanging down the stick in still air; its own ripples travel out along it to the free end, each flag in its own time
+  const FLAG_W = 0.5, FLAG_H = 0.36, FLAG_TOP = 2.28;
+  const flag = new THREE.PlaneGeometry(FLAG_W, FLAG_H, 16, 6).translate(FLAG_W / 2, FLAG_TOP - FLAG_H / 2, 0);
   const cup = new THREE.CircleGeometry(0.11, 10).rotateX(-Math.PI / 2).translate(0, 0.003, 0);
   const sticks = new THREE.InstancedMesh(stick, new THREE.MeshStandardNodeMaterial({ color: 0xf4f4f0, roughness: 0.5 }), P.length / 2);
-  const flags = new THREE.InstancedMesh(flag, new THREE.MeshStandardNodeMaterial({ color: 0xffffff, roughness: 0.8, side: THREE.DoubleSide }), P.length / 2);
+  const flagMat = new THREE.MeshStandardNodeMaterial({ color: 0xffffff, roughness: 0.8, side: THREE.DoubleSide });
+  {
+    const d = uv().x, h = positionGeometry.y.sub(FLAG_TOP); // d: 0 at the stick to 1 at the free end; h: 0 to -0.36
+    const along = d.mul(FLAG_W);
+    // wind speed at the green from the trees' strength (0.2 calm to 2.4 a gale): how far out it flies, 0 to 1
+    const speed = treeWind.strength.sub(0.2).mul(5.5).max(0);
+    const fly = clamp(speed.div(6), 0.04, 1);
+    const ph = instanceIndex.toFloat().mul(2.399);
+    const gust = sin(time.mul(0.7).add(ph)).mul(0.5).add(0.5);
+    const lift = fly.mul(gust.mul(0.25).add(0.75));
+    // out along the wind, drooping the less it flies: the free end falls toward the stick's foot in still air
+    // cloth sags: the free end droops more than the edge on the stick, the more so the less it flies
+    const droop = float(1).sub(lift).mul(1.45).mul(d.mul(0.7).add(0.3)); // radians below level, along it
+    const out = along.mul(droop.cos()), down = along.mul(droop.sin());
+    // ripples: one running out to the free end, quicker and tighter in a stronger wind, and a smaller one running
+    // across it on the slant, so its folds aren't straight lines; both grow toward the free end
+    const hn = h.div(FLAG_H); // 0 at the top edge to -1 at the bottom
+    const amp = mix(float(0.035), float(0.075), fly), freq = mix(float(3), float(11), fly);
+    const ph1 = time.mul(freq).add(ph).sub(d.mul(7)), ph2 = time.mul(freq.mul(1.63)).add(ph.mul(1.7)).sub(d.mul(12)).add(hn.mul(5));
+    const wave = sin(ph1).mul(amp).add(sin(ph2).mul(amp.mul(0.35))).mul(d);
+    // how steeply the cloth turns at this point (the waves' slope along it, per metre), for its light
+    const slope = sin(ph1).mul(amp).add(cos(ph1).mul(amp).mul(-7).mul(d))
+      .add(sin(ph2).mul(amp.mul(0.35)).add(cos(ph2).mul(amp.mul(0.35)).mul(-12).mul(d))).div(FLAG_W);
+    const wx = treeWind.dir.x, wz = treeWind.dir.y;
+    // (the pin's place kept: three has already moved the flag to its instance by now, a plain move, so that move is
+    // what's left of positionLocal once the flag's own shape is taken off it)
+    const pin = positionLocal.sub(positionGeometry);
+    flagMat.positionNode = pin.add(vec3(
+      wx.mul(out).sub(wz.mul(wave)),
+      float(FLAG_TOP).add(h).sub(down),
+      wz.mul(out).add(wx.mul(wave))));
+    // lit fold by fold: the sheet's normal (across the wind) tipped by the cloth's slope, so each ripple has a lit
+    // side and a shaded side, the back face lit as the other side of the same cloth
+    const across = vec3(wz.negate(), 0, wx), downwind = vec3(wx, 0, wz);
+    const n = varying(normalize(across.sub(downwind.mul(slope)).add(vec3(0, droop.sin().mul(0.4), 0))));
+    flagMat.normalNode = transformNormalToView(frontFacing.select(n, n.negate()));
+    flagMat.roughness = 0.9;
+  }
+  const flags = new THREE.InstancedMesh(flag, flagMat, P.length / 2);
   const cups = new THREE.InstancedMesh(cup, new THREE.MeshBasicNodeMaterial({ color: 0x151515 }), P.length / 2);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
   const red = new THREE.Color(0xd8282b), yellow = new THREE.Color(0xf3c518);
   for (let i = 0; i < P.length / 2; i++) {
     const x = P[i * 2], z = P[i * 2 + 1];
-    // every flag blows the same way, with the wind
-    q.setFromAxisAngle(up, 0.6 + Math.sin(x * 0.13 + z * 0.07) * 0.25);
-    m.compose(new THREE.Vector3(x, y + 0.01, z), q, one);
+    // (the flag unturned: its shader lays it out with the wind in the world's own directions)
+    m.compose(new THREE.Vector3(x, y + 0.01, z), q.identity(), one);
     sticks.setMatrixAt(i, m); flags.setMatrixAt(i, m); cups.setMatrixAt(i, m);
     flags.setColorAt(i, i % 2 ? red : yellow);
   }

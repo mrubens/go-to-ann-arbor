@@ -28,20 +28,27 @@ import {
   createBusWheelMaterial,
   createLoftedBusMaterial
 } from './bus.js';
-import { groundHeight, groundTilt, deckTop } from './terrain.js';
+import { groundHeight, groundTilt, deckTop, groundUnderStreets } from './terrain.js';
 import { MOTO_SPECS, HELMET_OF, HELMET_PAINTS, buildMotoGeometry, buildHelmetGeometry, createMotoMaterial, motoRiderPose } from './motorcycles.js';
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
 import { speedLimitAt } from './speed-limits.js';
 import { corridorsOf } from './safety-corridors.js';
 import { loadTheRide, createSchedule, createStopSigns, fetchTheRideLive } from './theride.js';
+import { createTrailRides } from './b2b-riders.js';
+import { b2bTop } from './b2b-trail.js';
 
 // Cars and buses follow the road graph, obey signals, yield at crossings and react to collisions.
 // Vehicles replenish around the player; pedestrian-system.js manages the nearby walking population.
 
 // Ann Arbor: a quiet college town, not Manhattan; fewer on a phone (device-tier.js)
 const NUM_CARS = Math.round(70 * TIER.traffic);
-// Lamp: and one more car slot, outside traffic's share: the cruiser watching a safety corridor's speed (speedTrap)
-const CAR_SLOTS = NUM_CARS + 1;
+// Lamp: the cars kept for the freeways (US-23, I-94, M-14), out only on one near the player, so a freeway is busy
+// without taking the town's cars off its streets (fewer on a phone, the Xbox or the slow tier); beyond the near cars'
+// reach the far fleet fills it (createHighwayTraffic, freewayLanes)
+const NUM_FREEWAY = Math.round(28 * TIER.traffic);
+// Lamp: and one more car slot, outside traffic's share: the cruiser watching a safety corridor's speed (speedTrap),
+// then the freeway's
+const CAR_SLOTS = NUM_CARS + 1 + NUM_FREEWAY;
 const NUM_BUSES = Math.round(16 * Math.max(0.75, TIER.traffic)); // Lamp: TheRide's buses on the road near the player, as the timetable has them (theride.js)
 
 // Intelligent Driver Model: max acceleration, comfortable braking, time headway, standstill gap; the sideways
@@ -241,12 +248,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   const baseCount = {};
   for (let i = 0; i < CAR_SLOTS; i++) {
     const trap = i === NUM_CARS;
-    const isPolice = trap || (i % 50) === 6 || (i % 100) === 56;
+    const freewayCar = i > NUM_CARS; // (Lamp: no cruiser, bike or scooter among the freeway's, now and then a motorbike)
+    const isPolice = !freewayCar && (trap || (i % 50) === 6 || (i % 100) === 56);
     // about one in ten is a motorcycle, of each kind in turn; one in ten rides at the curb, and one in twenty more is
     // an e-bike, the commonest of those in Ann Arbor
-    const extraEbike = !isPolice && i % 20 === 11;
-    const curb = !isPolice && (i % 10 === 7 || extraEbike);
-    const moto = curb || (!isPolice && i % 10 === 3);
+    const extraEbike = !isPolice && !freewayCar && i % 20 === 11;
+    const curb = !isPolice && !freewayCar && (i % 10 === 7 || extraEbike);
+    const moto = curb || (!isPolice && (freewayCar ? i % 14 === 5 : i % 10 === 3));
     let bodyType;
     // Lamp: AAPD's patrol cars are Ford Police Interceptor Utilities in dark navy (and an electric one, black and
     // white): every cruiser an SUV
@@ -296,17 +304,33 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     // minute or two (`isPolice`: lights and siren, through the reds), a few minutes apart (policeCalls)
     Object.assign(car, { isPolice: false, cruiser: isPolice, nextCall: isPolice ? 60 + Math.random() * 240 : 0, callUntil: 0,
       trap, ambulance, nextRun: ambulance ? 90 + Math.random() * 180 : 0, pullUntil: 0, pullOff: 0, rank: 0,
-      bodyType, paint, style, halfL: kind.halfL, mass: kind.mass, engine: kind.engine, moto, curb });
+      bodyType, paint, style, halfL: kind.halfL, mass: kind.mass, engine: kind.engine, moto, curb, freewayCar, fwRank: 0 });
     if (isPolice && (style & 7) === 6) car.engine = 'electric';
     if (curb) car.curbSpeed = MOTO_SPECS[bodyType].curbSpeed * (0.85 + (i % 7) * 0.05);
     cars.push(car);
+  }
+  // Lamp: and the bikes out on the Border to Border Trail (b2b-riders.js): bicycles and every fourth an e-bike, riders
+  // like any others', riding the trail rather than a street (`ride`; their `edge` is TRAIL_EDGE while they're out)
+  const trailRides = createTrailRides();
+  const TRAIL_EDGE = { trail: true, len: Infinity, lanes: [0], occ: [[]], to: {}, from: {}, axisIndex: 0, moves: [] }; // (no lights, no turns: audio-sources.js reads its `to`)
+  const STRAIGHT_ON = { turn: 'S' };
+  for (let i = 0; i < trailRides.count; i++) {
+    const bodyType = i % 4 === 3 ? 'ebike' : 'bicycle', kind = CAR_KINDS[bodyType], paints = MOTO_SPECS[bodyType].paints;
+    const col = new THREE.Color(paints[(i * 5 + 2) % paints.length]);
+    const bike = createVehicle(false, kind.half, kind.halfWidth, kind.axle, CAR_DRIVER, 5);
+    Object.assign(bike, { isPolice: false, cruiser: false, nextCall: 0, callUntil: 0, trap: false, ambulance: false, nextRun: 0,
+      pullUntil: 0, pullOff: 0, rank: -1, bodyType, paint: [Math.fround(col.r), Math.fround(col.g), Math.fround(col.b)], style: 0,
+      halfL: kind.halfL, mass: kind.mass, engine: kind.engine, moto: true, curb: true, onTrail: true, ride: null, move: STRAIGHT_ON });
+    counts[bodyType]++;
+    cars.push(bike);
   }
   // Lamp: which cars are out at the hour (setTrafficShare): the cruisers and the ambulance always, the rest in a fixed
   // shuffled order, so the kinds keep their shares as the streets empty
   {
     const key = new Map(cars.map((c) => [c, c.cruiser || c.ambulance ? -1 : Math.random()]));
-    const order = cars.filter((c) => !c.trap).sort((a, b) => key.get(a) - key.get(b));
+    const order = cars.filter((c) => !c.trap && !c.onTrail && !c.freewayCar).sort((a, b) => key.get(a) - key.get(b));
     order.forEach((c, k) => { c.rank = k; });
+    cars.filter((c) => c.freewayCar).sort((a, b) => key.get(a) - key.get(b)).forEach((c, k) => { c.fwRank = k; });
   }
 
   // Per body kind: the full model (with separately instanced spinning wheels near the camera) and, beyond
@@ -422,7 +446,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     van: new THREE.InstancedMesh(policeLightbars.van.geometry, darkLightbarMat, 1)
   };
   const policeLightbarMeshes = [policeLightbars.sedan, policeLightbars.suv, policeLightbars.van, darkLightbars.sedan, darkLightbars.suv, darkLightbars.van];
-  const carShadowInst = new THREE.InstancedMesh(unitPlane, contactShadowMat, CAR_SLOTS);
+  const carShadowInst = new THREE.InstancedMesh(unitPlane, contactShadowMat, CAR_SLOTS + trailRides.count);
   carShadowInst.renderOrder = 998;
 
   for (const b of Object.values(bodies)) {
@@ -634,7 +658,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     for (const v of vehicles) v.claimed = false;
     for (const v of vehicles) {
       const e = v.edge;
-      if (!e) continue;
+      if (!e || e === TRAIL_EDGE) continue;
       if (!v.conn) {
         occupy(e.occ[v.lane], v, v.s);
         const side = straddle(v);
@@ -890,6 +914,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       const m = e.moves[k];
       let w = m.to.closed ? 0 : m.turn === 'S' ? (v.bus ? 8 : 3) : 1;
       w *= CLASS_TRAFFIC[m.to.cls ?? 4]; // Lamp: drivers keep to main roads more than side streets
+      if (v.curb && m.to.freeway) w = 0; // Lamp: a bicycle, e-bike or scooter never takes a freeway or its ramp
       if (v.bus && m.turn !== 'S' && m.to.lanes.length < 2) w *= 0.05;
       if (fromLane) {
         if (m.out[v.lane] < 0) w = 0;
@@ -909,7 +934,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     }
     // No move from this lane (a lane the road graph couldn't lead anywhere): take any move, changing lanes for it
     if (!pick && fromLane) return chooseMove(v, false);
-    return pick || e.moves.find((m) => !m.to.closed) || e.moves[0] || null;
+    return pick || (v.curb && e.moves.find((m) => !m.to.closed && !m.to.freeway)) || e.moves.find((m) => !m.to.closed) || e.moves[0] || null;
   }
 
   // Could the vehicle of lane entry o, approaching the end of edge a, still stop easily before its line? Vehicles
@@ -1101,6 +1126,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const stoppable = canStopBefore(v, d) || (phase !== 'green' && v.speed * v.speed < 2 * v.driver.b * d);
     if (stoppable) v.commit = null; // could stop after all: decide afresh
     if (v.commit === n) return true;
+    // Lamp: a player's siren coming up to the junction: hold at the line rather than pull out in front of it
+    if (stoppable && playerSirenCount && !v.isPolice && sirenAhead(n)) return false;
     if (v.move.out[v.lane] < 0) {
       // missed the lane for the planned move: go wherever this lane goes instead
       if (d > 12) return false;
@@ -1589,6 +1616,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   // Move v along and across its path by (dx, dz), as far as the road allows
   function shove(v, dx, dz) {
+    if (v.edge === TRAIL_EDGE) { trailRides.shove(v, dx, dz); return; }
     const along = dx * v.tx + dz * v.tz;
     if (v.conn) v.cs = clamp(v.cs + along, -v.half, v.conn.len - 0.01);
     else v.s = clamp(v.s + along, 0, v.edge.len - v.half);
@@ -1686,6 +1714,31 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     if (!sweptVehicleContact(a, b, hit) && !vehicleContact(a, b, hit)) return;
     // how fast the car itself comes at them: walking or riding into a car that's standing still knocks nobody down
     const carComing = b.vx * hit.nx + b.vz * hit.nz;
+    // the cruiser coming straight at them off its lane (homeIn): as solid as any car, but it holds its line, the
+    // player bounced off it and it slowed, since a shove would put it back on its lane, which read as it vanishing
+    if (v.homing) {
+      const vx0 = b.vx, vz0 = b.vz;
+      const speed = resolveVehicleContact(a, b, hit);
+      pe.position.x = hit.ax + hit.nx * hit.depth;
+      pe.position.z = hit.az + hit.nz * hit.depth;
+      if (pe.mesh) pe.mesh.position.copy(pe.position);
+      if (speed <= 0) return;
+      const lost = Math.hypot(b.vx - vx0, b.vz - vz0);
+      v.speed = Math.max(0, (v.speed || 0) - lost);
+      pe.speed = a.vx * a.sin + a.vz * a.cos;
+      if (pe.type === 'car') {
+        pe.vx = a.vx - a.sin * pe.speed;
+        pe.vz = a.vz - a.cos * pe.speed;
+        pe.angularVel = a.angularVel;
+      }
+      impactSuspension(v, -hit.nx, -hit.nz, hit.impulse / b.mass);
+      if (pe.type !== 'person') reportCollision(pe, v, hit.x, 0.58, hit.z, hit.nx, hit.nz, speed);
+      // (not someone already lying in the road: knocked on again every half second, they convulsed; and a trail rider
+      // never knocks the player down: b2b-riders.js brakes for them, and a touch is a bump)
+      if ((pe.type === 'person' || pe.type === 'cyclist') && !pe.fallen && v.edge !== TRAIL_EDGE && speed > 3.5 && carComing > 3) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, pe.type, player.who);
+      if (speed > 2.2) spawnCollisionSparks(hit.x, 0.58, hit.z, hit.nx, hit.nz, speed);
+      return;
+    }
     const speed = resolveVehicleContact(a, b, hit);
     const pShare = b.mass / (a.mass + b.mass);
     pe.position.x = hit.ax + hit.nx * hit.depth * pShare;
@@ -1712,7 +1765,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     impactSuspension(v, -hit.nx, -hit.nz, hit.impulse / b.mass);
     if (pe.type !== 'person') reportCollision(pe, v, hit.x, 0.58, hit.z, hit.nx, hit.nz, speed);
     // the player on foot or on the bike, hit hard enough to go down: flung the way the car pushed them
-    if ((pe.type === 'person' || pe.type === 'cyclist') && speed > 3.5 && carComing > 3) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, pe.type, player.who);
+    // (not someone already lying in the road: knocked on again every half second, they convulsed; and a trail rider
+    // never knocks the player down: b2b-riders.js brakes for them, and a touch is a bump)
+    if ((pe.type === 'person' || pe.type === 'cyclist') && !pe.fallen && v.edge !== TRAIL_EDGE && speed > 3.5 && carComing > 3) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, pe.type, player.who);
     // a motorbike into a car (or a car into it) hard: its rider goes flying
     else if (pe.bike && speed > 7) playerStruck?.(hit.nx * speed, hit.nz * speed, speed, 'motorbike', player.who);
     if (speed > 2.2) spawnCollisionSparks(hit.x, 0.58, hit.z, hit.nx, hit.nz, speed);
@@ -1724,7 +1779,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // car pushed them, as the player is (PersonRig's ragdoll), lying still a few seconds, getting up, then walking back
   // to their ride (which coasts to a stop and falls on its side) and getting on again, if it's still within 40 m;
   // otherwise they stand there till both are out of sight, and the rider is back on it.
-  const riderGround = (v, x, z) => groundHeight(x, z) + 0.012;
+  // (up on the Border to Border Trail's surface where it's laid: b2b-trail.js)
+  const riderGround = (v, x, z) => Math.max((v.edge === TRAIL_EDGE ? groundUnderStreets(x, z) : groundHeight(x, z)) + 0.012, b2bTop(x, z));
   function throwRider(v, vx, vz, hit, speed) {
     const rig = v.riderRig;
     const side = Math.sign((hit.x - v.x) * Math.cos(v.yaw) - (hit.z - v.z) * Math.sin(v.yaw)) || 1;
@@ -1792,6 +1848,30 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       rig.update(dt, r.x, r.z, r.heading, riderGround, v, 0, draw, t);
       if (t >= PEDESTRIAN_DIVE_DURATION) r.phase = 'walk';
     } else {
+      // Lamp: up again or walking back to the ride, they're in the way like anyone on foot: the player's car or bike
+      // into them knocks them down again (hard enough), or shoulders them aside
+      for (const pl of [player, player2]) {
+        if (!pl.active || (pl.mode !== 'car' && pl.mode !== 'cyclist')) continue;
+        const dx = r.x - pl.x, dz = r.z - pl.z;
+        const along = dx * pl.fx + dz * pl.fz, across = dx * pl.fz - dz * pl.fx;
+        const hl = (pl.halfL || 2.2) + 0.3, hw = (pl.halfW || 0.9) + 0.3;
+        if (Math.abs(along) > hl || Math.abs(across) > hw) continue;
+        const speed = Math.hypot(pl.vx, pl.vz);
+        if (speed > 2.5) {
+          const nx = dx / (Math.hypot(dx, dz) || 1), nz = dz / (Math.hypot(dx, dz) || 1);
+          rig.startRagdoll(pl.vx * 0.9 + nx * 1.5, Math.min(6, 1.5 + speed * 0.25), pl.vz * 0.9 + nz * 1.5, (Math.random() - 0.5) * 4, Math.min(3, speed * 0.15));
+          rig.rag.done = false;
+          r.phase = 'fly';
+          r.start = clock;
+          pedestrianSystem.onRiderHit?.(r.x, r.z, speed);
+          log(`[traffic] a ${v.bodyType} rider walking back knocked down again at ${Math.round(speed * 2.237)} mph`);
+          if (draw) riderCrowd.add(rig, Math.hypot(rig.x - camX, rig.z - camZ));
+          return;
+        }
+        // (slow: eased out of the way, to the side they're on)
+        const s = Math.sign(across) || 1, out = hw - Math.abs(across);
+        r.x += pl.fz * s * out; r.z -= pl.fx * s * out;
+      }
       // to the ride's side, then on
       const yaw = v.yaw + v.yawOffset, px = Math.cos(yaw) * r.side, pz = -Math.sin(yaw) * r.side;
       const tx = v.x + px * 0.7, tz = v.z + pz * 0.7;
@@ -1892,9 +1972,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     if (v.riderOff) remount(v);
     for (let attempt = 0; attempt < 12; attempt++) {
       // Lamp: a third of new cars go on a freeway nearby: its few long links would otherwise get few of them
-      const fw = !v.bus && nearFreeways.length && Math.random() < 0.33;
+      // (Lamp: the freeway's own cars only there; bikes and scooters never)
+      const fw = !v.bus && !v.curb && nearFreeways.length && (v.freewayCar || Math.random() < 0.33);
+      if (v.freewayCar && !fw) return false;
       const e = fw ? nearFreeways[Math.floor(Math.random() * nearFreeways.length)] : nearEdges[Math.floor(Math.random() * nearEdges.length)];
       if (!e || e.closed || (v.bus && e.axis !== 'ave') || e.len < 2 * v.half + 10) continue;
+      if (v.curb && e.freeway) continue; // Lamp: no bicycle, e-bike or scooter on a freeway or its ramps
       if (!fw && Math.random() > CLASS_TRAFFIC[e.cls ?? 4]) continue; // Lamp: main roads are busier than side streets
       const lane = Math.floor(Math.random() * e.lanes.length);
       const along = (focusX - e.sx) * e.dx + (focusZ - e.sz) * e.dz;
@@ -2170,6 +2253,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const rawStep = forwardDist / spec.wheelRadius;
     c.wheelSpin = (c.wheelSpin + Math.sign(rawStep) * Math.min(Math.abs(rawStep), 0.48)) % (Math.PI * 2);
     if (!seen(c, 18)) return;
+    if (c.edge === TRAIL_EDGE) c._gy = trailRides.top(c.x, c.z); // (up on the trail's surface, or a footbridge)
     settle(c, rotY, 4.4, 1.8);
 
     const near = Math.hypot(c.x - focusX, c.z - focusZ) < CAR_PROXY_DISTANCE;
@@ -2387,6 +2471,18 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       pt.distance = 12.0;
       pt.intensity = 42.0 * tailScale * fade * pulse;
     }
+    // (and the player's own cruiser or ambulance with its siren on)
+    for (const rec of [player, player2]) {
+      const bar = rec.siren && rec.entity?.lightbar;
+      if (!bar || policeLightsUsed >= POLICE_LIGHT_POOL_SIZE) continue;
+      const e = rec.entity, wave = Math.sin(clock * Math.PI * 6.0), redPhase = wave >= 0;
+      const side = redPhase ? -0.36 : 0.36, s = Math.sin(e.heading || 0), c = Math.cos(e.heading || 0);
+      const pt = policeLightPool[policeLightsUsed++];
+      pt.color.setHex(redPhase ? 0xff1828 : e.sirenKind === 'ambulance' ? 0xffeedd : 0x1868ff);
+      pt.position.set(e.position.x + side * c + bar.z * s, e.position.y + bar.top + 0.15, e.position.z - side * s + bar.z * c);
+      pt.distance = 12.0;
+      pt.intensity = 42.0 * tailScale * (0.35 + 0.65 * Math.abs(wave));
+    }
     for (let i = policeLightsUsed; i < POLICE_LIGHT_POOL_SIZE; i++) {
       const pt = policeLightPool[i];
       pt.intensity = 0;
@@ -2441,15 +2537,37 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // cruiser after a speeder: `isPolice`) closing from behind, at most the two nearest, has the cars ahead in its way
   // ease over to the curb (the curb lane as far as the road's edge allows, swerveRoom) and stop till it has gone by
   // (`pullUntil`, `pullOff`); it passes those well over (ahead).
+  // The player's own cruiser or ambulance with its siren on (`player.siren`, either player in split screen), going
+  // over 3 m/s, is one too, besides those two (playerSirens: where it is and its heading, as a car's x, z and yaw);
+  // and cross traffic short of a junction it's coming up to holds at the line (sirenAhead in mayEnter)
   const sirens = [];
+  const playerSirens = [{ x: 0, z: 0, yaw: 0, vx: 0, vz: 0, player: true }, { x: 0, z: 0, yaw: 0, vx: 0, vz: 0, player: true }];
+  let playerSirenCount = 0;
   function gatherSirens() {
     sirens.length = 0;
+    playerSirenCount = 0;
     for (const c of cars) {
       if (!c.isPolice || !c.edge || c.speed < 3) continue;
       if (Math.abs(c.x - focusX) > 320 || Math.abs(c.z - focusZ) > 320) continue;
       sirens.push(c);
       if (sirens.length >= 2) break;
     }
+    for (const rec of [player, player2]) {
+      if (!rec.siren || Math.hypot(rec.vx, rec.vz) < 3) continue;
+      const ps = playerSirens[playerSirenCount++];
+      ps.x = rec.x; ps.z = rec.z; ps.vx = rec.vx; ps.vz = rec.vz;
+      ps.yaw = Math.atan2(rec.fx, rec.fz);
+      sirens.push(ps);
+    }
+  }
+  // a player's siren coming up to junction n (within 70 m and closing on it, or already in it): cross traffic waits
+  function sirenAhead(n) {
+    for (let i = 0; i < playerSirenCount; i++) {
+      const ps = playerSirens[i];
+      const dx = n.x - ps.x, dz = n.z - ps.z, d = Math.hypot(dx, dz);
+      if (d < 18 || (d < 70 && dx * ps.vx + dz * ps.vz > 0.5 * d * Math.hypot(ps.vx, ps.vz))) return true;
+    }
+    return false;
   }
   function yieldToSiren(v) {
     if (v.conn || v.curb || v.parked) return;
@@ -2462,12 +2580,14 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       if (clock >= v.pullUntil) {
         v.pullOff = v.lane === v.edge.lanes.length - 1 ? swerveRoom(v, 1) : 0;
         pulledOver++;
+        if (c.player) pulledForPlayer++;
       }
       v.pullUntil = clock + 1.5;
       return;
     }
   }
   let pulledOver = 0;
+  let pulledForPlayer = 0, pulledLogged = 0, pulledLogAt = 0; // (logged every 5 s while it climbs: `[siren]`)
 
   // Lamp: the ambulance (the first van, white with a red band, no names): every 5-10 minutes (10-20 on the Xbox) while
   // it's out near the player, it runs to University Hospital's emergency entrance on E Medical Center Dr, lights and
@@ -2713,13 +2833,23 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       const off = Math.abs(pz * e.dx - px * e.dz);
       if (off < bestD) { bestD = off; best = e; bestS = s; }
     }
-    if (!best) { v.homing = true; return false; } // (no lane near: it stays where it is, off its lane, till there is)
+    // (none going its way: the nearest lane either way, turned to it, when it's done with the player; else it stays
+    // where it is, off its lane, till there is one)
+    if (!best && !v.chase) for (const e of edges) {
+      if (!e.general || e.closed) continue;
+      const px = v.x - e.sx, pz = v.z - e.sz, s = px * e.dx + pz * e.dz;
+      if (s < v.half || s > e.len - v.half) continue;
+      const off = Math.abs(pz * e.dx - px * e.dz);
+      if (off < bestD) { bestD = off; best = e; bestS = s; }
+    }
+    if (!best) { v.homing = true; return false; }
     const speed = v.speed;
     place(v, best, 0, bestS);
     v.speed = speed;
     locate(v);
     v.yaw = Math.atan2(v.tx, v.tz);
-    v.move = chaseMove(v, true) || v.move;
+    // (after the player while it chases; done with them, on its way as any car)
+    v.move = (v.chase ? chaseMove(v, true) : chooseMove(v, true)) || v.move;
     return true;
   }
   function patrolWatch() {
@@ -2728,7 +2858,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     const mph = Math.hypot(player.vx, player.vz) / 0.44704;
     let why = null, limit = 0;
     if (clock - offense.at < 4) why = offense.text;
-    else if (mph > 30) {
+    // (a player in a cruiser or the ambulance with the siren on may speed; a crash still counts)
+    else if (mph > 30 && !player.siren) {
       limit = speedLimitAt(player.x, player.z, Math.atan2(player.vx, player.vz));
       if (limit && mph > limit + 15) why = 'speed';
     }
@@ -2765,6 +2896,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     corridors ??= corridorsOf(network);
     if (!corridors.length) return;
     const inCar = player.active && player.mode === 'car';
+    // (once it's after them, getting out doesn't end it: on foot or on a bike they're still to be caught up with;
+    // only the air or the river is out of its reach)
+    const reachable = player.active && (player.mode === 'car' || player.mode === 'person' || player.mode === 'cyclist');
     const mph = Math.hypot(player.vx, player.vz) / 0.44704;
     if (trap.state !== 'idle' && !v.edge) { log('[police] the cruiser was taken off the road'); v.homing = false; trapEnd(v, 'idle'); trap.cooldown = clock + 60; return; } // taken
     switch (trap.state) {
@@ -2798,7 +2932,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
         const sameWay = (player.vx * fx + player.vz * fz) > 0.8 * Math.hypot(player.vx, player.vz);
         if (ahead < -40 || ahead > 25 || aside > 14 || !sameWay) return;
         const limit = speedLimitAt(player.x, player.z, Math.atan2(player.vx, player.vz));
-        if (!limit || mph <= limit + 10) return;
+        if (!limit || mph <= limit + 10 || player.siren) return;
         trap.mph = Math.round(mph);
         trap.limit = limit;
         trap.reason = null;
@@ -2809,9 +2943,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       case 'chase': {
         const d = Math.hypot(player.x - v.x, player.z - v.z);
         // one car, chasing as fast as it takes (vWant); get 450 m clear and it's a getaway
-        if (!inCar || d > 450 || clock - trap.since > 75) {
-          log(`[police] the cruiser gives up (${!inCar ? 'off the road' : d > 450 ? 'outrun' : 'too long'})`);
-          if (inCar && d <= 450) onNotice?.('The police gave up', 3);
+        if (!reachable || d > 450 || clock - trap.since > 75) {
+          log(`[police] the cruiser gives up (${!reachable ? 'off the road' : d > 450 ? 'outrun' : 'too long'})`);
+          if (reachable && d <= 450) onNotice?.('The police gave up', 3);
           trapEnd(v, 'leave');
           return;
         }
@@ -2830,7 +2964,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
         return;
       case 'leave':
         // drives on as any car does; taken off out of sight, and the corridors rest a while
-        if (clock - trap.since > 8 && (!hasView || !visible(v.x, v.z, 22)) && !v.conn) {
+        // (out of sight and well away too: just behind the camera, after a stop right behind the player, isn't gone)
+        if (clock - trap.since > 8 && (!hasView || !visible(v.x, v.z, 22)) && !v.conn
+          && Math.hypot(v.x - player.x, v.z - player.z) > 150) {
           v.edge = null;
           trapEnd(v, 'idle');
           trap.cooldown = clock + 90;
@@ -2852,11 +2988,14 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   let spawnTick = 0;
   // Lamp: how many of traffic's cars are out at the hour shown (main.js, from town-clock.js trafficShare)
-  let carTarget = NUM_CARS;
+  let carTarget = NUM_CARS, freewayTarget = NUM_FREEWAY;
   function setTrafficShare(share) {
     const n = Math.max(4, Math.round(NUM_CARS * Math.max(0, Math.min(1, share))));
-    if (n !== carTarget) log(`[traffic] ${n} of ${NUM_CARS} cars out for the hour`);
+    // (Lamp: and the freeway's, a little busier than town at the same hour: the through traffic and the commuters)
+    const f = Math.round(NUM_FREEWAY * Math.max(0.15, Math.min(1, share * 1.1)));
+    if (n !== carTarget || f !== freewayTarget) log(`[traffic] ${n} of ${NUM_CARS} cars out for the hour, and ${f} of ${NUM_FREEWAY} on the freeways`);
     carTarget = n;
+    freewayTarget = f;
   }
   // a cruiser's calls: on one for 60-150 s, then 4-10 min of plain driving (each ends off a junction, not mid-way
   // through a red it was running)
@@ -2875,6 +3014,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     rec.active = Boolean(entity && mode !== 'helicopter' && !aboard
       && Math.abs(entity.position.y - groundHeight(entity.position.x, entity.position.z)) < 2.6);
     rec.entity = entity;
+    // Lamp: driving a cruiser or the ambulance with its lights and siren on (main.js toggleSiren)
+    rec.siren = rec.active && mode === 'car' && Boolean(entity?.siren);
     if (entity) {
       const heading = entity.heading || 0;
       const speed = entity.speed || 0;
@@ -2942,22 +3083,42 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     for (let scanned = 0; scanned < vehicles.length && budget > 0; scanned++) {
       const v = vehicles[vehicleCursor];
       vehicleCursor = (vehicleCursor + 1) % vehicles.length;
-      if (v.bus || v.held || v.trap || v === trap.car) continue; // (the cruiser after the player stays) (TheRide's buses come by the timetable: scheduleBuses; a taken car: takeCar)
+      if (v.bus || v.held || v.trap || v.onTrail || v === trap.car) continue; // (the cruiser after the player stays) (TheRide's buses come by the timetable: scheduleBuses; a taken car: takeCar)
       // Lamp: more cars than the hour has out (setTrafficShare): one out of sight goes home, and none comes in for it
-      if (v.rank >= carTarget) {
+      if (v.freewayCar ? v.fwRank >= freewayTarget : v.rank >= carTarget) {
         if (v.edge && !v.conn && !v.isPolice && !v.riderOff && (jump || !hasView || !visible(v.x, v.z, 22))) {
           v.edge = null; v.trail = null; v.commit = null; v.speed = 0; v.pullUntil = 0;
           budget--;
         }
         continue;
       }
+      // (a freeway's car with no freeway near waits off the road, costing nothing)
+      if (v.freewayCar && !v.edge && !nearFreeways.length) continue;
       const d = v.edge ? Math.hypot(v.x - focusX, v.z - focusZ) : Infinity;
       // (a car that somehow found its way into a closed block leaves it as soon as nobody's looking)
-      if (d <= (jump ? NEAR_RADIUS : VEHICLE_RADIUS) && !(v.edge?.closed && !visible(v.x, v.z, 22))) continue;
+      // (and a bike or scooter left with no way on but a freeway's ramp goes home there, out of sight)
+      if (d <= (jump ? NEAR_RADIUS : VEHICLE_RADIUS) && !((v.edge?.closed || (v.curb && v.edge?.freeway)) && !visible(v.x, v.z, 22))) continue;
       budget--;
       spawnVehicle(v, jump ? 0 : 100, NEAR_RADIUS, !jump);
     }
     scheduleBuses(dt, jump);
+    // Lamp: everyone on the Border to Border Trail round about, for its riders' etiquette (b2b-riders.js step): its
+    // riders, its walkers and runners (pedestrian-system.js, on its segments: `b2b`) and the player; every third frame
+    if (trailRides.count && (++trailUsersTick % 3 === 0 || jump)) gatherTrailUsers();
+    // Lamp: the Border to Border Trail's riders: brought out on it, out of sight, up to how many the hour has out
+    if (trailRides.count) {
+      const cam = { x: focusX, z: focusZ }, target = trailRides.want(cam);
+      let out = 0;
+      for (const v of cars) if (v.onTrail && v.edge) out++;
+      for (const v of cars) {
+        if (!v.onTrail || v.edge || v.held || out >= target || (!jump && Math.random() > dt * 0.8)) continue;
+        if (v.riderOff) remount(v);
+        if (!trailRides.spawn(v, cam, (x, z, r) => hasView && visible(x, z, r))) break;
+        Object.assign(v, { edge: TRAIL_EDGE, move: STRAIGHT_ON, conn: null, trail: null, commit: null, dl: 0, dlv: 0, vx: 0, vz: 0,
+          yawOffset: 0, yawVel: 0, pitch: 0, pitchVel: 0, roll: 0, rollVel: 0, impactTime: 0, acc: 0, nose: 0, blink: 0 });
+        out++;
+      }
+    }
     buildOccupancy();
     for (const m of bodyMeshes) m.count = 0;
     dirtyWheelStyles = false;
@@ -2975,9 +3136,28 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     if (trap.car && trap.car !== trapCar) speedTrap(trap.car, dt);
     else if (trapCar) speedTrap(trapCar, dt);
     gatherSirens();
+    if (pulledForPlayer > pulledLogged && clock - pulledLogAt > 5) {
+      log(`[siren] ${pulledForPlayer - pulledLogged} car${pulledForPlayer - pulledLogged === 1 ? '' : 's'} pulled over for the player's siren (${pulledForPlayer} in all)`);
+      pulledLogged = pulledForPlayer;
+      pulledLogAt = clock;
+    }
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
       if (!v.edge) continue;
+      // Lamp: a rider on the Border to Border Trail goes along it (b2b-riders.js), and is knocked about as any other
+      if (v.edge === TRAIL_EDGE) {
+        v.prevX = v.x;
+        v.prevZ = v.z;
+        if (!trailRides.step(v, dt, { x: focusX, z: focusZ }, trailUsers, ringTrailBell)) {
+          if (v.riderOff) remount(v);
+          v.edge = null; v.ride = null; v.speed = 0;
+          continue;
+        }
+        knock(v, dt);
+        pose(v, dt);
+        if (v.riderOff) lieDown(v, dt);
+        continue;
+      }
       if (v.cruiser && !v.trap && v !== trap.car) policeCalls(v);
       if (sirens.length && !v.isPolice && !v.bus && v !== ridden) yieldToSiren(v);
       if (v.parked) { v.speed = 0; v.acc = 0; locate(v); pose(v, dt); continue; }
@@ -2994,8 +3174,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       if (v.riderOff) lieDown(v, dt);
     }
     if (player.active) {
-      // (not the cruiser driving straight at them: it stops short by itself, and a contact would put it back on its lane)
-      for (const v of vehicles) if (v.edge && !v.homing) collideWithPlayer(v, player);
+      // (the cruiser driving straight at them too: collideWithPlayer keeps it on its line)
+      for (const v of vehicles) if (v.edge) collideWithPlayer(v, player);
     }
     if (player2.active) {
       for (const v of vehicles) if (v.edge) collideWithPlayer(v, player2);
@@ -3071,6 +3251,28 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     }
     updateSparks(dt);
   }
+
+  const trailUsers = [];
+  let trailUsersTick = 0, onTrailBell = null;
+  function gatherTrailUsers() {
+    trailUsers.length = 0;
+    let riding = false;
+    for (const c of cars) {
+      if (c.edge !== TRAIL_EDGE) continue;
+      riding = true;
+      trailUsers.push({ key: c, x: c.x, z: c.z, vx: Math.sin(c.yaw) * c.speed, vz: Math.cos(c.yaw) * c.speed, foot: false });
+    }
+    if (!riding) return;
+    if (player.active && player.mode !== 'helicopter' && player.mode !== 'kayak') {
+      trailUsers.push({ key: player, x: player.x, z: player.z, vx: player.vx, vz: player.vz, foot: player.mode === 'person' });
+    }
+    for (const p of pedestrianSystem.peds) {
+      if (!p.placed || !p.trail || !p.route?.b2b || Math.abs(p.x - focusX) > 160 || Math.abs(p.z - focusZ) > 160) continue;
+      const sp = (p.v || 0) * (p.dir || 1);
+      trailUsers.push({ key: p, x: p.x, z: p.z, vx: (p.ux || 0) * sp, vz: (p.uz || 0) * sp, foot: true });
+    }
+  }
+  const ringTrailBell = (x, z) => onTrailBell?.({ x, y: trailRides.top(x, z), z });
 
   // Lamp: riding a bus (F at a stop, main.js): the bus's front door, `out` metres out on its curb side
   let ridden = null;
@@ -3153,6 +3355,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     }
     if (!best) return null;
     const v = best;
+    v.ride = null;
     const taken = {
       kind: v.bodyType, hex: takeColor.setRGB(v.paint[0], v.paint[1], v.paint[2]).getHex(), style: v.style,
       x: v.x, z: v.z, yaw: v.yaw + (v.yawOffset || 0), speed: v.speed, distance: bestD
@@ -3191,6 +3394,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     setCrowdBusy: pedestrianSystem.setBusy,
     setTrafficShare,
     setNotice(fn) { onNotice = fn; },
+    // a trail rider ringing to pass (b2b-riders.js): fn({ x, y, z })
+    setTrailBellListener(fn) { onTrailBell = fn; },
     // the cruiser after the player, while it is (for the map), or null
     pursuer: () => (trap.car && (trap.state === 'chase' || trap.state === 'stopped') ? trap.car : null),
     crowdStats: pedestrianSystem.stats,
@@ -3225,13 +3430,75 @@ const HWY_FAR_CULL = 1600;
 const HWY_RAMP = 32; // the dip at the lane ends: 2.4 m down over this many metres
 const HWY_BOX_RUN = 16; // lane segments per bounding box of the player test
 
-function createHighwayTraffic(scene, lanes) {
+// Lamp: Ann Arbor's freeways (US-23, I-94, M-14) as the far fleet's lanes. Their carriageways (the road network's cls 0
+// edges) are followed straight on from edge to edge into chains, each from where the carriageway comes into town to
+// where it leaves (or back round to its start), and each chain's lanes, as many as it has all the way along, become a
+// lane of points every 12 m or less on the ground: { pts, speed }. The near fleet (traffic.js's own cars, with the
+// network's lanes) takes the freeway within VEHICLE_RADIUS of the player, where this one isn't drawn.
+function freewayLanes(network) {
+  const edges = (network?.edges || []).filter((e) => (e.cls ?? 4) === 0 && e.lanes.length && !e.closed);
+  const next = new Map(), hasPrev = new Set();
+  for (const e of edges) {
+    let best = null, bestDot = 0.8;
+    for (const m of e.moves) {
+      const f = m.to;
+      if ((f.cls ?? 4) !== 0) continue;
+      const dot = e.dx * f.dx + e.dz * f.dz;
+      if (dot > bestDot) { bestDot = dot; best = f; }
+    }
+    if (best && !hasPrev.has(best)) { next.set(e, best); hasPrev.add(best); }
+  }
+  const used = new Set(), chains = [];
+  const follow = (e) => {
+    const chain = [];
+    for (let f = e; f && !used.has(f); f = next.get(f)) { used.add(f); chain.push(f); }
+    if (chain.length) chains.push(chain);
+  };
+  for (const e of edges) if (!hasPrev.has(e)) follow(e);
+  for (const e of edges) follow(e); // (loops)
+  const lanes = [];
+  for (const chain of chains) {
+    let len = 0;
+    for (const e of chain) len += e.len;
+    if (len < 300) continue;
+    const n = Math.min(...chain.map((e) => e.lanes.length));
+    const mph = Math.max(55, ...chain.map((e) => e.mph || 0));
+    for (let i = 0; i < n; i++) {
+      const pts = [];
+      for (const e of chain) {
+        // (lane i counted from the left: the edges' own lanes sorted left to right)
+        const o = e.lanes[e.lanes.length - n + i] ?? e.lanes[i];
+        const k = Math.max(1, Math.ceil(e.len / 12));
+        for (let j = 0; j <= k; j++) {
+          const s = e.len * j / k, x = e.sx + e.dx * s + e.rx * o, z = e.sz + e.dz * s + e.rz * o;
+          const last = pts[pts.length - 1];
+          if (last && Math.hypot(last.x - x, last.z - z) < 1) continue;
+          pts.push(new THREE.Vector3(x, groundHeight(x, z), z));
+        }
+      }
+      if (pts.length < 3) continue;
+      // the left lane a little quicker than the right, all near the limit (a 70 mph freeway: 72 to 78 mph)
+      const speed = mph * 0.447 * (1.03 + 0.08 * (n - 1 - i) / Math.max(1, n - 1));
+      lanes.push({ pts, speed });
+    }
+  }
+  log(`[freeway] far fleet: ${lanes.length} lanes on ${chains.length} carriageways, ${Math.round(edges.reduce((a, e) => a + e.len, 0) / 100) / 10} km`);
+  return lanes;
+}
+
+function createHighwayTraffic(scene, lanes, opts = {}) {
   const group = new THREE.Group();
   group.name = 'HighwayTraffic';
   scene.add(group);
   // Ann Arbor's city map has no highway lanes: build no fleet, meshes or per-frame work for an empty road
-  if (!lanes?.length) return { group, update() {}, cars: [], lanes: lanes ?? [] };
+  if (!lanes?.length) return { group, update() {}, cars: [], lanes: lanes ?? [], setShare() {}, stats: () => ({ cars: 0 }) };
   const KINDS = Object.keys(CAR_KINDS).filter((kind) => !CAR_KINDS[kind].moto);
+  // Lamp: as Ann Arbor's far fleet (opts.far): the near fleet's radius round the player where none is drawn (or heard),
+  // the gap between cars in a lane by the tier (thinner on a phone, the Xbox or the slow tier), and how far out
+  const hideNear = opts.hideNear || 0;
+  const gapScale = opts.gapScale || 1;
+  const farCull = opts.farCull || HWY_FAR_CULL;
+  let share = 1;
   let seed = 20240917;
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
@@ -3256,7 +3523,7 @@ function createHighwayTraffic(scene, lanes) {
       lane.box.push(Math.min(...run.map((p) => p.x)), Math.max(...run.map((p) => p.x)), Math.min(...run.map((p) => p.z)), Math.max(...run.map((p) => p.z)));
     }
     lane.cars = [];
-    for (let u = rand() * 30; u < lane.len - 12; u += 24 + rand() * 50) {
+    for (let u = rand() * 30; u < lane.len - 12; u += (24 + rand() * 50) * gapScale) {
       const h = rand();
       // Fewer vans than in town: commercial vehicles are barred from the parkways
       const kind = h < 0.025 ? 'sports' : h < 0.31 ? 'sedan' : h < 0.39 ? 'tesla' : h < 0.43 ? 'ioniq' : h < 0.44 ? 'cybertruck' : h < 0.46 ? 'r1s' : h < 0.75 ? 'suv' : h < 0.84 ? 'minivan' : h < 0.947 ? 'pickup' : h < 0.96 ? 'r1t' : 'van';
@@ -3265,7 +3532,7 @@ function createHighwayTraffic(scene, lanes) {
       const spec = BODY_SPECS[kind];
       // (float32 values, so update() can tell whether an instance slot's paint changes by comparing with the buffer)
       const car = {
-        lane, kind, u, v: lane.speed, acc: 0, seg: 0,
+        lane, kind, u, v: lane.speed, acc: 0, seg: 0, rank: rand(), out: true,
         placed: false, x: 0, y: -1000, z: 0, yaw: 0,
         len: spec.zFront - spec.zRear, engine: CAR_KINDS[kind].engine,
         col: [Math.fround(col.r), Math.fround(col.g), Math.fround(col.b)],
@@ -3314,7 +3581,7 @@ function createHighwayTraffic(scene, lanes) {
   let flareCount = 0;
 
   // Clustered SpotLight pool for nearby highway cars (within 105 m)
-  const HWY_SPOT_POOL = 28;
+  const HWY_SPOT_POOL = hideNear > 105 ? 0 : 28; // (Lamp: the far fleet is never near enough to light the road)
   const HWY_LIGHT_DIST = 105;
   const HWY_LIGHT_DIST_SQ = HWY_LIGHT_DIST * HWY_LIGHT_DIST;
   const hwyLightsGroup = new THREE.Group();
@@ -3432,12 +3699,15 @@ function createHighwayTraffic(scene, lanes) {
         if (c.u >= lane.len) {
           c.u -= lane.len;
           c.seg = 0;
+          // (Lamp: out or not by the hour's share only here, under the road at its lane's end)
+          c.out = c.rank < share;
         }
       }
     }
 
     // 2. Instances: LOD by distance, far cars well behind the camera skipped; lamp flares at dusk & night
     const cam = camera.position;
+    const nearX = entity ? entity.position.x : cam.x, nearZ = entity ? entity.position.z : cam.z;
     camera.getWorldDirection(fwd);
     for (const kind of KINDS) for (const mesh of meshes[kind]) mesh.count = 0;
     const flaresOn = cityUniforms.uInteriorGlow.value > 0.65;
@@ -3467,12 +3737,17 @@ function createHighwayTraffic(scene, lanes) {
       c.y = y;
       c.z = z;
       c.yaw = yaw;
-      c.placed = true;
+      // Lamp: the far fleet leaves the player's surroundings to the near one (and isn't heard there), and only the
+      // hour's share of it is out (a car coming or going only where it isn't drawn)
+      const fx = x - nearX, fz = z - nearZ;
       const dx = x - cam.x;
       const dz = z - cam.z;
       const dy = y - cam.y;
       const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 > HWY_FAR_CULL * HWY_FAR_CULL) continue;
+      const hidden = hideNear > 0 && fx * fx + fz * fz < hideNear * hideNear;
+      if (hidden || d2 > farCull * farCull) c.out = c.rank < share;
+      c.placed = c.out && !hidden;
+      if (!c.placed || d2 > farCull * farCull) continue;
       const lod = d2 < HWY_NEAR_LOD * HWY_NEAR_LOD ? 0 : d2 < HWY_MID_LOD * HWY_MID_LOD ? 1 : 2;
       if (lod > 0 && dx * fwd.x + dz * fwd.z < -40) continue;
       if (y < -3.6) continue; // in the Battery Park Underpass, out of sight behind the portals' screens
@@ -3595,7 +3870,12 @@ function createHighwayTraffic(scene, lanes) {
     }
   }
 
-  return { group, update, cars, lanes };
+  // Lamp: the share of the fleet out at the hour (town-clock.js trafficShare, as the near fleet's); a car comes or goes
+  // at its lane's end, under the road, so none appears or vanishes on it
+  function setShare(s) { share = Math.max(0, Math.min(1, s)); }
+  // how many are out and drawn (for the log)
+  const stats = () => ({ cars: cars.length, out: cars.filter((c) => c.out).length, drawn: cars.filter((c) => c.placed).length, lanes: lanes.length });
+  return { group, update, cars, lanes, setShare, stats };
 }
 
-export { createTrafficSystem, createHighwayTraffic };
+export { createTrafficSystem, createHighwayTraffic, freewayLanes, VEHICLE_RADIUS };

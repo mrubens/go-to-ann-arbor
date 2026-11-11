@@ -364,7 +364,8 @@ class CityAudioSystem {
       params.verticalSpeed = source.verticalSpeed;
       params.seed = source.seed;
       params.cabin = Boolean(source.cabin);
-      params.doppler = clamp(343 / (343 + radial), 0.85, 1.18);
+      // (none for the player's own: its siren rides with them)
+      params.doppler = source.player ? 1 : clamp(343 / (343 + radial), 0.85, 1.18);
       slot.voice.update(params, now);
       slot.distance = distance;
       slot.x = source.x; slot.y = source.y; slot.z = source.z;
@@ -538,6 +539,18 @@ class CityAudioSystem {
   cue(kind, at, intensity = 1) {
     if (!this.ready || !this.enabled || this.context?.state !== 'running' || document.hidden) return;
     this.emit(kind, { id: kind, x: at.x, y: at.y + 0.3, z: at.z, seed: ++this.collisionSequence }, { intensity, priority: true });
+  }
+
+  // Lamp: a cyclist on the Border to Border Trail ringing to pass (traffic.js, b2b-riders.js): the player's own bell's
+  // sound (audio-ride.js ringBell), from where they are, heard within about 35 m
+  trailBell(at) {
+    if (!this.ready || !this.enabled || !this.haveListener || this.context?.state !== 'running' || document.hidden) return;
+    if (Math.hypot(at.x - this.listener.x, at.z - this.listener.z) > 35 || this.events.length >= this.limits.events) return;
+    const now = this.context.currentTime, source = { id: 'trailbell', x: at.x, y: at.y + 1, z: at.z, seed: ++this.collisionSequence };
+    const emitter = new SpatialEmitter(this.context, this.mix, this.reflections, this.acoustics, 2.5);
+    emitter.update(source, this.listener, now, 35, true, true);
+    ringBell(this.context, emitter.input, now);
+    this.events.push({ kind: 'bell', voice: { endTime: now + 3, dispose() {} }, emitter, id: source.id, range: 35, severity: 0.3, position: { ...source }, follow: false });
   }
 
   honk(entity) {

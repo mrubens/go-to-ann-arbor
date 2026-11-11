@@ -841,12 +841,28 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
   const genCreated = edges.filter((e) => e.general).length;
   edges = edges.filter((e) => e.len > (e.general ? 4 : 6));
 
+  // Lamp: the freeways (`freeway`): their carriageways (motorway and trunk, cls 0) and the ramps onto and off them (the
+  // links, cls 5, joined to one through other links). No bicycle, e-bike or scooter goes on one (traffic.js), they're
+  // painted as a freeway is (road-paint.js), and no sidewalk runs along them (city-grid.js)
+  {
+    const at = new Map();
+    for (const e of edges) for (const n of [e.from, e.to]) { if (!at.has(n)) at.set(n, []); at.get(n).push(e); }
+    const queue = edges.filter((e) => (e.cls ?? 4) === 0);
+    for (const e of edges) e.freeway = (e.cls ?? 4) === 0;
+    while (queue.length) {
+      const e = queue.pop();
+      for (const n of [e.from, e.to]) {
+        for (const f of at.get(n)) if (!f.freeway && f.cls === 5) { f.freeway = true; queue.push(f); }
+      }
+    }
+  }
+
   // Paint describes the physical streets, including dead ends and roads AI traffic cannot circulate through.
   // Snapshot their geometry before routing moves stop lines, drops edges and renumbers the surviving junctions.
   const paintNodes = new Map(nodes.map((n, id) => [n, { id, x: n.x, z: n.z, shape: n.shape }]));
-  const paintEdges = edges.map(({ from, to, axis, x0, z0, sx, sz, dx, dz, rx, rz, span, len, half, lanes, cls, bikeR, bikeL, parkR, parkL, share, shareL, bk, turn, divided }) => ({
+  const paintEdges = edges.map(({ from, to, axis, x0, z0, sx, sz, dx, dz, rx, rz, span, len, half, lanes, cls, bikeR, bikeL, parkR, parkL, share, shareL, bk, turn, divided, freeway }) => ({
     from: paintNodes.get(from), to: paintNodes.get(to), axis, x0, z0, sx, sz, dx, dz, rx, rz, span, len, half, lanes,
-    cls: cls ?? 4, bikeR: bikeR || 0, bikeL: bikeL || 0, parkR: parkR || 0, parkL: parkL || 0, share: share || 0, shareL: shareL || 0, bk: bk || 0, turn: turn || 0, divided: !!divided
+    cls: cls ?? 4, bikeR: bikeR || 0, bikeL: bikeL || 0, parkR: parkR || 0, parkL: parkL || 0, share: share || 0, shareL: shareL || 0, bk: bk || 0, turn: turn || 0, divided: !!divided, freeway: !!freeway
   }));
 
   // 6. Movements at each intersection (no U-turns) and the lane each lane leads to, along obstacle-free curves:

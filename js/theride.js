@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { asset, log } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
+import { blockAt } from './city-config.js';
 import { nativeFeed, decodeVehiclePositions, toWorld } from './live-feeds.js';
 
 // Lamp: TheRide, Ann Arbor's buses, on their real routes and timetable. data/theride.json.gz (build-theride.py, from
@@ -512,6 +513,15 @@ function placeStopSigns(stops, network) {
     }
     return false;
   };
+  // Lamp: and on a block (its sidewalk or yard), not only off the lanes: a road's pavement can run wider than its
+  // lanes (a turn bay, parking, a flared corner), and a sign there stood in the street
+  // (where the town's blocks aren't mapped round it, out past them, off the lanes is all there is to go by)
+  const blocksNear = (px, pz) => {
+    for (let dx = -20; dx <= 20; dx += 10) for (let dz = -20; dz <= 20; dz += 10) if (blockAt(px + dx, pz + dz)) return true;
+    return false;
+  };
+  let mapped = false;
+  const clear = (px, pz) => !onRoad(px, pz) && (!mapped || !!blockAt(px, pz));
   const SLIDES = [0];
   for (let d = 2; d <= 30; d += 2) SLIDES.push(-d, d);
   for (let i = 0; i < stops.length; i++) {
@@ -525,25 +535,27 @@ function placeStopSigns(stops, network) {
       if (lat < -1 || lat > e.half + 14) continue; // the stop on this edge's right
       if (lat < bd) { bd = lat; best = { e, s }; }
     }
+    mapped = blocksNear(x, z);
     if (best) {
       // Lamp: beside its own road, slid along the curb (nearest first) until the spot is on no road at all: a stop
       // mapped by a corner would otherwise stand in the cross street. Left out when no spot nearby is clear.
       const { e, s } = best;
       let done = false;
-      for (const back of [0.7, 1.6, 2.8]) {
+      // (on a block first; where none is near the curb, as far back off the lanes as a sidewalk would be)
+      for (const [back, strict] of [[0.7, 1], [1.6, 1], [2.8, 1], [4.2, 1], [6, 1], [3.2, 0], [4.5, 0]]) {
         const off = e.half + back;
         for (const step of SLIDES) {
           const t = s + step;
           if (t < 0 || t > e.len) continue;
           const px = e.sx + e.dx * t + e.rx * off, pz = e.sz + e.dz * t + e.rz * off;
-          if (onRoad(px, pz)) continue;
+          if (strict ? !clear(px, pz) : onRoad(px, pz)) continue;
           placed.push({ x: px, z: pz, yaw: Math.atan2(e.dx, e.dz), i });
           done = true;
           break;
         }
         if (done) break;
       }
-    } else if (!onRoad(x, z)) {
+    } else if (clear(x, z)) {
       placed.push({ x, z, yaw: 0, i });
     }
   }

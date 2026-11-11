@@ -26,6 +26,9 @@ class TouchControls {
     this.getInOut = this.root?.querySelector('[data-touch-tap="getinout"]') ?? null;
     this.onHorn = null; // (main.js) the horn, one honk a tap, shown only while driving a car
     this.horn = this.root?.querySelector('[data-touch-tap="horn"]') ?? null;
+    this.onSiren = null; // (main.js) lights and siren on or off, shown only in a cruiser or the ambulance (setSiren)
+    this.siren = this.root?.querySelector('[data-touch-tap="siren"]') ?? null;
+    this.sirenCan = false;
 
     if (!this.root || !this.stick || !this.knob) return;
 
@@ -86,6 +89,13 @@ class TouchControls {
       }
     }
 
+    this.siren?.addEventListener('pointerdown', (event) => {
+      if (!this.canInteract() || this.siren.hidden || event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.onSiren?.();
+    });
+
     window.addEventListener('blur', () => this.reset());
     window.addEventListener('resize', () => this.reset());
     document.addEventListener('visibilitychange', () => {
@@ -139,6 +149,8 @@ class TouchControls {
       this.setGetOutWords(mode === 'person' ? 'Get in' : 'Get out');
     }
     if (this.horn) this.horn.hidden = mode !== 'car';
+    this.mode = mode;
+    if (this.siren) this.siren.hidden = mode !== 'car' || !this.sirenCan;
     const labels = { up: mode === 'helicopter' ? 'Ascend' : mode === 'car' ? 'Handbrake' : 'Jump', down: 'Descend' };
     for (const button of this.buttons) {
       const action = button.getAttribute('data-touch-action');
@@ -146,6 +158,15 @@ class TouchControls {
       button.setAttribute('aria-label', labels[action]);
       this.setIcon(action, TOUCH_ICONS[labels[action]]);
     }
+  }
+
+  // whether the car has a siren (a cruiser, the ambulance) and whether it's on
+  setSiren(can, on) {
+    this.sirenCan = Boolean(can);
+    if (!this.siren) return;
+    this.siren.hidden = this.mode !== 'car' || !this.sirenCan;
+    this.siren.classList.toggle('is-on', Boolean(on));
+    this.siren.setAttribute('aria-pressed', String(Boolean(on)));
   }
 
   moveStick(event) {

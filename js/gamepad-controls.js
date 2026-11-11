@@ -223,6 +223,8 @@ class GamepadControls {
     const radio = Number(Boolean(edge(15))) - Number(Boolean(edge(14)));
     // View: the toolbar; B: the horn (a bicycle's bell; on the map B is back); Y on the map: clear the route set with X
     const menu = edge(8), horn = edge(1), clear = edge(3);
+    // the pad's up: a cruiser's or the ambulance's lights and siren (main.js toggleSiren)
+    const siren = edge(12);
     const menuEdges = Array.from({ length: BUTTON_COUNT }, (_, i) => edge(i));
     this.previousButtons = pressed;
 
@@ -281,6 +283,7 @@ class GamepadControls {
     if (revision !== this.revision) return;
     if (recenter) this.camera.resetOrbit();
     if (horn) this.callbacks.onHorn?.();
+    if (siren) this.callbacks.onSiren?.();
     if (radio) this.callbacks.onRadio?.(radio);
 
     const mode = this.controller.activeMode;

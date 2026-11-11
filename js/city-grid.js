@@ -30,6 +30,8 @@ import {
   BIG_PARK_BOUNDS,
   getTownBoundsAtZ,
   TOWN_EDGE,
+  TOWN_EDGE_PATCHES,
+  freewayAt,
   WATERFRONT_PIERS,
   BLOCKS,
   streetZ,
@@ -1529,6 +1531,12 @@ function buildCityGrid(scene, yards = null) {
   // Unified Roadway Asphalt Deck (Y = 0.0) filling the town's edge
   const roadMat = createRoadSurfaceMaterial();
   const roadMesh = createFlatPolygonMesh(TOWN_EDGE, 0.0, roadMat, true);
+  // Lamp: and the freeways' stretches the edge cuts across though they run on in town (city-config.js), paved with it
+  if (TOWN_EDGE_PATCHES.length) {
+    const deck = roadMesh.geometry;
+    roadMesh.geometry = mergeGeometries([deck, ...TOWN_EDGE_PATCHES.map((q) => createFlatPolygonMesh(q.pts, 0.0, roadMat).geometry)], false);
+    deck.dispose();
+  }
   roadMesh.userData.terrainTolerance = 0.16; // Lamp: as the other ground layers; the road markings sit a few millimetres over it (road-paint.js)
   // (drawn after the other opaque ground, renderOrder 2, so the lawns, slabs and driveways laid over most of it hide it
   // by the depth test rather than after its material is shaded under them)
@@ -1565,6 +1573,13 @@ function buildCityGrid(scene, yards = null) {
       if (riverDepth(x, z) > 0.02) return true;
     }
     return false;
+  };
+  // Lamp: an edge (p to q, inward normal n) along a freeway or its ramp: its lanes a few metres outside it. A freeway has
+  // no sidewalk or curb: the grass runs down to its shoulder
+  const facesFreeway = (p, q, nx, nz) => {
+    let n = 0;
+    for (const t of [0.2, 0.5, 0.8]) if (freewayAt(p.x + (q.x - p.x) * t - nx * 4, p.z + (q.z - p.z) * t - nz * 4, 1)) n++;
+    return n >= 2;
   };
   // The ring is mitred where it can be: each edge's strip runs from the curb to the outline offset inward by the
   // sidewalk's width, so the strips meet at the corners and stay inside the curb however sharp the corner. Where that
@@ -1621,6 +1636,15 @@ function buildCityGrid(scene, yards = null) {
       if (!N) continue;
       const nx = N.x, nz = N.z;
       const pi = inner ? inner[i] : { x: p.x + nx * W, z: p.z + nz * W }, qi = inner ? inner[j] : { x: q.x + nx * W, z: q.z + nz * W };
+      // Lamp: none along a freeway either: the lawn slopes down to its shoulder, from the slab's height to the road's
+      // over the curb's width (the curb left out there too: below)
+      if (facesFreeway(p, q, nx, nz)) {
+        const ox = -nx * 0.3, oz = -nz * 0.3, g = LIFT.bank, r = LIFT.over;
+        const a = [p.x + ox, r, p.z + oz], b2 = [q.x + ox, r, q.z + oz], c = [qi.x, g, qi.z], d = [pi.x, g, pi.z];
+        const a1 = [p.x + nx * 0.6, g, p.z + nz * 0.6], b1 = [q.x + nx * 0.6, g, q.z + nz * 0.6];
+        bankLawn.push(...a, ...b1, ...b2, ...a, ...a1, ...b1, ...a1, ...c, ...b1, ...a1, ...d, ...c);
+        continue;
+      }
       // no sidewalk along the riverbank: the lawn runs down to the water there
       if (facesWater(p, q, nx, nz)) {
         // lawn instead, from the block's edge in to where the lawn starts
@@ -1638,7 +1662,7 @@ function buildCityGrid(scene, yards = null) {
         // already overlap there)
         const M = normals[j], r = ring[(j + 1) % n];
         const outward = (r.x - q.x) * nx + (r.z - q.z) * nz > 0;
-        if (M && !(outward && M.x * nx + M.z * nz < 0) && !facesWater(q, r, M.x, M.z)) top([q, qi, { x: q.x + M.x * W, z: q.z + M.z * W }]);
+        if (M && !(outward && M.x * nx + M.z * nz < 0) && !facesWater(q, r, M.x, M.z) && !facesFreeway(q, r, M.x, M.z)) top([q, qi, { x: q.x + M.x * W, z: q.z + M.z * W }]);
       }
       // the slab's face above the curb
       const a0 = [p.x, y0, p.z], b0 = [q.x, y0, q.z], A = [p.x, y1, p.z], B = [q.x, y1, q.z];
@@ -1662,6 +1686,42 @@ function buildCityGrid(scene, yards = null) {
     geo.dispose();
     return out;
   };
+  // Lamp: a block's curb as its faces and top, edge by edge, leaving out the edges along a freeway; null for a block
+  // with none along one (extruded whole, as before)
+  const curbAlong = (b) => {
+    const P = b.poly, n = P.length;
+    let area = 0;
+    for (let i = 0; i < n; i++) { const p = P[i], q = P[(i + 1) % n]; area += p.x * q.z - q.x * p.z; }
+    const sgn = area > 0 ? 1 : -1;
+    const keep = P.map((p, i) => {
+      const q = P[(i + 1) % n], L = Math.hypot(q.x - p.x, q.z - p.z);
+      if (L < 0.01) return true;
+      return !facesFreeway(p, q, -(q.z - p.z) / L * sgn, (q.x - p.x) / L * sgn);
+    });
+    if (keep.every(Boolean)) return null;
+    const pos = [];
+    const y1 = LIFT.curb, IN = 0.25;
+    for (let i = 0; i < n; i++) {
+      if (!keep[i]) continue;
+      const p = P[i], q = P[(i + 1) % n], L = Math.hypot(q.x - p.x, q.z - p.z);
+      if (L < 0.01) continue;
+      const nx = -(q.z - p.z) / L * sgn, nz = (q.x - p.x) / L * sgn; // inward
+      // the face out over the street (facing out), then the top strip in to under the slab
+      const a0 = [p.x, 0, p.z], b0 = [q.x, 0, q.z], A = [p.x, y1, p.z], B = [q.x, y1, q.z];
+      const Ai = [p.x + nx * IN, y1, p.z + nz * IN], Bi = [q.x + nx * IN, y1, q.z + nz * IN];
+      const tri = (u, v, w, fx, fy, fz) => {
+        const ux = v[0] - u[0], uy = v[1] - u[1], uz = v[2] - u[2], vx = w[0] - u[0], vy = w[1] - u[1], vz = w[2] - u[2];
+        if ((uy * vz - uz * vy) * fx + (uz * vx - ux * vz) * fy + (ux * vy - uy * vx) * fz >= 0) pos.push(...u, ...v, ...w);
+        else pos.push(...u, ...w, ...v);
+      };
+      tri(a0, b0, B, -nx, 0, -nz); tri(a0, B, A, -nx, 0, -nz);
+      tri(A, B, Bi, 0, 1, 0); tri(A, Bi, Ai, 0, 1, 0);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
+    return geo;
+  };
   for (const b of BLOCKS) {
     if (b.rect) {
       const slab = { cx: (b.minX + b.maxX) * 0.5, cz: (b.minZ + b.maxZ) * 0.5, w: b.maxX - b.minX, d: b.maxZ - b.minZ, block: b };
@@ -1669,9 +1729,11 @@ function buildCityGrid(scene, yards = null) {
       if (b.median) addFootprint(slab.cx, slab.cz, slab.w, slab.d);
       else roadSidewalks.push({ minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ });
     } else {
-      // curb (granite) ring under a sidewalk slab inset by 0.25 m, like the instanced pair below
-      const curb = createExtrudedPolygonMesh(b.poly, 0.0, LIFT.curb, curbMat).geometry;
-      curbGeos.push(withoutBottom(curb));
+      // curb (granite) ring under a sidewalk slab inset by 0.25 m, like the instanced pair below (Lamp: along a freeway,
+      // none: its face and top left out there, curbAlong)
+      const curbFaces = b.lawn && b.area > 400 ? curbAlong(b) : null;
+      if (curbFaces) curbGeos.push(curbFaces);
+      else curbGeos.push(withoutBottom(createExtrudedPolygonMesh(b.poly, 0.0, LIFT.curb, curbMat).geometry));
       const inner = offsetPolygonInward(b.poly, 0.25);
       if (b.lawn && b.area > 400 && ringSlab(b)) { /* only its sidewalk ring */ }
       else if (inner) slabGeos.push(withoutBottom(createExtrudedPolygonMesh(inner, 0.03, SW_TOP - 0.03, sidewalkMat).geometry));

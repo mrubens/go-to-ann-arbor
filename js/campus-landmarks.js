@@ -13,7 +13,9 @@ import { setBellTower } from './burton-bells.js';
 //   rising past slit windows to a clock on each face, the tall louvered bell chamber at 120 ft, stepped setbacks and a
 //   copper roof.
 // - Hill Auditorium (Kahn, 1913): a red-brown brick hall behind a lobby front on North University, its limestone
-//   base, giant pilasters between five tall arched windows, an entablature and cornice, and a low hipped roof.
+//   base, giant pilasters between five tall arched windows, an entablature and cornice; the hall's sides in bays of
+//   brick pilasters, round-arched windows over low ones, a modillioned cornice, a low hipped roof with ventilators,
+//   the taller stage house at the back, and the wings either side of the front.
 // - The Michigan Union (Pond & Pond, 1919): Collegiate Gothic red brick with limestone trim, buttresses, mullioned
 //   windows and battlements, its turreted tower over a carved limestone entrance on State Street.
 // Each is two meshes (masonry, glass) of vertex colors. Their outlines go into the landmarks' colliders, which keep
@@ -227,14 +229,65 @@ function burtonTower(B, site) {
 function hillAuditorium(B, site) {
   const g = groundOf(site.ring) - 0.3;
   const Y = (y) => g + y;
-  // the hall: the outline's back, brick over a limestone base, under a low hipped roof
+  // the hall: the outline's back, brick over a limestone base. Down its sides, brick pilasters with stone caps between
+  // bays of a low window under a stone lintel and a tall round-arched window over it in a stone arch with a keystone;
+  // a stone frieze, a row of modillions and the cornice over them; a low hipped roof with two ventilators on its
+  // ridge; and at the back the taller stage house, blind brick but for a few small windows, its loading door and the
+  // stage door under a little stone hood
   const hx0 = 742.6, hx1 = 795.4, hz0 = 39.2, hz1 = 81.4;
   const hall = [hx0, hz0, hx1, hz0, hx1, hz1, hx0, hz1];
+  const hcx = (hx0 + hx1) / 2, hcz = (hz0 + hz1) / 2, hw = (hx1 - hx0) / 2, hd = (hz1 - hz0) / 2;
   B.prism(hall, g - 2, Y(3), LIMESTONE_DARK);
   B.prism(hall, Y(3), Y(15.5), BRICK_HILL, ROOF);
-  B.box(hx0 - 0.3, hx1 + 0.3, Y(15.5), Y(16.3), hz0 - 0.3, hz1 + 0.3, LIMESTONE);
-  B.hip(hx0 + 1, hx1 - 1, hz0 + 1, hz1 - 1, Y(16.3), Y(22), ROOF);
-  B.ringWindows([hx1, hz0, hx1, hz1, hx0, hz1, hx0, hz0], [[4.5, 7.5], [9.5, 13.5]], 4.6, 1.5, GLASS, 0.04, g);
+  B.box(hx0 - 0.15, hx1 + 0.15, Y(2.8), Y(3.1), hz0 - 0.15, hz1 + 0.15, LIMESTONE);
+  for (const side of [1, 3]) {
+    // u runs along the side; the front's wings cover its first 6 m
+    const u0 = side === 1 ? -hd + 6.5 : -hd + 0.5, u1 = side === 1 ? hd - 0.5 : hd - 6.5, n = 7, bay = (u1 - u0) / n;
+    for (let k = 0; k <= n; k++) {
+      const u = u0 + k * bay;
+      B.faceBox(hcx, hcz, hw, side, u - 0.45, u + 0.45, Y(3), Y(15.2), 0, 0.35, BRICK_HILL);
+      B.faceBox(hcx, hcz, hw, side, u - 0.55, u + 0.55, Y(14.6), Y(15.2), 0, 0.42, LIMESTONE);
+      B.faceBox(hcx, hcz, hw, side, u - 0.55, u + 0.55, Y(3), Y(3.6), 0, 0.42, LIMESTONE);
+    }
+    for (let k = 0; k < n; k++) {
+      const u = u0 + (k + 0.5) * bay;
+      B.faceBox(hcx, hcz, hw, side, u - 1.0, u + 1.0, Y(4.6), Y(7.2), 0.02, 0.06, GLASS, B.glass);
+      B.faceBox(hcx, hcz, hw, side, u - 1.2, u + 1.2, Y(7.2), Y(7.6), 0, 0.16, LIMESTONE);
+      B.faceBox(hcx, hcz, hw, side, u - 1.15, u + 1.15, Y(4.4), Y(4.6), 0, 0.16, LIMESTONE);
+      B.faceArch(hcx, hcz, hw, side, u, Y(8.6), Y(14.0), 2.5, 0.01, LIMESTONE, B.stone);
+      B.faceArch(hcx, hcz, hw, side, u, Y(8.8), Y(13.8), 1.9, 0.04, GLASS);
+      B.faceBox(hcx, hcz, hw, side, u - 0.05, u + 0.05, Y(8.8), Y(13.0), 0.05, 0.1, LIMESTONE);
+      B.faceBox(hcx, hcz, hw, side, u - 0.95, u + 0.95, Y(11.2), Y(11.3), 0.05, 0.1, LIMESTONE);
+      B.faceBox(hcx, hcz, hw, side, u - 0.22, u + 0.22, Y(13.6), Y(14.2), 0, 0.14, LIMESTONE_DARK);
+      B.faceBox(hcx, hcz, hw, side, u - 1.25, u + 1.25, Y(8.45), Y(8.6), 0, 0.16, LIMESTONE);
+    }
+  }
+  // the frieze, the modillions under the cornice, the cornice
+  B.box(hx0 - 0.2, hx1 + 0.2, Y(15.2), Y(16.1), hz0 - 0.2, hz1 + 0.2, LIMESTONE);
+  for (const side of [1, 2, 3]) {
+    const half = side === 2 ? hd : hw, len = side === 2 ? hw : hd;
+    for (let u = -len + 0.4; u < len - 0.3; u += 0.8) B.faceBox(hcx, hcz, half, side, u - 0.12, u + 0.12, Y(16.1), Y(16.35), 0.2, 0.6, LIMESTONE_DARK);
+  }
+  B.box(hx0 - 0.7, hx1 + 0.7, Y(16.35), Y(16.8), hz0 - 0.7, hz1 + 0.7, LIMESTONE);
+  B.hip(hx0 - 0.4, hx1 + 0.4, hz0 - 0.4, hz1 - 12, Y(16.8), Y(21.2), ROOF);
+  for (const x of [hcx - 8, hcx + 8]) {
+    B.box(x - 1.3, x + 1.3, Y(19.5), Y(21.9), hz0 + 12, hz0 + 14.6, [0.35, 0.36, 0.36]);
+    B.hip(x - 1.6, x + 1.6, hz0 + 11.7, hz0 + 14.9, Y(21.9), Y(22.7), ROOF);
+  }
+  // the stage house at the back: brick to 21 m, a stone band and coping, its own low hip
+  const sz0 = hz1 - 13, sx0 = hx0 + 2, sx1 = hx1 - 2;
+  B.box(sx0, sx1, Y(15.5), Y(21), sz0, hz1, BRICK_HILL);
+  B.box(sx0 - 0.15, sx1 + 0.15, Y(20.4), Y(21.3), sz0 - 0.15, hz1 + 0.15, LIMESTONE);
+  B.hip(sx0 - 0.3, sx1 + 0.3, sz0 - 0.3, hz1 + 0.3, Y(21.3), Y(23.4), ROOF);
+  // its back wall (south): a stone band at each floor, a few small windows high up, the loading door and stage door
+  for (const y of [7.5, 12.5]) B.faceBox(hcx, hcz, hd, 2, -hw, hw, Y(y), Y(y + 0.3), 0, 0.12, LIMESTONE);
+  for (const u of [-18, -12, 12, 18]) for (const y of [9, 14, 17.5]) B.faceBox(hcx, hcz, hd, 2, u - 0.7, u + 0.7, Y(y), Y(y + 1.8), 0.02, 0.06, GLASS, B.glass);
+  B.faceBox(hcx, hcz, hd, 2, 4, 9, Y(0), Y(5.2), 0.02, 0.06, [0.3, 0.32, 0.33]);
+  for (let y = 0.4; y < 5.1; y += 0.35) B.faceBox(hcx, hcz, hd, 2, 4, 9, Y(y), Y(y + 0.04), 0.06, 0.08, [0.22, 0.23, 0.24]);
+  B.faceBox(hcx, hcz, hd, 2, 3.7, 9.3, Y(5.2), Y(5.6), 0, 0.2, LIMESTONE);
+  B.faceBox(hcx, hcz, hd, 2, -6.6, -5.2, Y(0.3), Y(2.7), 0.02, 0.06, DOOR);
+  B.faceBox(hcx, hcz, hd, 2, -7.2, -4.6, Y(2.9), Y(3.15), 0, 1.4, LIMESTONE);
+  for (const u of [-14, 14]) B.faceBox(hcx, hcz, hd, 2, u - 0.9, u + 0.9, Y(4.4), Y(6.6), 0.02, 0.06, GLASS, B.glass);
   // the lobby front: limestone base, five tall arched windows between giant pilasters, an entablature and cornice
   const fx0 = 751.8, fx1 = 786.9, fz = 27.9, fz1 = 44;
   const fcx = (fx0 + fx1) / 2, half = (fz1 - fz) / 2, fcz = (fz + fz1) / 2;
@@ -263,16 +316,32 @@ function hillAuditorium(B, site) {
     B.faceBox(fcx, fcz, half, 0, u - 1.5, u + 1.5, Y(3.6), Y(4.0), 0, 0.25, LIMESTONE);
   }
   for (let k = 0; k < 3; k++) B.faceBox(fcx, fcz, half, 0, -W / 2 + 1, W / 2 - 1, g - 1, Y(0.3 * (3 - k)), 0, 0.5 + k * 0.45, LIMESTONE_DARK);
-  // the side wings flanking the front, a storey lower
-  B.box(hx0, fx0, g - 2, Y(12), hz0 - 0.2, hz0 + 6, BRICK_HILL);
-  B.box(fx1, hx1, g - 2, Y(12), hz0 - 0.2, hz0 + 6, BRICK_HILL);
-  B.box(hx0 - 0.2, fx0, Y(12), Y(12.7), hz0 - 0.4, hz0 + 6, LIMESTONE);
-  B.box(fx1, hx1 + 0.2, Y(12), Y(12.7), hz0 - 0.4, hz0 + 6, LIMESTONE);
+  // the side wings flanking the front, a storey lower: brick on the stone base, a stone band and cornice, pairs of
+  // windows on their fronts and outer sides
+  for (const [x0, x1, outer] of [[hx0, fx0, 3], [fx1, hx1, 1]]) {
+    B.box(x0, x1, g - 2, Y(3), hz0 - 0.2, hz0 + 6, LIMESTONE_DARK);
+    B.box(x0, x1, Y(3), Y(12), hz0 - 0.2, hz0 + 6, BRICK_HILL);
+    B.box(x0 - 0.2, x1 + 0.2, Y(11.4), Y(12.7), hz0 - 0.4, hz0 + 6, LIMESTONE);
+    B.box(x0 - 0.1, x1 + 0.1, Y(2.8), Y(3.2), hz0 - 0.3, hz0 + 6, LIMESTONE);
+    const wcx = (x0 + x1) / 2, wcz = hz0 + 2.9, wd = 3.1, ww = (x1 - x0) / 2;
+    for (const y of [4.2, 8.0]) {
+      for (const du of [-1.1, 1.1]) {
+        B.faceBox(wcx, wcz, wd, 0, du - 0.5, du + 0.5, Y(y), Y(y + 2.4), 0.02, 0.06, GLASS, B.glass);
+        B.faceBox(wcx, wcz, wd, 0, du - 0.65, du + 0.65, Y(y - 0.2), Y(y), 0, 0.14, LIMESTONE);
+        B.faceBox(wcx, wcz, wd, 0, du - 0.65, du + 0.65, Y(y + 2.4), Y(y + 2.7), 0, 0.14, LIMESTONE);
+      }
+      for (const du of [-1.2, 1.2]) {
+        B.faceBox(wcx, wcz, ww, outer, du - 0.5, du + 0.5, Y(y), Y(y + 2.4), 0.02, 0.06, GLASS, B.glass);
+        B.faceBox(wcx, wcz, ww, outer, du - 0.65, du + 0.65, Y(y - 0.2), Y(y), 0, 0.14, LIMESTONE);
+        B.faceBox(wcx, wcz, ww, outer, du - 0.65, du + 0.65, Y(y + 2.4), Y(y + 2.7), 0, 0.14, LIMESTONE);
+      }
+    }
+  }
   // the hall (with the wings along its front) and the lobby front with its steps, each its own box, so the walks in
   // front of the wings stay open; the survey's block is dropped (`replaces`) and its neighbors kept
   const keep = { keepsSurvey: true };
   return [
-    { minX: hx0 - 0.2, maxX: hx1 + 0.2, minZ: hz0 - 0.4, maxZ: hz1 + 0.2, maxY: Y(22), ...keep, replaces: surveyInside(site.ring) },
+    { minX: hx0 - 0.2, maxX: hx1 + 0.2, minZ: hz0 - 0.4, maxZ: hz1 + 0.2, maxY: Y(23.4), ...keep, replaces: surveyInside(site.ring) },
     { minX: fx0 - 0.5, maxX: fx1 + 0.5, minZ: fz - 1.5, maxZ: fz1, maxY: Y(18.6), ...keep }
   ];
 }

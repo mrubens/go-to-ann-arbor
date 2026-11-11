@@ -4,14 +4,18 @@
 //
 // THE RULE ABOVE EVERYTHING (animals.js): no bird is ever struck, hurt or knocked down. They aren't in the colliders,
 // the knock-downs or the ragdolls. Anything coming at one sends it off well before it arrives (ducks and geese fly off
-// low, the heron lifts away slowly); if something still reaches one it quietly vanishes. All of them keep clear of the
+// low, the heron lifts away slowly); if something still reaches one it flaps straight up out of reach and comes down
+// a few metres off (Lamp: it used to vanish there and then, before the player's eyes). All of them keep clear of the
 // helicopter.
 import * as THREE from 'three/webgpu';
-import { groundHeight, waterLevel, riverDepth, nearestWater } from './terrain.js';
+import { groundHeight, groundUnderStreets, waterLevel, riverDepth, nearestWater } from './terrain.js';
 import { CASCADE_FOOT } from './cascades.js';
 import { createBirdKit, BIRD_FOLDED } from './animal-birds.js';
 import { TIER } from './device-tier.js';
 import { log } from '../lamp-game.js';
+import { nearestRoads } from './city-config.js';
+import { B2B_ROUTE } from './b2b-route.js';
+import { b2bTop } from './b2b-trail.js';
 
 const ALIVE = 280, LET_GO = 360; // a place's birds are about within this far of the view (m), let go beyond this
 const NEAR_DIST = 42; // skinned bodies within this far; the rest are baked stand-ins
@@ -24,6 +28,32 @@ const SITES = [
   { name: 'Fuller', at: [1621, -1016], mallards: 4, r: 25 },
   { name: 'Gallup', at: [3980, 359], mallards: 9, geese: 6, lawnGeese: 7, r: 45, lawn: 'Gallup' }
 ];
+// Lamp: and along the Border to Border Trail (b2b-route.js), wherever its own path runs within 30 m of the water and
+// 400 m clear of the places above and each other: a few mallards on the water and geese grazing the grass beside the
+// path and wandering onto it, as they do all along it (found once the river's water is known: `trailSites`)
+function trailSites(fixed) {
+  const out = [], taken = fixed.map((s) => s.at);
+  const clear = (x, z) => taken.every(([ax, az]) => Math.hypot(ax - x, az - z) > 300);
+  let k = 0;
+  for (const w of B2B_ROUTE) {
+    if (!w.own || w.bridge) continue;
+    for (let s = 20; s < w.len - 10; s += 40) {
+      let i = 0;
+      while (i + 2 < w.pts.length && w.cum[i + 1] < s) i++;
+      const f = (s - w.cum[i]) / (w.cum[i + 1] - w.cum[i] || 1);
+      const x = w.pts[i][0] + (w.pts[i + 1][0] - w.pts[i][0]) * f, z = w.pts[i][1] + (w.pts[i + 1][1] - w.pts[i][1]) * f;
+      if (!clear(x, z)) continue;
+      const water = nearestWater(x, z, 30);
+      if (!water || Math.hypot(water.x - x, water.z - z) > 30) continue;
+      taken.push([x, z]);
+      out.push({ name: 'B2B', at: [x, z], water: [water.x, water.z], mallards: 3 + (k % 3), geese: k % 2 ? 2 : 0, lawnGeese: 3 + ((k * 2) % 3), r: 22, trail: [x, z] });
+      k++;
+    }
+  }
+  return out;
+}
+const onRoad = (x, z) => nearestRoads(x, z, 30).some((n) => n.dist < (n.road.w || 0) / 2 + 1.5);
+
 const HAWKS = [{ at: [2075, -458], r: 85, alt: 75 }, { at: [2850, -380], r: 70, alt: 65, river: true }];
 
 // How each kind moves and how much it lets come near
@@ -49,14 +79,20 @@ function stream(seed) {
   };
 }
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+// on the grass, or up on the Border to Border Trail's surface where a goose wanders onto it (b2b-trail.js)
+const landY = (x, z) => Math.max(groundUnderStreets(x, z), b2bTop(x, z));
 const deep = (x, z, d = 0.6) => riverDepth(x, z) > d && waterLevel(x, z) != null;
 
-function createRiverBirds(group, { parkAt }) {
+function createRiverBirds(group, { parkAt, waterfowlOnly = false }) {
+  // (waterfowlOnly: the ducks and geese, not the heron or the hawks: animals.js)
+  let sites = null;
   const kits = {
-    mallard: createBirdKit('mallard', { farCount: 40 }),
-    goose: createBirdKit('goose', { farCount: 20 }),
-    heron: createBirdKit('heron', { farCount: 2 }),
-    hawk: createBirdKit('hawk', { farCount: 2, farPose: { fold: 0, glide: 1, legsUp: 1 } })
+    mallard: createBirdKit('mallard', { farCount: 60 }),
+    goose: createBirdKit('goose', { farCount: 40 }),
+    ...(waterfowlOnly ? {} : {
+      heron: createBirdKit('heron', { farCount: 2 }),
+      hawk: createBirdKit('hawk', { farCount: 2, farPose: { fold: 0, glide: 1, legsUp: 1 } })
+    })
   };
   const NEAR = { mallard: TIER.stream ? 4 : 7, goose: TIER.stream ? 3 : 6, heron: 1, hawk: 2 };
   for (const k of Object.values(kits)) for (const m of Object.values(k.far)) group.add(m);
@@ -95,11 +131,12 @@ function createRiverBirds(group, { parkAt }) {
     return null;
   }
   // a spot of dry lawn in the named park within `rad` of (x, z), or null
-  function lawnNear(r, x, z, rad, park, tries = 10) {
+  function lawnNear(r, x, z, rad, park, tries = 10, near = 6) {
     for (let i = 0; i < tries; i++) {
-      const a = r() * Math.PI * 2, d = 6 + r() * rad, px = x + Math.sin(a) * d, pz = z + Math.cos(a) * d;
+      const a = r() * Math.PI * 2, d = near + r() * rad, px = x + Math.sin(a) * d, pz = z + Math.cos(a) * d;
       if (riverDepth(px, pz) > 0 || waterLevel(px, pz) != null && waterLevel(px, pz) > groundHeight(px, pz) - 0.05) continue;
       if (park && !parkAt(px, pz)?.name.includes(park)) continue;
+      if (!park && onRoad(px, pz)) continue;
       return [px, pz];
     }
     return null;
@@ -134,7 +171,8 @@ function createRiverBirds(group, { parkAt }) {
     flock('mallard', site.mallards || 0, (i) => (i % 2 ? 'B' : 'A'));
     flock('goose', site.geese || 0, () => 'A');
     for (let i = 0; i < (site.lawnGeese || 0); i++) {
-      const at = lawnNear(r, wx, wz, 40, site.lawn);
+      // (by the trail: on the grass either side of it, now and then on the path itself)
+      const at = site.trail ? lawnNear(r, site.trail[0], site.trail[1], 9, null, 14, 1) : lawnNear(r, wx, wz, 40, site.lawn);
       if (!at) continue;
       const b = bird('goose', at[0], at[1], stream(r()), 'A', { x: wx, z: wz, r: site.r, lawn: { x: at[0], z: at[1] } });
       b.mode = 'land'; b.state = 'graze';
@@ -204,7 +242,7 @@ function createRiverBirds(group, { parkAt }) {
       const closing = dist > 0.01 ? (t.vx * dx + t.vz * dz) / dist : t.speed;
       let k = 0;
       // a person on foot walking up: the heron goes early, ducks let them come closer, geese stand their ground first
-      const reach = t.foot ? K.foot : K.wary;
+      const reach = t.foot || t.bike ? K.foot : K.wary;
       if (closing > 0.5 && d < reach + closing * 1.8) k = 1 + closing / Math.max(0.5, d);
       else if (d < reach * (t.foot ? 0.6 : 0.45)) k = 0.8; // too close, even standing
       else if (t.loud && d < reach * 0.8) k = 0.6;
@@ -216,9 +254,35 @@ function createRiverBirds(group, { parkAt }) {
   function tooClose(b, threats) {
     for (const t of threats) {
       if (Math.abs(t.y - b.y) > (t.air ? 6 : 2.5)) continue;
-      if (Math.hypot(b.x - t.x, b.z - t.z) < t.r + 0.5) return true;
+      if (Math.hypot(b.x - t.x, b.z - t.z) < t.r + 0.5) return t;
     }
-    return false;
+    return null;
+  }
+  // up off the water or the grass at once, away from what reached it, coming down 6-10 m off where it can (the water
+  // for a duck, the grass for a goose there; else back where it was, once it's gone by), flapping hard and high enough
+  // to clear a car
+  function hopUp(b, from, now) {
+    let ax = b.x - from.x, az = b.z - from.z;
+    const l = Math.hypot(ax, az) || 1;
+    ax /= l; az /= l;
+    let dest = null;
+    for (let i = 0; i < 6 && !dest; i++) {
+      const a = Math.atan2(ax, az) + (b.r() - 0.5) * (0.8 + i * 0.5), d = 6 + b.r() * 4;
+      const px = b.x + Math.sin(a) * d, pz = b.z + Math.cos(a) * d;
+      if (b.mode === 'land' ? !(riverDepth(px, pz) > 0.05) : deep(px, pz, 0.3)) dest = [px, pz];
+    }
+    dest ??= [b.x, b.z];
+    const len = Math.max(1, Math.hypot(dest[0] - b.x, dest[1] - b.z));
+    b.flight = { x0: b.x, z0: b.z, y0: b.y, x1: dest[0], z1: dest[1], t: 0, dur: Math.max(1.6, len / (b.K.fly * 0.6)), top: 3.2,
+      onto: b.mode === 'wade' ? 'wade' : b.mode === 'land' ? 'land' : 'water' };
+    b.mode = 'air'; b.state = 'fly'; b.from = from;
+    b.heading = Math.atan2(dest[0] - b.x, dest[1] - b.z);
+    b.flapRate = b.K.flap * 1.3;
+    if (look !== 'midnight') {
+      sound('wingbeat', b, 1);
+      if (b.kind === 'mallard') sound('quack', b, 1);
+      if (b.kind === 'goose') sound('honk', b, 1);
+    }
   }
 
   // --- getting away: a low flight to other water, away from what's coming ---------------------------------------
@@ -229,15 +293,23 @@ function createRiverBirds(group, { parkAt }) {
     else { ax = Math.sin(b.heading); az = Math.cos(b.heading); }
     const base = Math.atan2(ax, az);
     let dest = null;
-    for (let i = 0; i < 8 && !dest; i++) {
-      const a = base + (r() - 0.5) * (1.2 + i * 0.25), dist = K.hop[0] + r() * (K.hop[1] - K.hop[0]);
+    // (away from what's coming first, then wider round, up and down a narrow river, nearer: anywhere but toward it)
+    for (let i = 0; i < 16 && !dest; i++) {
+      const a = base + (r() - 0.5) * Math.min(4.2, 1.2 + i * 0.3), dist = (K.hop[0] + r() * (K.hop[1] - K.hop[0])) * (i < 8 ? 1 : 0.6);
       const px = b.x + Math.sin(a) * dist, pz = b.z + Math.cos(a) * dist;
       if (b.kind === 'heron') dest = shallowNear(r, px, pz, 25, 12);
       else if (land === 'land') dest = lawnNear(r, px, pz, 20, null, 4);
       else if (deep(px, pz)) dest = [px, pz];
-      else { const w = nearestWater(px, pz, 30); if (w && Math.hypot(w.x - b.x, w.z - b.z) > 25) dest = [w.x, w.z]; }
+      else { const w = nearestWater(px, pz, 30); if (w && Math.hypot(w.x - b.x, w.z - b.z) > 15) dest = [w.x, w.z]; }
     }
-    if (!dest) { b.mode = 'gone'; return; } // nowhere to go: off out of sight
+    // Lamp: still nowhere to fly to: it paddles or waddles off instead (it used to vanish there and then, before the
+    // player's eyes)
+    if (!dest) {
+      b.state = b.mode === 'land' ? 'waddle' : 'paddleOff';
+      b.timer = 4;
+      b.heading = base;
+      return;
+    }
     const len = Math.hypot(dest[0] - b.x, dest[1] - b.z);
     b.flight = {
       x0: b.x, z0: b.z, y0: b.y, x1: dest[0], z1: dest[1], t: 0, dur: len / K.fly, top: K.top * (0.8 + r() * 0.5) + (from?.air ? 5 : 0),
@@ -261,7 +333,6 @@ function createRiverBirds(group, { parkAt }) {
   function think(b, dt, now, threats) {
     if (b.mode === 'gone') return;
     if (b.mode === 'soar') return soar(b, dt, now, threats);
-    if (tooClose(b, threats)) { b.mode = 'gone'; return; }
     const K = b.K, r = b.r, w = b.want;
     b.timer -= dt;
     if (b.mode === 'air') {
@@ -269,9 +340,22 @@ function createRiverBirds(group, { parkAt }) {
       for (const t of threats) if (t.air && Math.hypot(t.x - b.x, t.z - b.z) < 35 && Math.abs(t.y - b.y) < 20 && b.flight.t > 0.5) { b.flight.top += dt * 6; }
       return;
     }
+    // reached after all: straight up out of reach, a short hop away from it (never struck, never vanishing)
+    const reached = tooClose(b, threats);
+    if (reached) { hopUp(b, reached, now); return; }
     const threat = danger(b, threats);
     const t = hit.t;
 
+    // Lamp: geese on the grass by the trail, a bike coming: they step off its line, out the side they're on, with a
+    // honk now and then (only one right on them goes up)
+    if (b.kind === 'goose' && b.mode === 'land' && t?.bike && threat > 0 && b.state !== 'waddle') {
+      const l = Math.hypot(t.vx, t.vz) || 1, ux = t.vx / l, uz = t.vz / l;
+      const side = Math.sign((b.x - t.x) * uz - (b.z - t.z) * ux) || 1;
+      b.state = 'waddle'; b.timer = 2.5 + r() * 2; w.hiss = 0;
+      b.heading = Math.atan2(uz * side, -ux * side) + (r() - 0.5) * 0.4;
+      if (!sleeping() && r() < 0.35) sound('honk', b, 0.6);
+      return;
+    }
     // geese on the lawn, walked right up to by someone on foot: neck down, hiss and honk, then waddle off
     if (b.kind === 'goose' && b.mode === 'land' && t?.foot && !t.air && hit.d > 1.6 && b.state !== 'flee' && threat > 0) {
       if (b.state !== 'hiss' && b.state !== 'waddle') {
@@ -302,7 +386,7 @@ function createRiverBirds(group, { parkAt }) {
     if (b.state === 'waddle') {
       w.alert = 0.7; w.graze = 0; w.hiss = 0;
       b.speed = K.walk * 1.9;
-      if (t?.foot && hit.d < 1.8) { takeOff(b, t, now, 'land'); return; }
+      if ((t?.foot || t?.bike) && hit.d < (t.bike ? 1.2 : 1.8)) { takeOff(b, t, now, 'land'); return; }
       if (b.timer <= 0) { b.state = 'graze'; b.timer = 3; }
       return;
     }
@@ -409,7 +493,7 @@ function createRiverBirds(group, { parkAt }) {
       const px = b.x, py = b.y, pz = b.z;
       b.x = f.x0 + (f.x1 - f.x0) * k; b.z = f.z0 + (f.z1 - f.z0) * k;
       const endY = f.onto === 'water' ? (waterLevel(f.x1, f.z1) ?? groundHeight(f.x1, f.z1)) - S.float * b.scale
-        : f.onto === 'wade' ? wadeY(f.x1, f.z1) : groundHeight(f.x1, f.z1);
+        : f.onto === 'wade' ? wadeY(f.x1, f.z1) : landY(f.x1, f.z1);
       // up quickly off the water, a low run, then down
       const arc = Math.sin(Math.PI * Math.min(1, Math.pow(k, 0.6)));
       b.y = f.y0 + (endY - f.y0) * k + arc * f.top;
@@ -443,7 +527,7 @@ function createRiverBirds(group, { parkAt }) {
       }
       if (b.mode === 'water') b.y = (waterLevel(b.x, b.z) ?? groundHeight(b.x, b.z)) - S.float * b.scale + 0.004 * Math.sin(now * 2 + b.seed);
       else if (b.mode === 'wade') b.y = wadeY(b.x, b.z);
-      else b.y = groundHeight(b.x, b.z);
+      else b.y = landY(b.x, b.z);
       b.pitch = 0;
     }
     // the pose
@@ -503,18 +587,22 @@ function createRiverBirds(group, { parkAt }) {
     const cp = ctx.camera.position;
     if (now - checkedAt > 1.5) {
       checkedAt = now;
-      for (const site of SITES) {
+      if (!sites && nearestWater(1204, -884, 200)) {
+        sites = [...SITES, ...trailSites(SITES)];
+        log(`[animals] ducks and geese at ${sites.length} places on the river, ${sites.length - SITES.length} of them along the Border to Border Trail`);
+      }
+      for (const site of sites || []) {
         const [sx, sz] = site.water || site.at, d = Math.hypot(sx - cp.x, sz - cp.z);
         if (!sitesAlive.has(site) && d < ALIVE) { const list = populateSite(site); if (list) sitesAlive.set(site, list); }
         else if (sitesAlive.has(site) && d > LET_GO) { dropAll(sitesAlive.get(site)); sitesAlive.delete(site); }
       }
       const fd = Math.hypot(CASCADE_FOOT.x - cp.x, CASCADE_FOOT.z - cp.z);
-      if (!heronAlive && fd < ALIVE) heronAlive = populateHeron();
+      if (!heronAlive && fd < ALIVE && !waterfowlOnly) heronAlive = populateHeron();
       else if (heronAlive && fd > LET_GO) { dropAll(heronAlive); heronAlive = null; }
       // hawks in daylight only, within sight of their ground
       const day = look === 'midday' || look === 'golden';
       const hd = Math.min(...HAWKS.map((h) => Math.hypot(h.at[0] - cp.x, h.at[1] - cp.z)));
-      if (!hawksAlive && day && hd < 900) hawksAlive = populateHawks();
+      if (!hawksAlive && day && hd < 900 && !waterfowlOnly) hawksAlive = populateHawks();
       else if (hawksAlive && (!day || hd > 1100)) { dropAll(hawksAlive); hawksAlive = null; }
     }
     order.length = 0;
