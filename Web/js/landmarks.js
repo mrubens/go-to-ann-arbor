@@ -26,7 +26,8 @@ function buildBigHouse(group, colliders) {
   const ROWS = 72, AISLE_EVERY = 6;
   const pos = [], col = [];
   const C = (hex) => new THREE.Color(hex); // already linear: three converts a hex color as it's set
-  const bench = C(0xb9bdc2), riser = C(0x6d727a), aisle = C(0xd2cdc2), concrete = C(0xa6a39b), blue = C(0x00274c),
+  // the bench rows read slate blue from across the bowl (blue-painted benches over gray concrete risers)
+  const bench = C(0x7d8da6), riser = C(0x56606e), aisle = C(0xd2cdc2), concrete = C(0xa6a39b), blue = C(0x00274c),
     maize = C(0xffcb05), brick = C(0x8a4d37), stone = C(0xcfc6b4), turfDark = C(0x2f6b2c);
   const quad = (a, b, c, d, color) => {
     pos.push(...a, ...b, ...c, ...a, ...c, ...d);
@@ -57,9 +58,9 @@ function buildBigHouse(group, colliders) {
     const k1 = k + 1, wy0 = wallTop[k], wy1 = wallTop[k1];
     const [i0, o0] = radiiAt((k / N) * Math.PI * 2), [i1, o1] = radiiAt((k1 / N) * Math.PI * 2);
     const isAisle = k % AISLE_EVERY === 0;
-    // the field wall: blue padding with a maize line along its top
-    quad(at(k, i0, FIELD_Y), at(k1, i1, FIELD_Y), at(k1, i1, WALL_TOP - 0.25), at(k, i0, WALL_TOP - 0.25), blue);
-    quad(at(k, i0, WALL_TOP - 0.25), at(k1, i1, WALL_TOP - 0.25), at(k1, i1, WALL_TOP), at(k, i0, WALL_TOP), maize);
+    // the field wall: red brick round the field under a concrete cap
+    quad(at(k, i0, FIELD_Y), at(k1, i1, FIELD_Y), at(k1, i1, WALL_TOP - 0.25), at(k, i0, WALL_TOP - 0.25), brick);
+    quad(at(k, i0, WALL_TOP - 0.25), at(k1, i1, WALL_TOP - 0.25), at(k1, i1, WALL_TOP), at(k, i0, WALL_TOP), concrete);
     // the walk around the field
     quad(at(k, i0, WALL_TOP), at(k1, i1, WALL_TOP), at(k1, i1 + AISLE_IN, WALL_TOP), at(k, i0 + AISLE_IN, WALL_TOP), concrete);
     // the rows: a riser and a tread each
@@ -69,7 +70,7 @@ function buildBigHouse(group, colliders) {
       const ya = WALL_TOP + (SEAT_TOP - WALL_TOP) * t0, yb = WALL_TOP + (SEAT_TOP - WALL_TOP) * t1;
       const ra0 = s0 + (e0 - s0) * t0, ra1 = s1 + (e1 - s1) * t0, rb0 = s0 + (e0 - s0) * t1, rb1 = s1 + (e1 - s1) * t1;
       quad(at(k, ra0, ya), at(k1, ra1, ya), at(k1, ra1, yb), at(k, ra0, yb), isAisle ? aisle : riser);
-      quad(at(k, ra0, yb), at(k1, ra1, yb), at(k1, rb1, yb), at(k, rb0, yb), isAisle ? aisle : (row % 2 ? bench : C(0xaeb3b8)));
+      quad(at(k, ra0, yb), at(k1, ra1, yb), at(k1, rb1, yb), at(k, rb0, yb), isAisle ? aisle : (row % 2 ? bench : C(0x74849d)));
     }
     // the halo: blue fascia with a maize stripe over the top row, then the concourse to the outer wall
     quad(at(k, e0, SEAT_TOP), at(k1, e1, SEAT_TOP), at(k1, e1, RIM_Y - 0.15), at(k, e0, RIM_Y - 0.15), blue);
@@ -120,29 +121,31 @@ function buildBigHouse(group, colliders) {
     return m;
   };
   const W = 48.8, L = 91.4, EZ = 9.1; // 53⅓ yards wide, 100 yards and two end zones long
-  for (let i = 0; i < 20; i++) flat(W + 6, L / 20, i % 2 ? 0x3b8a35 : 0x347f30, 0.0, 0, -L / 2 + (i + 0.5) * (L / 20));
-  flat(W + 6, EZ + 3, 0x00274c, 0.01, 0, -(L / 2 + (EZ + 3) / 2));
-  flat(W + 6, EZ + 3, 0x00274c, 0.01, 0, L / 2 + (EZ + 3) / 2);
+  for (let i = 0; i < 20; i++) flat(W + 6, L / 20, i % 2 ? 0x356f2e : 0x2f672a, 0.0, 0, -L / 2 + (i + 0.5) * (L / 20));
+  // the end zones are turf, MICHIGAN across each in maize outlined in blue (below)
+  flat(W + 6, EZ + 3, 0x2f672a, 0.01, 0, -(L / 2 + (EZ + 3) / 2));
+  flat(W + 6, EZ + 3, 0x2f672a, 0.01, 0, L / 2 + (EZ + 3) / 2);
   for (let yd = 0; yd <= 100; yd += 5) flat(W, yd % 10 ? 0.12 : 0.22, 0xf2f2ee, 0.03, 0, -L / 2 + (yd / 100) * L);
   for (const sx of [-1, 1]) flat(0.2, L + EZ * 2, 0xf2f2ee, 0.03, sx * W / 2, 0);
   for (const sz of [-1, 1]) flat(W, 0.2, 0xf2f2ee, 0.03, 0, sz * (L / 2 + EZ));
   // hash marks
   for (let yd = 1; yd < 100; yd++) for (const hx of [-6.096, 6.096]) flat(0.6, 0.1, 0xf2f2ee, 0.03, hx, -L / 2 + (yd / 100) * L);
-  // MICHIGAN across each end zone in maize outlined in white, its tops toward the end line
+  // MICHIGAN across each end zone in maize outlined in Michigan blue, its tops toward the end line
   {
     const cv = document.createElement('canvas');
     cv.width = 2048; cv.height = 300;
     const g = cv.getContext('2d');
     g.font = 'bold 270px "Arial Black", "Helvetica Neue", Arial, sans-serif';
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.lineJoin = 'round'; g.lineWidth = 22; g.strokeStyle = '#ffffff';
+    g.lineJoin = 'round'; g.lineWidth = 30; g.strokeStyle = '#00274c';
     g.strokeText('MICHIGAN', 1024, 160, 1960);
     g.fillStyle = '#ffcb05';
     g.fillText('MICHIGAN', 1024, 160, 1960);
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
-    const mat = new THREE.MeshStandardNodeMaterial({ map: tex, transparent: true, depthWrite: false, roughness: 0.85,
+    // (cut out, not blended: a blended decal on the field didn't show over the end zone)
+    const mat = new THREE.MeshStandardNodeMaterial({ map: tex, alphaTest: 0.5, roughness: 0.85,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     const geo = new THREE.PlaneGeometry(W - 4, (W - 4) * 300 / 2048).rotateX(-Math.PI / 2);
     for (const s of [-1, 1]) {

@@ -54,7 +54,9 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
     const blocks = new Set();
     if (originalBlock) blocks.add(originalBlock);
     else {
-      for (const dx of [-2, 0, 2]) for (const dz of [-2, 0, 2]) {
+      // (out to 4 m: the survey's points and the map's curbs are a few metres apart in places, most downtown, where
+      // a tree surveyed in its pit can fall in the modeled roadway)
+      for (const dx of [-4, -2, 0, 2, 4]) for (const dz of [-4, -2, 0, 2, 4]) {
         const b = blockAt(sourceX + dx, sourceZ + dz);
         if (b && b.park <= 0.6 && !b.median) blocks.add(b);
       }
@@ -69,7 +71,7 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
         const t = Math.max(0, Math.min(1, ((sourceX - a.x) * dx + (sourceZ - a.z) * dz) / (length * length)));
         const x = a.x + t * dx, z = a.z + t * dz;
         const distance = Math.hypot(sourceX - x, sourceZ - z);
-        if (distance > (originalBlock ? 8 : 2) || (edge && distance >= edge.distance)) continue;
+        if (distance > (originalBlock ? 8 : 4.5) || (edge && distance >= edge.distance)) continue;
         edge = { block, x, z, dx: dx / length, dz: dz / length, distance };
       }
     }
@@ -85,7 +87,7 @@ function placeStreetTrees(points, existingSites, isClear, kinds = null, heights 
     const z = move ? edge.z + nz * inset : sourceZ;
     // a tree well back from the tree lawn (behind the sidewalk, or where the modeled curb is off the real one) stands
     // where it was surveyed rather than being pulled to the curb or left out
-    if ((x - sourceX) ** 2 + (z - sourceZ) ** 2 > 9) { if (originalBlock) standing(); continue; }
+    if ((x - sourceX) ** 2 + (z - sourceZ) ** 2 > (originalBlock ? 9 : 30)) { if (originalBlock) standing(); continue; }
     if (blockAt(x, z) !== edge.block) continue;
     if (!isClear(x, z) || occupied(x, z)) continue;
 

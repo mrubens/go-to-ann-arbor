@@ -1511,7 +1511,7 @@ function buildWaterfrontPiers(group) {
 
 // `yards`: the whole city's lawns, driveways and curb cuts (yards.js allYards), or none to stream them square by square
 // (a change to how the yards are sorted into their looks raises YARDS_LOOK, so the tiles a play saved are made again)
-const YARDS_LOOK = 1;
+const YARDS_LOOK = 2; // 2: big paved yards and lots round their islands and buildings are blacktop
 function buildCityGrid(scene, yards = null) {
   streetGroundSurfaces = [];
   const group = new THREE.Group();
@@ -1561,6 +1561,7 @@ function buildCityGrid(scene, yards = null) {
   const blockSidewalks = []; // { cx, cz, w, d, block } axis-aligned slabs (irregular islands: their lot cover)
   const roadSidewalks = []; // the curbs road-network.js bounds the roads with (medians go in as footprints)
   const slabGeos = [];
+  const blockLotGeos = [];
   const curbGeos = [];
   const SW_TOP = LIFT.slab;
   // Ann Arbor: a park's or a golf course's slab (an odd-shaped lawn block) is only its sidewalk ring (and a little under the lawn's edge), so on a hill the
@@ -1750,7 +1751,15 @@ function buildCityGrid(scene, yards = null) {
       if (curbFaces) curbGeos.push(curbFaces);
       else curbGeos.push(withoutBottom(createExtrudedPolygonMesh(b.poly, 0.0, LIFT.curb, curbMat).geometry));
       const inner = offsetPolygonInward(b.poly, 0.25);
+      // Lamp: a big block with no lawn out past downtown and the campus (a strip mall, an office park, a plant) is its
+      // sidewalk round the edge and its parking lot's blacktop inside, not one slab of sidewalk concrete
+      const bx = (b.minX + b.maxX) / 2, bz = (b.minZ + b.maxZ) / 2;
+      const lotBlock = !b.lawn && !b.median && b.area > 2500 && !(bx > -600 && bx < 1800 && bz > -700 && bz < 1100);
       if (b.lawn && (b.area > 400 || byFreeway) && ringSlab(b)) { /* only its sidewalk ring */ }
+      else if (lotBlock && ringSlab(b)) {
+        const lot = offsetPolygonInward(b.poly, 5.2);
+        if (lot && lot.length >= 3) blockLotGeos.push(withoutBottom(createExtrudedPolygonMesh(lot, 0.03, SW_TOP - 0.03, sidewalkMat).geometry));
+      }
       else if (inner) slabGeos.push(withoutBottom(createExtrudedPolygonMesh(inner, 0.03, SW_TOP - 0.03, sidewalkMat).geometry));
       // rect cover for the consumers that work on rectangles: the lot rects grown back out to the curb
       for (const [x0, x1, z0, z1] of b.rects) {
@@ -1788,6 +1797,8 @@ function buildCityGrid(scene, yards = null) {
   };
   mergeInto(curbGeos, curbMat, false, 1); // (after the slabs and lawns, before the road deck: renderOrder above)
   mergeInto(slabGeos, sidewalkMat);
+  // the lots' blacktop, weathered gray as the streets' (tsl-materials.js createRoadSurfaceMaterial's light end)
+  mergeInto(blockLotGeos, new THREE.MeshStandardNodeMaterial({ color: 0x67676a, roughness: 0.93 }));
 
   const rectSlabs = blockSidewalks.filter((s) => !s.cover);
   const swInstanced = new THREE.InstancedMesh(unitBox, sidewalkMat, rectSlabs.length);
@@ -1935,8 +1946,20 @@ function buildCityGrid(scene, yards = null) {
         }
         if (k) net -= Math.abs(a);
       }
-      const big = Math.abs(area) / 2 > 120, web = r.length > 1, wide = net / edge >= 7;
-      const asphalt = big ? wide && !web || (!web && hashDrive(r[0][0].x, r[0][0].z) < 0.25)
+      // (a paving with holes is a web of walks unless it's a big one whose paving runs wide round its holes: that's a
+      // parking lot round its planted islands, blacktop as a lot is, not concrete or the plazas' pavers; the plazas
+      // round Michigan Stadium (its middle about 25 m west and 1.55 km south of Main & Liberty) are pavers whatever)
+      let lx = 0, lz = 0;
+      for (const p of r[0]) { lx += p.x; lz += p.z; }
+      const byBigHouse = Math.hypot(lx / r[0].length + 25, lz / r[0].length - 1545) < 450;
+      // (and out past downtown, the central campus and North Campus, whose walks run in webs, any holed paving over
+      // 3,000 m² is a lot round its buildings and islands, as the strip malls' and plants' are)
+      const mx0 = lx / r[0].length, mz0 = lz / r[0].length;
+      const campus = (mx0 > -600 && mx0 < 1800 && mz0 > -700 && mz0 < 1100) || (mx0 > 2300 && mx0 < 4300 && mz0 > -2900 && mz0 < -1300);
+      const lot = r.length > 1 && !byBigHouse && (net / edge >= 4.5 && Math.abs(area) / 2 > 800 || !campus && Math.abs(area) / 2 > 3000);
+      const big = Math.abs(area) / 2 > 120, web = r.length > 1 && !lot, wide = net / edge >= 7;
+      // (a solid paved yard over 800 m² is a parking lot, blacktop as Ann Arbor's lots nearly all are)
+      const asphalt = big ? (wide || lot || Math.abs(area) / 2 > 800) && !web || (!web && hashDrive(r[0][0].x, r[0][0].z) < 0.25)
         : !apron && hashDrive(r[0][0].x, r[0][0].z) < 0.25;
       const dg = flatGeo(r, LAWN_Y + 0.008);
       // Lamp: a vast web of walks (the plazas around Michigan Stadium, its gates and concourses) in one flat pale gray

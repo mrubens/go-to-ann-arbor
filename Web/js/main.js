@@ -84,6 +84,8 @@ import { buildParkingStructures } from './parking-structures.js';
 import { buildMtbTrails } from './mtb-trails.js';
 import { buildBikeRoutes } from './bike-routes.js';
 import { buildB2BTrail } from './b2b-trail.js';
+import { buildBrickStreets } from './brick-streets.js';
+import { buildUtilityPoles } from './utility-poles.js';
 import { B2B_NAME, onB2B } from './b2b-route.js';
 import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
@@ -97,6 +99,8 @@ import { buildCurbCarts, cartDay } from './curb-carts.js';
 import { CHAMPION_TREES } from './champion-trees.js';
 import { VideoRecorder } from './recorder.js';
 import { createGroundShade } from './ground-shade.js';
+import { buildFarCity } from './far-city.js';
+import { createFarArterials } from './far-traffic.js';
 
 // the code and its data in (index.html says so on the loading screen when they don't come)
 window.cityCodeLoaded = true;
@@ -341,6 +345,10 @@ async function initApp() {
   const mtbPart = await live.keep('mtbTrails', () => cityPart((g) => buildMtbTrails(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/mtb-trails.js', 'data/mtb-trails.json'] });
   // the Border to Border Trail's fresh asphalt and centre line, its wayfinding signs and markers (b2b-trail.js)
   const b2bPart = await live.keep('b2bTrail', () => cityPart((g) => buildB2BTrail(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/b2b-trail.js', 'js/b2b-route.js', 'js/b2b-data.js'] });
+  // Ann Arbor's brick streets by Kerrytown and the Old Fourth Ward, paved over the asphalt (brick-streets.js)
+  const brickPart = live.keep('brickStreets', () => cityPart((g) => buildBrickStreets(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/brick-streets.js', 'js/brick-streets-data.js'] });
+  // the overhead wires of the older neighbourhoods and arterials: wooden poles, crossarms, sagging lines (utility-poles.js)
+  const polesPart = live.keep('utilityPoles', () => cityPart((g) => buildUtilityPoles(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/utility-poles.js'] });
   // Ann Arbor Municipal Airport south of town, with helicopters parked by the FBO to fly (airport.js)
   const airportPart = live.keep('airport', () => cityPart((g) => createAirport(g)), { inputs: [heights], from: ['js/airport.js', 'js/airport-data.js'] });
   // Lamp: the moon in its real phase (moon.js)
@@ -396,6 +404,10 @@ async function initApp() {
     { inputs: [heights, landmarks, parkingPart, bandShellPart, restroomsPart, draftedPart], from: [CITY_MAP, ...BUILDING_DATA, 'data/addresses.json', 'data/districts.json', 'data/gas-stations.json', 'data/roof-shapes.json', 'data/building-looks.json', 'data/shop-types.json', 'js/shop-types.js', 'js/building-footprints.js', 'js/houses.js', 'js/trees.js'] });
   const cityBlocks = blocks.made;
   markInit('blocks');
+  // Lamp: the far city, every building and house past the detailed ones' reach as a plain block (far-city.js)
+  const farCityPart = live.keep('farCity', () => cityPart((g) => buildFarCity(g, cityBlocks.farRecords,
+    blocks.group.getObjectByName('AnnArborHouses')?.userData.stream), { still: true }),
+  { inputs: [heights, blocks], from: ['js/far-city.js', 'js/houses.js'] });
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...outskirts.colliders, ...(cityGrid.colliders || [])];
 
   await showLoadingStage('Placing trees, streetlights and street furniture...');
@@ -437,6 +449,11 @@ async function initApp() {
     farCull: 1600 * Math.max(0.5, TIER.farCut)
   })), { inputs: [grid, traffic], from: [CITY_MAP, 'js/road-network.js'] });
   const highwayTraffic = highway.made;
+  // Lamp: and the far fleet on the arterials, beyond the near traffic's reach (far-traffic.js)
+  const arterial = live.keep('arterialTraffic', () => cityPart((g) => createFarArterials(g, traffic.made.network, {
+    hideNear: VEHICLE_RADIUS - 20
+  })), { inputs: [grid, traffic], from: [CITY_MAP, 'js/road-network.js', 'js/far-traffic.js'] });
+  const arterialTraffic = arterial.made;
   await showLoadingStage('Adding road markings...');
   const roadPaint = await live.keep('roadPaint', () => cityPart(async (g) => {
     const made = buildRoadPaint(g, traffic.made.network);
@@ -613,6 +630,8 @@ async function initApp() {
   scene.add(groundShade.group);
   // the carts at the curb: knocked flying by the car (knockdowns.js), never shaded on the ground as the buildings are
   for (const o of cartsPart.made.obstacles || []) allColliders.push(obstacleBox(o));
+  // the utility poles: solid, fixed (utility-poles.js)
+  for (const o of polesPart.made.obstacles || []) allColliders.push(obstacleBox(o));
   // a hydrant knocked off its main gushes water (hydrant-spray.js)
   const hydrantSpray = createHydrantSpray(scene);
   const skidEffects = createSkidEffects(scene);
@@ -636,7 +655,7 @@ async function initApp() {
   const animalsPart = live.keep('animals', () => cityPart((g) => (XBOX ? { update() {} } : buildAnimals(g))), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
   // the rooms behind the shopfronts' glass, near the player: furniture and people (shop-interiors.js)
   const shopRoomsPart = live.keep('shopRooms', () => cityPart((g) => createShopInteriors(g)), { inputs: [blocks], from: ['js/shop-interiors.js', 'js/shop-kits.js', 'js/shop-kits-b.js', 'js/shop-kits-c.js', 'js/shop-kit-core.js', 'js/shop-types.js'] });
-  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, barriersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart];
+  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, arterial, farCityPart, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, barriersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart, brickPart, polesPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -665,7 +684,7 @@ async function initApp() {
   const coverWithSnow = () => loadSnowCover().then((cover) => {
     if (cover <= 0) return;
     poolsPart.group.traverse((o) => { if (o.isMesh && /^(Pool floor|Pool walls|Lane ropes)/.test(o.name)) for (const m of [o.material].flat()) m.userData.snow = 0; });
-    for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, poolsPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, b2bPart, parkingPart, airportPart]) dressForSnow(part.group);
+    for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, poolsPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, b2bPart, brickPart, parkingPart, airportPart]) dressForSnow(part.group);
   });
   coverWithSnow();
   // Ann Arbor's date, checked about once a minute by the clock and as the page is shown again (a session left running
@@ -1772,6 +1791,7 @@ async function initApp() {
     const cold = w && w.tempF != null && w.tempF < 25 ? 0.75 : 1;
     trafficSystem.setTrafficShare?.(trafficShare(t));
     highwayTraffic.setShare?.(Math.min(1, trafficShare(t) * 1.1));
+    arterialTraffic.setShare?.(trafficShare(t));
     return [wet * cold, crowdShares(t)];
   }
 
@@ -2758,6 +2778,7 @@ async function initApp() {
     );
     mark('player & traffic');
     highwayTraffic.update(dt, cameraSystem.camera, controllerManager.getActiveEntity(), controllerManager.activeMode);
+    arterialTraffic.update(dt, cameraSystem.camera, controllerManager.getActiveEntity());
     mark('highway');
     railways.update(dt, (at, hold, kind) => audioSystem.trainHorn(at, hold, kind), (crossings) => audioSystem.crossingBells(crossings));
     // (in split screen the second player's camera too: parked-cars.js keeps the cells near either)
@@ -2877,6 +2898,8 @@ async function initApp() {
       updateGroundStreaming(x, z, two?.x, two?.z);
       houseStream?.update(x, z, two?.x, two?.z);
     } else if (TIER.stream) putStreamedGround(); // (the tiles waiting go in one a frame, between the Xbox's scans)
+    // the far city's blocks give way to the detailed buildings and houses now drawn (far-city.js)
+    farCityPart.made.update(rawDt, cameraSystem.camera.position);
     // the still parts' script copies let go once uploaded; the memory logged again once they've mostly gone
     if (warmedUp && (++releaseFrame & 31) === 0) {
       freedSinceReport += releaseUploaded(renderer);

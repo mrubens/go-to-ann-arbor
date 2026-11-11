@@ -135,9 +135,10 @@ function curbCutTest() {
 }
 
 function streetCars(out, nearCut = curbCutTest()) {
-  // about seven in ten of the stalls marked along the parking lanes (curb-parking.js), facing the way traffic goes
+  // about seven in ten of the stalls marked along the parking lanes (curb-parking.js), facing the way traffic goes;
+  // on a residential street's unmarked curb about half, most driveways having room for the household's cars
   for (const st of curbStalls()) {
-    if (hash(st.x, st.z, 3) > 0.72 || nearCut(st.x, st.z)) continue;
+    if (hash(st.x, st.z, 3) > (st.marked === false ? 0.5 : 0.72) || nearCut(st.x, st.z)) continue;
     const yaw = st.side > 0 ? Math.atan2(st.tx, st.tz) : Math.atan2(-st.tx, -st.tz);
     out.push({ x: st.x, z: st.z, yaw, y: 0, street: true });
   }

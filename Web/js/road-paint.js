@@ -367,8 +367,9 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
     // (not on a divided road's two halves, whose half-width spans both: their curbs aren't known here)
     // Lamp: a parking lane along each curb (curb-parking.js) ends in a solid white line, any bike lane beside it
     const pR = e.divided ? 0 : e.parkR || 0, pL = e.divided ? 0 : e.parkL || 0;
-    if (pR) along(e, e.half - pR, 0.12, WHITE);
-    if (pL) along(e, -e.half + pL, 0.12, WHITE);
+    // (a residential street's unmarked curbside parking has no line: curb-parking.js `marked`)
+    if (pR && e.parkMarked !== false) along(e, e.half - pR, 0.12, WHITE);
+    if (pL && e.parkMarked !== false) along(e, -e.half + pL, 0.12, WHITE);
     const bk = e.bk || 0;
     if (!e.divided) {
       if (bk & 128) { // advisory lanes: dashed, inside the street's width, either side
@@ -590,6 +591,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
 
   // Lamp: each parallel-parking stall's marks (curb-parking.js), from the parking lane's line to near the curb
   for (const st of curbStalls()) {
+    if (st.marked === false) continue;
     for (const end of [-0.5, 0.5]) {
       const cx = st.x + st.tx * st.length * end, cz = st.z + st.tz * st.length * end;
       const h = st.lane / 2;

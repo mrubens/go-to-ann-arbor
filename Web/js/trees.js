@@ -1179,13 +1179,39 @@ function createTreeField(_scene, sites, colliders = [], { stream = 0, at = null 
       const b = treeBounds[sp][variant].bounds, wide = Math.max(b.max.x - b.min.x, b.max.z - b.min.z) || 1;
       const hs = Math.min(45, t.height) / heightOf[sp][variant], ws = t.spread / wide;
       dummy.scale.set(ws, hs, ws);
-    } else dummy.scale.set(s * (0.9 + r3 * 0.2) * (t.sx || 1), s * (0.88 + r1 * 0.24), s * (0.9 + r2 * 0.2) * (t.sz || 1));
+    } else {
+      // a grown tree spreads wider than its model does at scale: an old street maple or oak over 12 m reaches out
+      // about as far as it stands tall, so its crown is widened up to a third (not an evergreen's)
+      const h = heightOf[sp][variant] * s, spread = sp === 6 ? 1 : Math.min(1.35, 1 + Math.max(0, h - 12) * 0.03);
+      dummy.scale.set(s * (0.9 + r3 * 0.2) * (t.sx || 1) * spread, s * (0.88 + r1 * 0.24), s * (0.9 + r2 * 0.2) * (t.sz || 1) * spread);
+      dummy.userData.spread = spread;
+    }
     dummy.updateMatrix();
     // (a champion stands where it really does, whatever the city's outlines say is next to it)
     if (!cleared && !t.spread) {
       const tree = treeBounds[sp][variant];
       worldBounds.copy(tree.bounds).applyMatrix4(dummy.matrix).expandByScalar(tree.margin);
-      if (!clearOfBuildings(worldBounds)) return null;
+      // (widened into a building, it keeps its model's own spread instead)
+      if (dummy.userData.spread > 1 && !clearOfBuildings(worldBounds)) {
+        dummy.scale.x /= dummy.userData.spread;
+        dummy.scale.z /= dummy.userData.spread;
+        dummy.updateMatrix();
+        worldBounds.copy(tree.bounds).applyMatrix4(dummy.matrix).expandByScalar(tree.margin);
+      }
+      if (!clearOfBuildings(worldBounds)) {
+        // a street tree by the facades (downtown's tree pits, a sidewalk hard by the shops) is pruned back off the
+        // building, not left out: its crown narrowed to two thirds, the test then only round its trunk and the
+        // middle of its crown, so a crown may brush the wall as the real ones do
+        if (t.likeStreet || !(t.pitRot != null || t.tier)) return null;
+        dummy.scale.x *= 0.66;
+        dummy.scale.z *= 0.66;
+        dummy.updateMatrix();
+        worldBounds.copy(tree.bounds).applyMatrix4(dummy.matrix);
+        const cx = (worldBounds.min.x + worldBounds.max.x) / 2, cz = (worldBounds.min.z + worldBounds.max.z) / 2;
+        const hx = (worldBounds.max.x - worldBounds.min.x) * 0.22, hz = (worldBounds.max.z - worldBounds.min.z) * 0.22;
+        worldBounds.min.x = cx - hx; worldBounds.max.x = cx + hx; worldBounds.min.z = cz - hz; worldBounds.max.z = cz + hz;
+        if (!clearOfBuildings(worldBounds)) return null;
+      }
     }
     return { sp, variant, s, y, r1, r2, r3 };
   }

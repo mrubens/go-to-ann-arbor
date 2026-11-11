@@ -24,9 +24,12 @@ import { GEO } from './city-geodata.js';
 
 // Ann Arbor's siding: whites and creams, yellows, sage and olive greens, grays, muted blues, barn red, tan
 const SIDING = [
-  0xf2efe7, 0xebe5d3, 0xe6dcc0, 0xf0ece2, 0xe4cd85, 0xd9bf72, 0xead9a0, 0xaab595, 0x8e9b74, 0x707d57, 0x5d6a4c,
-  0xb9bbb7, 0x92989a, 0x6c7378, 0x9fb2c0, 0x7b91a3, 0x5a6f82, 0x8b3a2e, 0x75302a, 0xc8b391
+  0xf2efe7, 0xebe5d3, 0xe6dcc0, 0xf0ece2, 0xddcf9e, 0xd3c38f, 0xe5dab4, 0xaab595, 0x8e9b74, 0x707d57, 0x5d6a4c,
+  0xb9bbb7, 0x92989a, 0x6c7378, 0x9fb2c0, 0x7b91a3, 0x5a6f82, 0x84483d, 0x6f4038, 0xc8b391
 ];
+// (the photos' looks index SIDING as it is; a house with no look picks from these, weighted to the weathered whites,
+// grays and gray-blues most of the town's houses wear)
+const SIDING_PICK = [...SIDING, 0xe9e7e0, 0xd8d8d2, 0xa9adab, 0x8d9aa3, 0xefece4, 0xc4c6c2];
 // In the historic districts (Old West Side, Old Fourth Ward, Division Street…), the deeper colors of their 1850-1910
 // houses: oxblood, forest and olive greens, ochre, slate, cream
 const HERITAGE = [
@@ -869,7 +872,7 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     const sidingHex = seen ? LOOK_PALETTES[matKind][seen - 1]
       : matKind === M_BRICK ? pick(BRICKS, id(3)) : matKind === M_STONE ? pick(STONES, id(3))
       : matKind === M_STUCCO ? pick(STUCCO, id(3)) : matKind === M_SHAKE ? pick(SHAKES, id(3))
-      : pick(historic && id(12) < 0.5 ? HERITAGE : SIDING, id(3));
+      : pick(historic && id(12) < 0.5 ? HERITAGE : SIDING_PICK, id(3));
     // trim: white on most; dark on some light houses, contrasting colors on historic ones
     const tr = id(9);
     const light = luma(sidingHex) > 0.7;
@@ -1439,3 +1442,46 @@ function streamHouses(records, addresses, { radius, x, z, farCut = 1 }) {
 }
 
 export { buildHouses, streamHouses };
+
+// Lamp: the far city's stand-in for a house (far-city.js): its oriented box, its walls' and roof's colours as
+// buildHouses picks them (the same seeds and photo looks), where its eaves are over its floor and how high its roof
+// rises, a gable along its length or a flat top; no wings, porches or dormers. And its streamed square's key, which
+// streamHouses keys its squares by, so the far city knows when the house itself is drawn.
+export function houseFarLook(r) {
+  const ring0 = r.polygons[0] && r.polygons[0].outer;
+  if (!ring0 || ring0.length < 3) return null;
+  const ring = ringArea(ring0) < 0 ? [...ring0].reverse() : ring0;
+  const fb = orientedBox(ring);
+  const area = Math.abs(ringArea(ring));
+  const garage = r.garage || area < 45;
+  const id = (k) => hash(r.cx, r.cz, k);
+  const look = garage ? 0 : taggedRoof(ring, r.cx, r.cz, houseLooks);
+  const year = look >> 21 & 127 ? (look >> 21 & 127) * 2 + 1800 : 0;
+  const historic = !garage && (historicDistrictAt(r.cx, r.cz) !== null || (year > 0 && year < 1915));
+  const h = Math.max(3, r.height);
+  const said = [0, 1, 1.5, 2, 0][look >> 18 & 7] || 0;
+  const storeys = garage ? 0 : said || (h < 4.6 ? 1 : h < 6.6 ? 1.5 : h < 10 ? 2 : 3);
+  const ranch = storeys === 1 && (said === 1 || !historic);
+  const fh = garage ? 0.12 : historic ? 0.6 + 0.25 * id(21) : ranch ? 0.25 + 0.15 * id(21) : 0.45 + 0.25 * id(21);
+  const m = id(2);
+  const brickP = historic ? 0.22 : ranch ? 0.25 : 0.18;
+  let matKind = M_CLAP;
+  if (!garage) {
+    if (m < brickP) matKind = M_BRICK;
+    else if (m < brickP + 0.03) matKind = M_STONE;
+    else if (m < brickP + 0.07) matKind = M_STUCCO;
+    else if (m < brickP + 0.07 + (storeys === 1.5 ? 0.15 : 0.05)) matKind = M_SHAKE;
+  }
+  if (look & 7) matKind = (look & 7) - 1;
+  const seen = look >> 3 & 63;
+  const wall = seen ? LOOK_PALETTES[matKind][seen - 1]
+    : matKind === M_BRICK ? pick(BRICKS, id(3)) : matKind === M_STONE ? pick(STONES, id(3))
+    : matKind === M_STUCCO ? pick(STUCCO, id(3)) : matKind === M_SHAKE ? pick(SHAKES, id(3))
+    : pick(historic && id(12) < 0.5 ? HERITAGE : SIDING, id(3));
+  const tag = garage ? 0 : taggedRoof(ring, r.cx, r.cz) || (look >> 15 & 7);
+  const eave = garage ? Math.max(2.4, Math.min(3, h - 1)) : fh + (storeys === 1.5 ? 3.25 : Math.floor(storeys) * 2.8 + 0.2);
+  const pitch = garage ? 0.45 : storeys === 1.5 ? 0.95 : ranch ? 0.42 : historic ? 0.85 : 0.7;
+  const rise = tag === 3 ? 0 : Math.max(0.9, Math.min(garage ? 2 : 6.5, fb.W / 2 * pitch));
+  const key = Math.floor(r.cx / STREAM_CELL) * 100000 + Math.floor(r.cz / STREAM_CELL);
+  return { box: fb, area, garage, wall, roof: pick(SHINGLES, id(5)), eave, rise, key };
+}

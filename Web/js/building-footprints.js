@@ -28,7 +28,8 @@ function createBuildingFootprints(material, records, getNeighbours) {
     if (!(record.height > 0)) return;
     const key = Math.floor(record.cx / 1000) + ',' + Math.floor(record.cz / 1000);
     let cell = cells.get(key);
-    if (!cell) cells.set(key, (cell = { positions: [], normals: [], indices: [], boxes: [], walls: [], ground: [], maxH: 0 }));
+    if (!cell) cells.set(key, (cell = { positions: [], normals: [], indices: [], boxes: [], walls: [], ground: [], maxH: 0, records: [] }));
+    cell.records.push(record);
     // Lamp: the building stands on `record.ground` (terrain.js); its storeys count from there, while `base` reaches
     // down below `record.minGround` on hillsides
     const g = record.ground ?? 0, minG = record.minGround ?? g;
@@ -107,6 +108,8 @@ function createBuildingFootprints(material, records, getNeighbours) {
     // Most cells are too small for scene-culling.js to pick them as big casters on its own: opt in to its stand-ins.
     mesh.userData.shadowStandIn = true;
     mesh.userData.cullDistance = cell.maxH > 35 ? 3500 : 1600;
+    // Lamp: each building knows the mesh it's drawn in, so the far city's block for it shows only while that's hidden
+    for (const r of cell.records) r.detailChunk = mesh;
     if (first) mesh.userData.sharesPipelineWith = first;
     else first = mesh;
     group.add(mesh);

@@ -2354,15 +2354,16 @@ const roadWear = Fn(([wxz, px]) => {
  * from the car, so they are traced further than the hairline cracks, thinning out before they shrink below a pixel.
  */
 const roadTarSnakes = Fn(([wxz, px]) => {
-  const zone = smoothstep(0.3, 0.48, noise2D(wxz.mul(0.03).add(17.0))).toVar();
+  // (sealed stretches are the exception, not the rule: about one block in six, so most roadway is plain worn asphalt)
+  const zone = smoothstep(0.56, 0.7, noise2D(wxz.mul(0.03).add(17.0))).toVar();
   const snake = float(0.0).toVar();
   If(zone.greaterThan(0.001).and(px.lessThan(0.12)), () => {
     const warp = vec2(noise2D(wxz.mul(0.9)), noise2D(wxz.mul(0.9).add(31.0))).sub(0.5).mul(0.6);
     const cell = 2.4;
     const border = voronoiBorder(wxz.div(cell).add(warp)).mul(cell);
     // Only some cracks were sealed: the network breaks up into runs a few metres long
-    const keep = smoothstep(0.38, 0.5, noise2D(wxz.mul(0.6).add(5.0)));
-    const width = noise2D(wxz.mul(1.7).add(9.0)).mul(0.012).add(0.014);
+    const keep = smoothstep(0.5, 0.6, noise2D(wxz.mul(0.6).add(5.0)));
+    const width = noise2D(wxz.mul(1.7).add(9.0)).mul(0.008).add(0.01);
     const effWidth = max(width, px.mul(0.6));
     snake.assign(float(1.0).sub(smoothstep(effWidth, effWidth.add(px), border)).mul(width.div(effWidth)).mul(zone).mul(keep)
       .mul(smoothstep(0.12, 0.06, px)));
@@ -2387,9 +2388,10 @@ function createRoadSurfaceMaterial() {
     roughness: 0.48
   });
 
-  // Weathered, oxidised asphalt (fresh blacktop only in the newer patches)
-  const cAsphaltDark = color(0x3d3f43);
-  const cAsphaltLight = color(0x686a6e);
+  // Weathered, oxidised asphalt (fresh blacktop only in the newer patches): sun-bleached to a light, slightly warm
+  // grey, as Michigan's roads are a few summers after they're laid
+  const cAsphaltDark = color(0x4b4b4b);
+  const cAsphaltLight = color(0x7d7c79);
   const cManhole = color(0x4a433c);
   const cOldPatch = color(0x77787a);
 
@@ -2459,7 +2461,8 @@ function createRoadSurfaceMaterial() {
     const patchNoise = noise2D(vec2(wx.mul(0.18), wz.mul(0.18)));
     const oilyStain = fadedDetail(camDist.lessThan(240.0), 0.0, () =>
       smoothstep(0.52, 0.84, noise2D(vec2(wx.mul(0.42), wz.mul(0.42)))).mul(detail));
-    const tarSeam = float(1.0).sub(smoothstep(0.0, 0.04, abs(patchNoise.sub(0.52)))).mul(0.42).mul(detail);
+    // (thin and faint: a long seam where two pours meet, not a dark vein wandering over the lane)
+    const tarSeam = float(1.0).sub(smoothstep(0.0, 0.012, abs(patchNoise.sub(0.52)))).mul(0.18).mul(detail);
     // Binder-rich (dark) & ravelled, aggregate-exposed (pale) mottling a stride or so across (its mean, 0.5, once a
     // pixel spans 40 cm, the patches then only a few pixels across)
     const mottle = fadedDetail(px.lessThan(0.4), 0.5, () => mix(float(0.5), smoothstep(0.3, 0.7,
@@ -2479,7 +2482,7 @@ function createRoadSurfaceMaterial() {
     const repaired = mix(baseAsphalt, patchCol, patchCover)
       .mul(float(1.0).sub(patchSeal.mul(0.5)))
       .add(chips.mul(0.08).mul(float(1.0).sub(patchCover.mul(patchFresh))))
-      .mul(float(1.0).sub(tarSnake.mul(0.62)))
+      .mul(float(1.0).sub(tarSnake.mul(0.42)))
       .mul(float(1.0).sub(oilDrip.mul(0.45)))
       .mul(float(1.0).sub(crack.mul(0.65)))
       .mul(float(1.0).sub(pothole.mul(0.4)));
@@ -3557,11 +3560,12 @@ function createWaterMaterial() {
   // its triangles come, and the cascades' raised waves flickered between them)
   mat.opacityNode = mix(clamp(max(float(0.58).add(fresnel.mul(0.9)), foam), 0.0, 1.0), float(0.7), float(1).sub(float(frontFacing)));
 
-  // Sediment-laden estuary: deep blue-green grey ↔ silty olive grey; thin sunlit crests transmit a greener tint
+  // The Huron's tea-coloured water (tannins from the wetlands upstream) over silt: dark olive-brown where it runs,
+  // a little greener on the still ponds behind the dams; thin sunlit crests transmit a lighter tint
   mat.colorNode = Fn(() => {
     const silt = noise2D(positionWorld.xz.mul(0.0031).add(7.3));
-    const body = mix(color(0x162d2c), color(0x2e3f36), smoothstep(0.25, 0.85, silt));
-    const lake = mix(color(0x2f4a3e), color(0x41583f), silt); // the Huron: clear green over its silt
+    const body = mix(color(0x29271a), color(0x3d3a25), smoothstep(0.25, 0.85, silt));
+    const lake = mix(color(0x2e3626), color(0x434630), silt);
     const crestTint = smoothstep(0.6, 2.4, waves.w).mul(0.35).add(1.0);
     // white water bluish-white, PFAS froth a creamy off-white
     const froth = mix(color(0xdfe8e4), color(0xe9e3d2), smoothstep(rapids.z, rapids.z.add(0.2), pfasFoam));
@@ -3696,9 +3700,12 @@ function createParkLawnMaterial(isMeadow = false, mown = null) {
     roughness: 0.86
   });
 
-  const cGrassDeep = color(isMeadow ? 0x2c5c28 : 0x224c20);
-  const cGrassMid = color(isMeadow ? 0x457d36 : 0x36682c);
-  const cGrassSun = color(0x6b9c3e);
+  // (a yard's or park's grass is olive, a little yellow, not emerald: Ann Arbor's lawns are mixed bluegrass, fescue
+  // and clover, unwatered by midsummer; a golf course's watered turf keeps the deeper green)
+  const cGrassDeep = color(isMeadow ? 0x3a5526 : mown ? 0x224c20 : 0x354a1c);
+  const cGrassMid = color(isMeadow ? 0x58703a : mown ? 0x36682c : 0x58682a);
+  const cGrassSun = color(mown ? 0x6b9c3e : 0x8c9440);
+  const cGrassDry = color(isMeadow ? 0x8f8556 : 0x928a48);
 
   mat.colorNode = Fn(() => {
     const wp = positionWorld.xz;
@@ -3715,7 +3722,10 @@ function createParkLawnMaterial(isMeadow = false, mown = null) {
       cGrassMid,
       macroPatch.sub(0.5).mul(0.22 * patchy).add(midClover.sub(0.5).mul(0.14 * patchy)).add(mowStripe.mul(0.1)).add(0.55)
     );
-    const greenSoft = mix(baseLawn, cGrassSun, microBlade.sub(0.5).mul(0.12).add(0.16));
+    // dry, thin patches tens of metres across and smaller worn spots: where the soil's poor, the sun hard or feet many
+    const dry = mown ? float(0) : smoothstep(0.5, 0.85, noise2D(wp.mul(0.021).add(3.1))).mul(0.42)
+      .add(smoothstep(0.62, 0.9, midClover).mul(0.22));
+    const greenSoft = mix(mix(baseLawn, cGrassDry, dry), cGrassSun, microBlade.sub(0.5).mul(0.12).add(0.16));
     // the blades: the painted tile at about 45 cm and, turned and offset so the two don't line up, at about 1.6 m
     // (a green's or tee's cut finer: smaller and fainter); each averages to 1 where its mips blur it away
     const bladeTex = grassBladeTexture();
@@ -3777,7 +3787,11 @@ function createParkLawnMaterial(isMeadow = false, mown = null) {
     const damp = smoothstep(0.35, 0.75, midClover).mul(0.38).add(smoothstep(0.55, 0.85, noise2D(wp.mul(0.9).add(31.7))).mul(-0.18)).add(0.78);
     const leafCol = mix(l1.rgb, l2.rgb, a2.div(a1.add(a2).max(0.001))).mul(hue).mul(damp);
     const litter = a1.max(a2).mul(1.15).min(1);
-    const grass = TIER.name === 'phone' || TIER.name === 'slow' ? lawn : mix(lawn, leafCol, litter.mul(step(0.001, cityUniforms.uLitter)));
+    // and all year, under thick crowns (the same map: the woods, the Arb, the old streets' canopies), the grass thin
+    // and shaded out into a darker floor of leaf mould, moss and bare earth; not a golf course's watered turf
+    const shaded = mown ? lawn : mix(lawn, mix(color(0x3b3826), color(0x2d3f21), midClover).mul(macroPatch.mul(0.3).add(0.85)),
+      smoothstep(0.4, 1.0, under).mul(0.62));
+    const grass = TIER.name === 'phone' || TIER.name === 'slow' ? lawn : mix(shaded, leafCol, litter.mul(step(0.001, cityUniforms.uLitter)));
     if (!mown) return grass;
     const angle = attribute('mow', 'float');
     const v = dot(wp, vec2(angle.sin().negate(), angle.cos())).div(mown.width);

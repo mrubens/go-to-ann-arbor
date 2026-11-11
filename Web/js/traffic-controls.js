@@ -398,14 +398,22 @@ function buildTrafficControls(group, network) {
 
   // Meshes
   const metal = new THREE.MeshStandardNodeMaterial({ color: 0x8c9196, roughness: 0.5, metalness: 0.7 });
-  const housing = new THREE.MeshStandardNodeMaterial({ color: 0x26292c, roughness: 0.45, metalness: 0.2, side: THREE.DoubleSide });
+  // Ann Arbor's signal heads are traffic yellow, their visors too, on a black backplate (vertex colours)
+  const housing = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
+  const tinted = (g, hex) => {
+    const c = new THREE.Color(hex), n = g.attributes.position.count, a = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
+    g.setAttribute('color', new THREE.Float32BufferAttribute(a, 3));
+    return g;
+  };
+  const YELLOW = 0xd9a91f, BLACKPLATE = 0x1b1d1f;
   const W = 0.4, H = 1.12, D = 0.28, R = 0.145, LY = [0.36, 0, -0.36];
   const headGeo = mergeGeometries([
-    new THREE.BoxGeometry(W, H, D),
-    new THREE.BoxGeometry(0.07, ARM_Y - HEAD_Y - H / 2, 0.07).translate(0, (ARM_Y - HEAD_Y + H / 2) / 2, 0),
-    new THREE.BoxGeometry(W + 0.24, H + 0.2, 0.02).translate(0, 0, -D / 2 - 0.01), // backplate
-    ...LY.map((ly) => new THREE.CylinderGeometry(R + 0.03, R + 0.03, 0.24, 14, 1, true, Math.PI / 2, Math.PI)
-      .rotateX(Math.PI / 2).translate(0, ly, D / 2 + 0.12))
+    tinted(new THREE.BoxGeometry(W, H, D), YELLOW),
+    tinted(new THREE.BoxGeometry(0.07, ARM_Y - HEAD_Y - H / 2, 0.07).translate(0, (ARM_Y - HEAD_Y + H / 2) / 2, 0), YELLOW),
+    tinted(new THREE.BoxGeometry(W + 0.24, H + 0.2, 0.02).translate(0, 0, -D / 2 - 0.01), BLACKPLATE), // backplate
+    ...LY.map((ly) => tinted(new THREE.CylinderGeometry(R + 0.03, R + 0.03, 0.24, 14, 1, true, Math.PI / 2, Math.PI)
+      .rotateX(Math.PI / 2).translate(0, ly, D / 2 + 0.12), YELLOW))
   ]);
   // one lamp each: red on top, amber, green at the bottom, facing the drivers coming up to the head
   const lampGeo = mergeGeometries(LY.map((ly, i) => {

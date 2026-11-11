@@ -259,6 +259,26 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     [createPreWarBuildingMaterial, {
       stoneColor: 0xb27a52, trimColor: 0xbdb7a8, windowGlassColor: 0x16222c,
       windowWidth: 3.0, floorHeight: 3.8, litProbability: 0.48, warmth: 0.75, seed: 117.3
+    }],
+    // 11: Tan and cream common brick: downtown's 1900s commercial blocks and the 1960s-80s apartment slabs
+    [createPreWarBuildingMaterial, {
+      stoneColor: 0xc0a27a, trimColor: 0xe0d6c0, windowGlassColor: 0x18242e,
+      windowWidth: 2.5, floorHeight: 3.6, litProbability: 0.5, warmth: 0.82, seed: 131.9
+    }],
+    // 12: Painted brick, white and pale gray, with dark trim: Main Street's Italianate fronts
+    [createPreWarBuildingMaterial, {
+      stoneColor: 0xe2ded4, trimColor: 0x45484b, windowGlassColor: 0x18222c,
+      windowWidth: 2.2, floorHeight: 4.0, litProbability: 0.5, warmth: 0.85, seed: 149.2
+    }],
+    // 13: Dark brown and plum brick: the 1910s-20s blocks and newer infill
+    [createPreWarBuildingMaterial, {
+      stoneColor: 0x6b4536, trimColor: 0xcfc4ac, windowGlassColor: 0x141e28,
+      windowWidth: 2.4, floorHeight: 3.6, litProbability: 0.52, warmth: 0.8, seed: 163.4
+    }],
+    // 14: Gray metal and fibre-cement panel with wide windows: the 2000s-20s towers downtown and by campus
+    [createPreWarBuildingMaterial, {
+      stoneColor: 0x6a6e71, trimColor: 0x9ca2a6, windowGlassColor: 0x1a2630,
+      windowWidth: 3.4, floorHeight: 3.3, windowRatioX: 0.62, litProbability: 0.6, warmth: 0.7, seed: 177.7
     }]
   );
   const materials = facades.map(([create, opts]) => create({ ...opts, footprintLocal: true }));
@@ -445,8 +465,12 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     // Lamp: Ann Arbor's survey says what each building is (1 house or apartments, 2 shops, 3 offices, 4 public) and
     // who owns it (5 the University, 6 the city, county, schools or federal government), not when it was built
     const kind = b.kind || 1;
-    let mat = kind === 1 ? (b.height < 13 ? (tone < 0.18 ? 1 : 5 + Math.floor(rand() * 3)) : (tone < 0.7 ? 1 : 0))
-      : kind === 2 ? (b.height < 16 ? (tone < 0.65 ? 1 : 0) : (tone < 0.5 ? 2 : 3))
+    // (Ann Arbor's walls are red brick far less than half the time: tan, cream and painted brick, dark brick, and the
+    // gray panel of the newer towers share them)
+    const brickOf = (t) => (t < 0.36 ? 1 : t < 0.54 ? 0 : t < 0.7 ? 11 : t < 0.84 ? 12 : 13);
+    let mat = kind === 1 ? (b.height < 13 ? (tone < 0.18 ? 1 : 5 + Math.floor(rand() * 3))
+      : b.height > 28 ? (tone < 0.45 ? 14 : tone < 0.7 ? 11 : 13) : (tone < 0.3 ? 1 : tone < 0.5 ? 11 : tone < 0.7 ? 13 : tone < 0.85 ? 14 : 0))
+      : kind === 2 ? (b.height < 16 ? brickOf(tone) : (tone < 0.4 ? 14 : tone < 0.7 ? 2 : 3))
         : kind === 3 ? (b.height < 14 ? (tone < 0.5 ? 1 : 3) : (tone < 0.6 ? 2 : 4))
           : kind === 5 ? (b.height > 30 && tone < 0.45 ? 2 : tone < 0.62 ? 8 : 9)
             : kind === 6 ? (tone < 0.6 ? 10 : 9)
@@ -454,7 +478,7 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     // Lamp: the city's land use and historic districts: old brick and stone in a historic district (the University's
     // own buildings keep theirs), stone or brick for churches, plain tan brick for industry and research
     const use = landUseAt(b.cx, b.cz);
-    if (kind !== 5 && historicDistrictAt(b.cx, b.cz) && b.height < 30) mat = tone < 0.68 ? 1 : 0;
+    if (kind !== 5 && historicDistrictAt(b.cx, b.cz) && b.height < 30) mat = brickOf(tone);
     else if (use === LAND_USE.RELIGIOUS && kind !== 5) mat = tone < 0.5 ? 0 : 1;
     else if (use === LAND_USE.INDUSTRY && kind !== 5 && b.height < 20) mat = tone < 0.7 ? 10 : 3;
     // Lamp: the building's first-floor doors and windows sit above the uphill grade (`maxGround`), while its foundation
@@ -523,6 +547,7 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
   surveyedBuckets.forEach((items, i) => {
     if (!items.length) return;
     for (const r of items) r.signFronts = !r.storefronts && r.kind !== 5 && r.kind !== 6 && (i < 5 || i > 7) && r.height >= 3.1;
+    for (const r of items) r.facade = i; // (its look, for the far city's block: far-city.js)
     group.add(createBuildingFootprints(materials[i], items, i < 2 || i >= 5 ? b => nearbyReserves(b, 2) : undefined));
   });
   {
@@ -942,7 +967,9 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     group,
     colliders,
     allBlocks,
-    update
+    update,
+    // Lamp: what the far city (far-city.js) draws as plain blocks beyond the detailed buildings' reach
+    farRecords: { surveyed: surveyedBuckets.flat(), houses: houseRecords, churches }
   };
 }
 

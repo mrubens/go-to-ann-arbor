@@ -86,7 +86,7 @@ function buildRiver(group, geos, waterMat) {
   const bankPos = [], bankCol = [], bankWet = [];
   // the lawn's own green on the top, a deeper, shaggier green down the bank, a narrow strip of mud at the water
   // (already linear: three converts a hex color as it's set)
-  const lawn = new THREE.Color(0x4f8a2e), grass = new THREE.Color(0x3f6b27);
+  const lawn = new THREE.Color(0x4b6630), grass = new THREE.Color(0x3d5426);
   const mud = new THREE.Color(0x5a4c35);
   const silt = new THREE.Color(0x3a2e20), c = new THREE.Color();
   const sloped = (p) => { const d = riverDepth(p[0], p[2]); return d > 0.001 && d < 0.999; };
@@ -389,7 +389,7 @@ function buildBridges(group) {
   const glass = new THREE.MeshStandardNodeMaterial({ color: 0xfff1d6, emissive: 0xffd9a0, emissiveIntensity: 0.9, roughness: 0.3 });
   for (const [pos, m, name] of [[concrete, mat(0xb3ada3, 0.9), 'BridgeConcrete'], [steel, mat(0x4d5a5e, 0.6, 0.3), 'BridgeSteel'],
     [wood, mat(0x8a7356, 0.9), 'BridgeDecks'], [rail, mat(0x2f3436, 0.5, 0.4), 'BridgeRailings'],
-    [street.asphalt, mat(0x3b3c3e, 0.92), 'BridgeRoad'], [street.glass, glass, 'BridgeLamps']]) {
+    [street.asphalt, mat(0x58585a, 0.92), 'BridgeRoad'], [street.glass, glass, 'BridgeLamps']]) {
     if (!pos.length) continue;
     // in 700 m squares as the banks are, so a square out of view or far off (meshOf's cullDistance) isn't drawn
     const tiles = new Map();

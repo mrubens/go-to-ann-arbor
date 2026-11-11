@@ -7,7 +7,7 @@ import {
 } from './city-config.js';
 import { GEO } from './city-geodata.js';
 import { polygonBoxOverlaps } from './building-collision.js';
-import { curbParking } from './curb-parking.js';
+import { curbParking, linkOf } from './curb-parking.js';
 
 // Drivable road graph derived from the ground layout that city-grid.js actually builds: avenue corridors
 // between the raised curbs, cross-street gaps between curb rows, lanes that keep clear of medians, plazas
@@ -402,7 +402,7 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
       const room = (side) => !(l.bike & side) || l.bike & 128 ? 0 : (l.bike & 512 ? 3 : 1.7) + (l.bike & 48 ? 0.9 : l.bike & 64 ? 0.6 : 0);
       const bk = l.bike & (16 | 32 | 64 | 128 | 512);
       // Lamp: a parking lane along each curb (curb-parking.js), and any bike lane beside it on the traffic side
-      const park = curbParking(l.park, l.bike);
+      const park = curbParking(l.park, l.bike, linkOf(l.w, l.lanes, l.dir, l.cls, l.pts.map((p) => [p.x, p.z])));
       const pR = room(1), pL = room(2);
       const bR = pR + park.right, bL = pL + park.left;
       // n lanes from `from` (m right of the centre line) out to `to`, each 2.7 to 3.6 m wide
@@ -416,7 +416,7 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
       const info = (along) => {
         const [pr, pl, kr, kl] = along ? [pR, pL, park.right, park.left] : [pL, pR, park.left, park.right];
         const [sr, sl] = along ? [l.bike & 4, l.bike & 8] : [l.bike & 8, l.bike & 4];
-        return { cls: l.cls, bikeR: pr, bikeL: pl, parkR: kr, parkL: kl, share: sr ? 1 : 0, shareL: sl ? 1 : 0, bk, mph: l.mph, street: l.name };
+        return { cls: l.cls, bikeR: pr, bikeL: pl, parkR: kr, parkL: kl, parkMarked: park.marked, share: sr ? 1 : 0, shareL: sl ? 1 : 0, bk, mph: l.mph, street: l.name };
       };
       if (l.dir !== 0) {
         const n = Math.max(1, l.lanes || 1);
@@ -552,12 +552,20 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
   }
   // Centreline streets: any direction, so their lanes are checked for obstacles every 2.5 m (clear of the junctions,
   // where neighbouring corners would get in the way of the test) instead of over one bounding box
+  // (a lane may graze the curb along an eighth of its length or so: the edge is the straight chord between its
+  // junctions, and on a curving road such as Washtenaw the outer lanes' chord touches the curb on the bend's inside;
+  // anything else in the way, the land's edge, a median or an obstacle, closes it)
   const laneOpen = (x0, z0, dx, dz, span, o) => {
     const clear = Math.min(12, span / 2);
+    let n = 0, curbs = 0;
     for (let t = clear; t <= span - clear + 1e-6; t += 2.5) {
-      if (blockedOnStreet(x0 + dx * t - dz * o, z0 + dz * t + dx * o, LANE_CLEAR)) return false;
+      const x = x0 + dx * t - dz * o, z = z0 + dz * t + dx * o, c = LANE_CLEAR;
+      n++;
+      if (!onLand(x - c, x + c, z - c, z + c) || nearMedian(x, z, c) ||
+        query(x - c, x + c, z - c, z + c, (r) => !r.curb && !r.pedestrianOnly && (r.maxX - r.minX < 50 || r.maxZ - r.minZ < 50) && !medianBox(r))) return false;
+      if (query(x - 0.3, x + 0.3, z - 0.3, z + 0.3, (r) => r.curb)) curbs++;
     }
-    return true;
+    return curbs <= Math.floor(n * 0.12);
   };
   function addEdgeGeneral(from, to, axis, lanes, half, divided, info = null) {
     const x0 = from.x;
@@ -860,9 +868,9 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
   // Paint describes the physical streets, including dead ends and roads AI traffic cannot circulate through.
   // Snapshot their geometry before routing moves stop lines, drops edges and renumbers the surviving junctions.
   const paintNodes = new Map(nodes.map((n, id) => [n, { id, x: n.x, z: n.z, shape: n.shape }]));
-  const paintEdges = edges.map(({ from, to, axis, x0, z0, sx, sz, dx, dz, rx, rz, span, len, half, lanes, cls, bikeR, bikeL, parkR, parkL, share, shareL, bk, turn, divided, freeway }) => ({
+  const paintEdges = edges.map(({ from, to, axis, x0, z0, sx, sz, dx, dz, rx, rz, span, len, half, lanes, cls, bikeR, bikeL, parkR, parkL, parkMarked, share, shareL, bk, turn, divided, freeway }) => ({
     from: paintNodes.get(from), to: paintNodes.get(to), axis, x0, z0, sx, sz, dx, dz, rx, rz, span, len, half, lanes,
-    cls: cls ?? 4, bikeR: bikeR || 0, bikeL: bikeL || 0, parkR: parkR || 0, parkL: parkL || 0, share: share || 0, shareL: shareL || 0, bk: bk || 0, turn: turn || 0, divided: !!divided, freeway: !!freeway
+    cls: cls ?? 4, bikeR: bikeR || 0, bikeL: bikeL || 0, parkR: parkR || 0, parkL: parkL || 0, parkMarked: parkMarked !== false, share: share || 0, shareL: shareL || 0, bk: bk || 0, turn: turn || 0, divided: !!divided, freeway: !!freeway
   }));
 
   // 6. Movements at each intersection (no U-turns) and the lane each lane leads to, along obstacle-free curves:

@@ -23,6 +23,7 @@ import { log } from '../lamp-game.js';
 import { REAL_TREES, REAL_TREE_KINDS, REAL_TREE_HEIGHTS } from './tree-geodata.js';
 import { placeStreetTrees, dropCanopyFill } from './tree-placements.js';
 import { yardTreeSites, yardLeaves } from './drafted-yards.js';
+import { woodsTrees } from './yards.js';
 import { CHAMPION_TREES } from './champion-trees.js';
 import { createFoodCartParts } from './street-props.js';
 import { pavedPlazaRects, bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes } from './city-grid.js';
@@ -179,6 +180,18 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
     new THREE.CylinderGeometry(0.14, 0.07, 0.16, 10).translate(0, 3.62, 0)
   ]);
   const pedGlobeGeo = new THREE.SphereGeometry(0.23, 8, 6).translate(0, 3.84, 0);
+  // Ann Arbor's downtown ornamental streetlight: a black fluted post about 4.5 m tall with a scrolled crossarm and two
+  // white globes, along Main, Liberty, Washington, Fourth and Fifth (GEO.streetlights kind 2)
+  const ornatePostGeo = mergeGeometries([
+    new THREE.CylinderGeometry(0.13, 0.19, 0.95, 10).translate(0, 0.475, 0),
+    new THREE.CylinderGeometry(0.07, 0.095, 3.2, 10).translate(0, 2.55, 0),
+    new THREE.CylinderGeometry(0.12, 0.07, 0.18, 10).translate(0, 4.2, 0),
+    new THREE.CylinderGeometry(0.035, 0.035, 1.02, 6).rotateZ(Math.PI / 2).translate(0, 4.32, 0),
+    ...[-0.48, 0.48].map((ax) => new THREE.CylinderGeometry(0.1, 0.05, 0.14, 8).translate(ax, 4.42, 0)),
+    new THREE.ConeGeometry(0.05, 0.3, 6).translate(0, 4.68, 0)
+  ]);
+  const ornateGlobeGeo = mergeGeometries([-0.48, 0.48].map((ax) => new THREE.SphereGeometry(0.21, 10, 8).translate(ax, 4.68, 0)));
+  const ornateMetalMat = new THREE.MeshStandardNodeMaterial({ color: 0x1c1e20, roughness: 0.5, metalness: 0.55 });
 
   // =========================================================================
   // 1. NYC CANTILEVERED TRAFFIC SIGNALS, STREET BLADES & WALK SIGNALS
@@ -194,6 +207,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   const signalIntersections = [];
   const lampHeadMatrices = [];
   const pedPostMatrices = [];
+  const ornateMatrices = [];
   const cobraLampSites = [];
   const streetPointSites = [];
   // Only nearby poles can conflict, even with street furniture across the whole island.
@@ -363,10 +377,22 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   const realLights = GEO.streetlights || [];
   const lightPools = [];
   for (let i = 0; i < realLights.length; i += 4) {
-    const lx = realLights[i], lz = realLights[i + 1], post = realLights[i + 2] === 1;
+    const lx = realLights[i], lz = realLights[i + 1], post = realLights[i + 2] === 1, ornate = realLights[i + 2] === 2;
     const a = realLights[i + 3] * Math.PI / 180, outX = Math.cos(a), outZ = Math.sin(a);
     if (!isClearOfPoles(lx, lz, 1.2)) continue;
     addPole(lx, lz, 0.4);
+    if (ornate) {
+      // the crossarm along the curb, the globes either side of the post
+      dummy.position.set(lx, 0.18, lz);
+      dummy.rotation.set(0, Math.atan2(-outZ, outX) + Math.PI / 2, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      own(ornateMatrices);
+      dummy.rotation.set(0, 0, 0);
+      streetPointSites.push({ x: lx, y: 4.7, z: lz, color: 0xffe0aa, intensity: 34, dist: 16.0 });
+      lightPools.push(lx, lz, 11);
+      continue;
+    }
     if (post) {
       dummy.position.set(lx, 0.18, lz);
       dummy.rotation.set(0, 0, 0);
@@ -599,6 +625,8 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
     ]);
   }
   addMatrixArrayInstanced(pedGlobeGeo, pedGlobeGlow, pedPostMatrices, false);
+  addMatrixArrayInstanced(ornatePostGeo, ornateMetalMat, ornateMatrices);
+  addMatrixArrayInstanced(ornateGlobeGeo, pedGlobeGlow, ornateMatrices, false);
 
   // (New York's golden-hour 'canyon' sun shafts: none in Ann Arbor, whose downtown has no tower canyons)
 
@@ -1406,6 +1434,29 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   group.add(treeField.group);
   // the drafted houses' shrubs and hedges, in the trees' own leaves
   if (draftedYard.length) group.add(createShrubs(treeField, yardLeaves(draftedYard)));
+  // Lamp: the understory of the mapped woods (OpenStreetMap's woods, yards.js woodsTrees kind 0): a bush or a clump of
+  // saplings beside three in four of their trees, drawn only within 160 m, so a wood reads as a thicket from its road
+  if (TIER.name !== 'phone') {
+    const W = woodsTrees(), bushes = [];
+    const greens = [0x3d5c2a, 0x4a6a30, 0x557236, 0x3a5528, 0x5e7a3a];
+    for (let i = 0; i < W.length; i += 3) {
+      if (W[i + 2] !== 0) continue;
+      const x0 = W[i], z0 = W[i + 1];
+      const r = Math.abs(Math.sin(x0 * 12.9898 + z0 * 78.233) * 43758.5453) % 1;
+      if (r > 0.75) continue;
+      const a = r * 40, d = 1.6 + (r * 7.3 % 1) * 2.6, x = x0 + Math.cos(a) * d, z = z0 + Math.sin(a) * d;
+      const rad = 1.3 + (r * 13.1 % 1) * 1.4;
+      bushes.push({ x, y: groundHeight(x, z) + 0.13, z, yaw: a, w: rad * 2.2, h: rad * 1.4, len: rad * 1.9,
+        color: new THREE.Color(greens[Math.floor(r * 50) % greens.length]) });
+    }
+    if (bushes.length) {
+      const under = createShrubs(treeField, { bushes });
+      under.name = 'WoodsUnderstory';
+      under.traverse((o) => { if (o.isInstancedMesh) { o.userData.cullDistance = 160; o.castShadow = false; } });
+      group.add(under);
+      console.info(`[streetDetails] ${bushes.length} bushes under the woods`);
+    }
+  }
   sidewalkTreePositions = sidewalkTreePositions.filter((t) => treeField.sites.has(t));
   console.info(`[streetDetails] ${treeField.stats.trees} trees (${sidewalkTreePositions.length} street trees)`);
 

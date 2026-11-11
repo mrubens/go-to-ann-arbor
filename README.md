@@ -4,7 +4,7 @@
 
 <p align="center">Explore Ann Arbor, Michigan in 3D on foot, by car, by bike or by helicopter.</p>
 
-<p align="center"><a href="https://mrubens.github.io/go-to-ann-arbor/"><img src=".github/play-in-browser.svg" width="220" height="48" alt="Play in your browser"></a>&nbsp;&nbsp;<a href="https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&amp;from=readme"><img src=".github/open-in-lamp.svg" width="164" height="48" alt="Open in Lamp"></a></p>
+<p align="center"><a href="https://lamp.dev/w/D4vNNnfErs-go-to-ann-arbor"><img src=".github/play-in-browser.svg" width="220" height="48" alt="Play in your browser"></a>&nbsp;&nbsp;<a href="https://lamp.dev/?repo=https://github.com/mrubens/go-to-ann-arbor&amp;from=readme"><img src=".github/open-in-lamp.svg" width="164" height="48" alt="Open in Lamp"></a></p>
 
 ## Open it in Lamp
 

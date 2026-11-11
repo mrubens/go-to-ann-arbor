@@ -1626,8 +1626,9 @@ print(f'{len(trails)} trail pieces ({osm_trails} from OSM), {sum(1 for t in trai
 
 # --- Streetlights: the city's map of every streetlight (ckan.a2gov.org "streetlights"), each as a cobra head on a pole
 # with its arm out over the nearest street (0), or a post-top lantern on campus, in lots and along paths (1).
-# GEO.streetlights = flat [x, z, kind, heading of the arm in degrees]
+# GEO.streetlights = flat [x, z, kind (0 cobra head, 1 post-top lantern, 2 downtown's ornamental double globe), heading of the arm in degrees]
 streetlights = []
+DOWNTOWN_LIGHTS = (-900, 900, -700, 500)  # x and z bounds, m, of the downtown core
 try:
     sl = json.load(open(os.path.join(REF, 'aa_streetlights.geojson')))['features']
     drive_lines = [LineString(r['pts']) for r in drive if not r['tunnel'] and len(r['pts']) >= 2]
@@ -1655,7 +1656,11 @@ try:
                 if not road_union.contains(Point(x, z)):
                     break
             x, z = x - ux * 0.6, z - uz * 0.6
-        streetlights += [r1(x), r1(z), 1 if post else 0, round(math.degrees(math.atan2(uz, ux)))]
+        # the city's own lights in the downtown core (Main, Liberty, Washington, Fourth and Fifth, State by the
+        # Diag, Kerrytown) are its black ornamental posts with two globes, not DTE's cobra heads (2)
+        ornate = not post and pr.get('Owner') == 'City' and DOWNTOWN_LIGHTS[0] < x < DOWNTOWN_LIGHTS[1] and \
+            DOWNTOWN_LIGHTS[2] < z < DOWNTOWN_LIGHTS[3]
+        streetlights += [r1(x), r1(z), 2 if ornate else 1 if post else 0, round(math.degrees(math.atan2(uz, ux)))]
 except FileNotFoundError:
     pass
 print(f'{len(streetlights) // 4} streetlights')
