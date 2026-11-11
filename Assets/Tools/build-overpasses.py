@@ -89,21 +89,45 @@ def game_road(g):
     return best
 
 
+# the road graph's links (unnamed ramps too, which GEO.roads leaves out): [name, width, line]
+RG = GEO['roadGraph']
+LINKS = []
+for l in RG['links']:
+    a, b, ni, wd, inner = l[0], l[1], l[2], l[3], l[6]
+    pts = [(RG['nodes'][a * 2], RG['nodes'][a * 2 + 1])] + [(inner[i], inner[i + 1]) for i in range(0, len(inner), 2)] + [(RG['nodes'][b * 2], RG['nodes'][b * 2 + 1])]
+    LINKS.append((RG['names'][ni], wd, LineString(pts)))
+link_tree = STRtree([g for _, _, g in LINKS])
+
+
+def game_link(g):
+    """The road graph's link drawn along way g, for a ramp GEO.roads has no name for"""
+    mid = g.interpolate(0.5, normalized=True)
+    best, bd = None, 1.5
+    for i in link_tree.query(mid.buffer(2)):
+        name, w, r = LINKS[i]
+        d = r.distance(mid)
+        if d < bd:
+            best, bd = (name, w), d
+    return best
+
+
 fw = [w for w in ways if w['tags']['highway'] in FREEWAY]
 tree = STRtree([line[w['id']] for w in fw])
 bridges = {}  # the bridge way's id -> its entry
 for w in ways:
-    if w['tags']['highway'] in FREEWAY:
-        continue
     lw = line[w['id']]
     for i in tree.query(lw):
         f = fw[i]
+        # (two freeways crossing, US-23 over I-94: each pair once)
+        if w['tags']['highway'] in FREEWAY and f['id'] >= w['id']:
+            continue
         lf = line[f['id']]
         if set(f['nodes']) & set(w['nodes']) or not lf.crosses(lw):
             continue
         cross = lf.intersection(lw)
         for p in getattr(cross, 'geoms', [cross]):
-            if not TOWN.buffer(5).contains(p):
+            # (in town, or out where the map's data carries the freeways on: both roads in the game's, below)
+            if not TOWN.buffer(5).contains(p) and not (game_road(lf) or game_link(lf)):
                 continue
             # the one on the bridge, or the higher layer, goes over
             fb, wb = f['tags'].get('bridge') not in (None, 'no'), w['tags'].get('bridge') not in (None, 'no')
@@ -121,13 +145,13 @@ for w in ways:
             # (already a river bridge: GEO.riverBridges)
             if any(r.distance(lu.interpolate(0.5, normalized=True)) < 1 for r in RIVER):
                 continue
-            under = game_road(line[down['id']])
-            road = game_road(lu)
+            under = game_road(line[down['id']]) or game_link(line[down['id']])
+            road = game_road(lu) or (game_link(lu) if up['tags']['highway'].endswith('_link') else None)
             if not road or not under:
                 print(f'  {up["tags"].get("name") or up["tags"].get("ref")} over {down["tags"].get("name") or down["tags"].get("ref")} at {p.x:.0f}, {p.y:.0f}: not both in the game\'s roads, left out')
                 continue
             b = bridges.setdefault(up['id'], {'name': road[0], 'w': road[1], 'fw': 1 if up['tags']['highway'] in FREEWAY else 0,
-                                              'sw': sidewalks(up), 'over': [], 'at': [],
+                                              'sw': sidewalks(up), 'layer': max(1, layer(up)), 'over': [], 'at': [],
                                               'pts': [round(v, 1) for c in lu.coords for v in c]})
             if under[0] not in b['over']:
                 b['over'].append(under[0])
@@ -142,7 +166,7 @@ with open(os.path.join(ROOT, 'Web/js/overpass-data.js'), 'w') as f:
             '// The bridges where a street and a freeway cross with no junction (© OpenStreetMap contributors, ODbL):\n'
             '// { name (the road on the bridge, as GEO.roads names it), w (its width), fw (1: a freeway carriageway),\n'
             '//   sw (its sidewalks: 1 on the right of the way as its points run, 2 on the left), over (the roads under it),\n'
-            '//   at (where they cross), pts (the bridge way, flat x, z) }\n'
+            '//   layer (OSM\'s: a higher one built over a lower), at (where they cross), pts (the bridge way, flat x, z) }\n'
             'export const OVERPASSES = [\n')
     f.write(',\n'.join('  ' + json.dumps(b, separators=(',', ':')) for b in out))
     f.write('\n];\n')

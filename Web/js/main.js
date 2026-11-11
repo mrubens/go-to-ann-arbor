@@ -77,6 +77,7 @@ import { setSitSpots } from './pedestrian-system.js';
 import { buildBallDiamonds } from './ball-diamonds.js';
 import { buildFootballFields } from './football-fields.js';
 import { buildBleachers } from './bleachers.js';
+import { buildFreewayBarriers } from './freeway-barriers.js';
 import { buildBoatDocks } from './boat-docks.js';
 import { buildSkatePark } from './skate-park.js';
 import { buildParkingStructures } from './parking-structures.js';
@@ -329,6 +330,8 @@ async function initApp() {
   const diamondsPart = await live.keep('ballDiamonds', () => cityPart((g) => buildBallDiamonds(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/ball-diamonds.js', 'data/ball-diamonds.json'] });
   const footballPart = await live.keep('footballFields', () => cityPart((g) => buildFootballFields(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/football-fields.js'] });
   // the bleachers by the fields and tracks (bleachers.js)
+  // the freeways' guardrails, cable and concrete median barriers (freeway-barriers.js)
+  const barriersPart = await live.keep('freewayBarriers', () => cityPart((g) => buildFreewayBarriers(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/freeway-barriers.js', 'js/overpass-data.js'] });
   const bleachersPart = await live.keep('bleachers', () => cityPart((g) => buildBleachers(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/bleachers.js', 'data/bleachers.json'] });
   // the docks and boat launches on the river and its ponds, with boats tied up (boat-docks.js)
   const docksPart = await live.keep('boatDocks', () => cityPart((g) => buildBoatDocks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/boat-docks.js', 'data/boat-docks.json'] });
@@ -557,6 +560,7 @@ async function initApp() {
   allColliders.push(...roadWork.colliders);
   allColliders.push(...airportPart.made.colliders);
   allColliders.push(...bleachersPart.made.colliders);
+  allColliders.push(...barriersPart.made.colliders);
   // the diamonds' backstops, dugouts and fences (ball-diamonds.js)
   allColliders.push(...(diamondsPart.made.colliders || []));
   // the town's helipads, painted on the roofs (or ground) where the map has them (helipads.js)
@@ -632,7 +636,7 @@ async function initApp() {
   const animalsPart = live.keep('animals', () => cityPart((g) => (XBOX ? { update() {} } : buildAnimals(g))), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
   // the rooms behind the shopfronts' glass, near the player: furniture and people (shop-interiors.js)
   const shopRoomsPart = live.keep('shopRooms', () => cityPart((g) => createShopInteriors(g)), { inputs: [blocks], from: ['js/shop-interiors.js', 'js/shop-kits.js', 'js/shop-kits-b.js', 'js/shop-kits-c.js', 'js/shop-kit-core.js', 'js/shop-types.js'] });
-  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart];
+  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, barriersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);

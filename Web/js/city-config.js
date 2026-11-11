@@ -46,6 +46,7 @@ const inRingXZ = (ring, x, z) => {
 };
 // Lamp: the freeways' carriageways (motorway and trunk, cls 0) and their ramps (the links, cls 5, joined to one through
 // other links) as straight pieces with their half width: [ax, az, bx, bz, half], and in 100 m cells for freewayAt
+let RAMP_PIECES = [];
 const FREEWAY_PIECES = (() => {
   const RG = GEO.roadGraph, N = RG.nodes, out = [];
   const freeway = RG.links.map((l) => l[7] === 0);
@@ -56,10 +57,12 @@ const FREEWAY_PIECES = (() => {
     const l = RG.links[queue.pop()];
     for (const n of [l[0], l[1]]) for (const j of at.get(n)) if (!freeway[j] && RG.links[j][7] === 5) { freeway[j] = true; queue.push(j); }
   }
-  RG.links.forEach(([a, b, , w, , , inner], i) => {
-    if (!freeway[i]) return;
+  // (Lamp: and, apart, the other ramps' pieces, for the patches below: one whose freeway lies past the map's data)
+  RAMP_PIECES = [];
+  RG.links.forEach(([a, b, , w, , , inner, cls], i) => {
+    if (!freeway[i] && cls !== 5) return;
     const pts = [N[a * 2], N[a * 2 + 1], ...inner, N[b * 2], N[b * 2 + 1]];
-    for (let k = 0; k + 3 < pts.length; k += 2) out.push([pts[k], pts[k + 1], pts[k + 2], pts[k + 3], w / 2]);
+    for (let k = 0; k + 3 < pts.length; k += 2) (freeway[i] ? out : RAMP_PIECES).push([pts[k], pts[k + 1], pts[k + 2], pts[k + 3], w / 2]);
   });
   return out;
 })();
@@ -86,36 +89,32 @@ function freewayAt(x, z, margin = 0) {
 // Lamp: the freeways' stretches the town's edge cuts across though they run on in town. Where the city's limits (and
 // the 120 m round them) only graze a freeway, the edge's outline cut a notch across its carriageway (US-23's
 // northbound lanes by Geddes Rd: a wedge of the countryside over the road, and an edge the car stopped at as at the
-// end of the world). Each piece of carriageway (10 m at most) with any of its width or shoulder outside the outline,
-// on a freeway that's in town 40 m on either way, is taken into town as a quad over its lanes and 4 m of shoulder each
-// side, [{x, z} x 4] with its bounds (a freeway leaving town keeps the edge it crosses). They're paved as the town's
-// road deck (city-grid.js), in town for inTown, and the countryside is kept under them (outskirts.js).
+// end of the world). Each piece of carriageway (10 m at most) with any of its width or shoulder outside the outline is
+// taken into town as a quad over its lanes and 4 m of shoulder each side, [{x, z} x 4] with its bounds: a freeway
+// that grazes out of town for longer (US-23's northbound lanes by the Washtenaw cloverleaf, 190 m of them, where the car
+// stopped dead) and one leaving town, out to the end of its ways in the map's data. They're paved as the town's road
+// deck (city-grid.js), in town for inTown, and the countryside is kept under them (outskirts.js).
 const EDGE_PATCH_SHOULDER = 4;
 function freewayEdgePatches(inEdge) {
   const out = [];
-  for (const [ax, az, bx, bz, hw] of FREEWAY_PIECES) {
+  for (const [ax, az, bx, bz, hw, ramp] of [...FREEWAY_PIECES, ...RAMP_PIECES.map((p) => [...p, true])]) {
     const L = Math.hypot(bx - ax, bz - az);
     if (L < 0.5) continue;
     const dx = (bx - ax) / L, dz = (bz - az) / L, r = hw + EDGE_PATCH_SHOULDER, n = Math.ceil(L / 10);
     for (let k = 0; k < n; k++) {
       const s0 = L * k / n, s1 = L * (k + 1) / n, sm = (s0 + s1) / 2;
       const mx = ax + dx * sm, mz = az + dz * sm;
-      // (a piece in the town's grid squares well inside or outside the outline is left alone)
-      let cut = false, near = false, any = false;
+      // (a piece in the town's grid squares well inside the outline is left alone)
+      let cut = false;
       for (const s of [s0, sm, s1]) {
         for (const o of [-r, 0, r]) {
-          const m = townMaskAt(ax + dx * s - dz * o, az + dz * s + dx * o);
-          if (m === 2) near = true;
-          else if (m === 0) cut = true;
-          else any = true;
+          const x = ax + dx * s - dz * o, z = az + dz * s + dx * o, m = townMaskAt(x, z);
+          if (m === 0 || (m === 2 && !inEdge(x, z))) cut = true;
         }
       }
-      if (!near && !(cut && any)) continue;
-      cut = false;
-      for (const s of [s0, sm, s1]) {
-        for (const o of [-r, 0, r]) if (!inEdge(ax + dx * s - dz * o, az + dz * s + dx * o)) cut = true;
-      }
-      if (!cut || !inEdge(mx - dx * 40, mz - dz * 40) || !inEdge(mx + dx * 40, mz + dz * 40)) continue;
+      if (!cut) continue;
+      // (a ramp that isn't a freeway's in the map's data only where it's out of town altogether, at the data's end)
+      if (ramp && [s0, sm, s1].some((s) => inEdge(ax + dx * s, az + dz * s))) continue;
       // 1 m more at each end, so the quads overlap where they meet
       const e0 = s0 - 1, e1 = s1 + 1;
       const pts = [
@@ -200,13 +199,25 @@ function townMaskAt(x, z) {
   return c < 0 || r < 0 || c >= townMask.cols || r >= townMask.rows ? 0 : townMask.mask[r * townMask.cols + c];
 }
 const TOWN_EDGE_PATCHES = freewayEdgePatches(inEdge);
+// (Lamp: in 100 m cells, for inTown)
+const patchCells = new Map();
+for (const q of TOWN_EDGE_PATCHES) {
+  for (let i = Math.floor(q.minX / FREEWAY_CELL); i <= Math.floor(q.maxX / FREEWAY_CELL); i++) {
+    for (let j = Math.floor(q.minZ / FREEWAY_CELL); j <= Math.floor(q.maxZ / FREEWAY_CELL); j++) {
+      const k = i * 65536 + j;
+      if (!patchCells.has(k)) patchCells.set(k, []);
+      patchCells.get(k).push(q);
+    }
+  }
+}
 function inTown(x, z) {
   const c = Math.floor((x - TOWN_BOUNDS.minX) / TOWN_CELL), r = Math.floor((z - TOWN_BOUNDS.minZ) / TOWN_CELL);
-  if (c < 0 || r < 0 || c >= townMask.cols || r >= townMask.rows) return false;
-  const m = townMask.mask[r * townMask.cols + c];
+  const m = c < 0 || r < 0 || c >= townMask.cols || r >= townMask.rows ? 0 : townMask.mask[r * townMask.cols + c];
   if (m === 1) return true;
   if (m === 2 && inEdge(x, z)) return true;
-  for (const q of TOWN_EDGE_PATCHES) if (x >= q.minX && x <= q.maxX && z >= q.minZ && z <= q.maxZ && inRingXZ(q.pts, x, z)) return true;
+  for (const q of patchCells.get(Math.floor(x / FREEWAY_CELL) * 65536 + Math.floor(z / FREEWAY_CELL)) || []) {
+    if (x >= q.minX && x <= q.maxX && z >= q.minZ && z <= q.maxZ && inRingXZ(q.pts, x, z)) return true;
+  }
   return false;
 }
 // The City of Ann Arbor's official limits, as the map draws them (each outline, and each township island's)

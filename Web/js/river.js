@@ -236,6 +236,13 @@ function pierPush(x, z, radius, out) {
   return hit;
 }
 
+// Whether a street deck's side `sd` (1 its left, -1 its right) is left open between s0 and s1 metres along it, where a
+// road joins it (terrain.js joinGaps)
+function gapped(d, sd, s0, s1) {
+  for (const [side, a, b] of d.gaps || []) if (side === sd && s1 > a && s0 < b) return true;
+  return false;
+}
+
 function buildBridges(group) {
   piers = new Map();
   const decks = bridgeDecks(), colliders = [];
@@ -243,7 +250,7 @@ function buildBridges(group) {
   const concrete = [], steel = [], wood = [], rail = [];
   const fb = { planks: [], beams: [], rails: [], concrete: [] }; // the footbridges' smooth parts (footbridge())
   // the streets' bridges' parts (streetBridge): concrete, the road's asphalt, steel railings and lamp posts, lamps' glass
-  const street = { concrete, asphalt: [], steel, glass: [] };
+  const street = { concrete, asphalt: [], steel, glass: [], colliders };
   const overpasses = { n: 0, tris: 0 }; // (Lamp: the freeways' grade separations among them, for the log)
 
   for (const d of decks) {
@@ -305,22 +312,25 @@ function buildBridges(group) {
     }
     // The parapets, girders and railings along both edges are solid: thin boxes from the deck up about 1.1 m over it (a
     // car that leaves the deck can still clear them), in straight runs of up to 20 m
+    // (Lamp: and none on a side where a road joins a street's deck at its level, terrain.js joinGaps)
     const edge = d.kind === 0 ? [hw - 0.15, 0.15] : d.kind === 1 ? [hw + 0.075, 0.175] : [hw - 0.05, 0.08];
-    for (let i = 0; i + 1 < P.length;) {
-      let j = i + 1;
-      while (j + 1 < P.length && P[j + 1][2] - P[i][2] < 20 && T[j + 1][0] * T[i][0] + T[j + 1][1] * T[i][1] > 0.999) j++;
-      const ax = P[i][0], az = P[i][1], bx = P[j][0], bz = P[j][1], len = Math.hypot(bx - ax, bz - az);
-      if (len > 0.1) {
-        const ux = (bx - ax) / len, uz = (bz - az) / len, hx = len / 2, hz = edge[1];
-        const low = Math.min(P[i][3], P[j][3]), high = Math.max(P[i][3], P[j][3]);
-        for (const sd of [-1, 1]) {
+    for (const sd of [-1, 1]) {
+      const open = (i) => d.kind === 0 && gapped(d, sd, P[i][2], P[i + 1][2]);
+      for (let i = 0; i + 1 < P.length;) {
+        if (open(i)) { i++; continue; }
+        let j = i + 1;
+        while (j + 1 < P.length && !open(j) && P[j + 1][2] - P[i][2] < 20 && T[j + 1][0] * T[i][0] + T[j + 1][1] * T[i][1] > 0.999) j++;
+        const ax = P[i][0], az = P[i][1], bx = P[j][0], bz = P[j][1], len = Math.hypot(bx - ax, bz - az);
+        if (len > 0.1) {
+          const ux = (bx - ax) / len, uz = (bz - az) / len, hx = len / 2, hz = edge[1];
+          const low = Math.min(P[i][3], P[j][3]), high = Math.max(P[i][3], P[j][3]);
           const cx = (ax + bx) / 2 - uz * edge[0] * sd, cz = (az + bz) / 2 + ux * edge[0] * sd;
           const ex = Math.abs(ux) * hx + Math.abs(uz) * hz, ez = Math.abs(uz) * hx + Math.abs(ux) * hz;
           colliders.push({ minX: cx - ex, maxX: cx + ex, minZ: cz - ez, maxZ: cz + ez, minY: low - 0.05, maxY: high + 1.1,
             obb: { cx, cz, hx, hz, cs: ux, sn: -uz }, thin: true });
         }
+        i = j;
       }
-      i = j;
     }
     if (d.kind === 0) {
       const before = concrete.length + street.asphalt.length + steel.length;
@@ -457,6 +467,16 @@ function streetBridge(d, P, T, out) {
     g.translate(P[i][0], (y0 + y1) / 2, P[i][1]);
     list.push(...g.attributes.position.array);
   };
+  // (Lamp) what stands under it is solid (the player's car, bike and walker: controllers.js), as its parapets are: an
+  // oriented box at point i, `o` across the deck, `across` wide and `thick` along it, from world y0 to y1 (a column's
+  // square about it). Traffic keeps to its lanes, which no support stands in
+  const solid = (i, o, across, thick, y0, y1, thin = false) => {
+    if (!out.colliders || y1 - y0 < 0.05) return;
+    const [cx, , cz] = atW(i, o, 0), ux = T[i][0], uz = T[i][1], hx = thick / 2, hz = across / 2;
+    const ex = Math.abs(ux) * hx + Math.abs(uz) * hz, ez = Math.abs(uz) * hx + Math.abs(ux) * hz;
+    out.colliders.push({ minX: cx - ex, maxX: cx + ex, minZ: cz - ez, maxZ: cz + ez, minY: y0, maxY: y1,
+      obb: { cx, cz, hx, hz, cs: ux, sn: -uz }, ...(thin ? { thin: true } : {}) });
+  };
   // a round column at point i, `o` across the deck, from world y0 to y1
   const column = (list, i, o, r, y0, y1) => {
     if (y1 - y0 < 0.05) return;
@@ -485,7 +505,10 @@ function streetBridge(d, P, T, out) {
   }
   for (const s of [1, -1]) {
     const one = (o0, y0, o1, y1) => {
-      for (let i = 0; i < n - 1; i++) quad(out.concrete, at(i, o0 * s, y0), at(i, o1 * s, y1), at(i + 1, o1 * s, y1), at(i + 1, o0 * s, y0));
+      for (let i = 0; i < n - 1; i++) {
+        if (gapped(d, s, P[i][2], P[i + 1][2])) continue; // (Lamp: open where a road joins it)
+        quad(out.concrete, at(i, o0 * s, y0), at(i, o1 * s, y1), at(i + 1, o1 * s, y1), at(i + 1, o0 * s, y0));
+      }
     };
     if (walk[s]) {
       one(curb, 0.0, curb, 0.2);                 // the curb
@@ -497,8 +520,8 @@ function streetBridge(d, P, T, out) {
       one(hw - 0.3, 0.08, hw - 0.2, 0.33);
       one(hw - 0.2, 0.33, hw - 0.12, 0.9);
     }
+    one(hw - 0.35, 0.9, hw, 0.9);                // the coping
   }
-  along(out.concrete, hw - 0.35, 0.9, hw, 0.9);              // the coping
   // the deck's faces from the parapets' tops down to its underside, and the underside, where it stands clear of the
   // ground (a fascia over open air; on fill the retaining walls carry the faces on down)
   for (let i = 0; i + 1 < n; i++) {
@@ -509,14 +532,20 @@ function streetBridge(d, P, T, out) {
     for (const s of [1, -1]) quad(out.concrete, at(i, (hw + 0.04) * s, 0.72), at(i, (hw + 0.04) * s, 0.62), at(i + 1, (hw + 0.04) * s, 0.62), at(i + 1, (hw + 0.04) * s, 0.72));
   }
   // a steel railing on the parapets: a top rail, and posts every 2.5 m
-  along(out.steel, hw - 0.18, 1.12, hw - 0.18, 1.18);
-  along(out.steel, hw - 0.18, 1.12, hw - 0.12, 1.12);
+  for (const s of [1, -1]) {
+    for (let i = 0; i < n - 1; i++) {
+      if (gapped(d, s, P[i][2], P[i + 1][2])) continue;
+      quad(out.steel, at(i, (hw - 0.18) * s, 1.12), at(i, (hw - 0.18) * s, 1.18), at(i + 1, (hw - 0.18) * s, 1.18), at(i + 1, (hw - 0.18) * s, 1.12));
+      quad(out.steel, at(i, (hw - 0.18) * s, 1.12), at(i, (hw - 0.12) * s, 1.12), at(i + 1, (hw - 0.12) * s, 1.12), at(i + 1, (hw - 0.18) * s, 1.12));
+    }
+  }
   for (let k = 0; k <= d.length / 2.5; k++) {
     const s = k * 2.5;
     let i = 0;
     while (i + 2 < n && P[i + 1][2] < s) i++;
     const f = Math.max(0, Math.min(1, (s - P[i][2]) / ((P[i + 1][2] - P[i][2]) || 1)));
     for (const side of [1, -1]) {
+      if (gapped(d, side, s - 0.1, s + 0.1)) continue;
       const g = new THREE.BoxGeometry(0.06, 0.28, 0.06).toNonIndexed();
       const x = P[i][0] + (P[i + 1][0] - P[i][0]) * f - T[i][1] * (hw - 0.15) * side, z = P[i][1] + (P[i + 1][1] - P[i][1]) * f + T[i][0] * (hw - 0.15) * side;
       g.translate(x, P[i][3] + (P[i + 1][3] - P[i][3]) * f + 1.04, z);
@@ -528,10 +557,23 @@ function streetBridge(d, P, T, out) {
   for (let i = 0; i + 1 < n; i++) {
     if (!(fill[i] || fill[i + 1]) || open[i] && open[i + 1]) continue;
     for (const s of [1, -1]) {
+      if (gapped(d, s, P[i][2], P[i + 1][2])) continue;
       quad(out.concrete, at(i, hw * s, -DECK_DEPTH), atW(i, hw * s, G[i] - 0.4), atW(i + 1, hw * s, G[i + 1] - 0.4), at(i + 1, hw * s, -DECK_DEPTH));
     }
   }
 
+  // (Lamp) a bent's columns across the deck at point i, and whether one stands in a road passing under an overpass
+  // (deck.keep: its lanes and shoulders)
+  const bentCols = (i) => {
+    const cols = Math.max(2, Math.round((hw * 2) / 6.5)), reach = hw - 1.6;
+    return Array.from({ length: cols }, (_, k) => -reach + (2 * reach * k) / (cols - 1));
+  };
+  // (and out of any other road near it, d.crossers: a ramp running by its end at the ground)
+  const inRoadUnder = (x, z, pad = 0.6) => [...(d.keep || []), ...(d.crossers || [])].some(([ax, az, bx, bz, r]) => {
+    const fx = bx - ax, fz = bz - az, m2 = fx * fx + fz * fz || 1, u = Math.min(1, Math.max(0, ((x - ax) * fx + (z - az) * fz) / m2));
+    return Math.hypot(x - ax - fx * u, z - az - fz * u) < r + pad;
+  });
+  const bentClear = (i) => bentCols(i).every((o) => { const [x, , z] = atW(i, o, 0); return !inRoadUnder(x, z); });
   // Where it's open: a bank seat at each end of each open run, and between them piers in the water and bents on land
   const supports = []; // { i, kind: 'seat' | 'pier' | 'bent' }
   const kept = (i) => !P[i][5] && !P[i][6];
@@ -547,8 +589,12 @@ function streetBridge(d, P, T, out) {
       const s = P[a][2] + (span * k) / count;
       let i = a;
       while (i < b && P[i][2] < s) i++;
-      // never in a road or on a railway it crosses: the nearest point either way that isn't
+      // never in a road or on a railway it crosses: the nearest point either way that isn't (Lamp: and, under an
+      // overpass, where none of a bent's columns stands in the road under it either, which at a skewed crossing they did:
+      // I-94's lanes under Platt and E Ellsworth, M-14's under Dexter Rd; failing that, as before, its columns in the
+      // road left out below)
       let best = -1;
+      for (let m = 0; m <= 3 && best < 0; m++) for (const c of [i - m, i + m]) if (best < 0 && c > a && c < b && kept(c) && (water[c] || bentClear(c))) best = c;
       for (let m = 0; m <= 3 && best < 0; m++) for (const c of [i - m, i + m]) if (best < 0 && c > a && c < b && kept(c)) best = c;
       if (best >= 0 && !supports.some((q) => q.i === best)) supports.push({ i: best, kind: water[best] ? 'pier' : 'bent' });
     }
@@ -563,9 +609,12 @@ function streetBridge(d, P, T, out) {
     for (const j of [i - 1, i + 1]) if (j >= 0 && j < n) foot = Math.min(foot, G[j]);
     if (sp.kind === 'seat') {
       if (top - foot < 0.3) continue;
+      // (Lamp: none where another road runs through it at the ground, under the deck's end)
+      if ([-1, -0.5, 0, 0.5, 1].some((f) => { const [x, , z] = atW(i, f * (hw + 0.25), 0); return inRoadUnder(x, z, 0.3); })) continue;
       // the seat across the deck, with a bearing shelf, and short wing walls back into the bank
       box(out.concrete, i, hw * 2 + 0.5, 1.3, foot - 0.6, top);
       box(out.concrete, i, hw * 2 + 0.5, 1.7, top - 0.35, top);
+      solid(i, 0, hw * 2 + 0.5, 1.7, foot - 0.6, top);
       if (water[i] || riverDepth(P[i][0], P[i][1]) > 0.02 || foot < (waterLevel(P[i][0], P[i][1]) ?? -Infinity) + 0.6) {
         addPier({ x: P[i][0], z: P[i][1], ux: T[i][0], uz: T[i][1], across: hw + 0.25, along: 0.85 });
       }
@@ -576,12 +625,20 @@ function streetBridge(d, P, T, out) {
       box(out.concrete, i, across, thick, bed, top - 0.55);
       for (const s of [1, -1]) column(out.concrete, i, s * across / 2, thick / 2, bed, top - 0.55);
       box(out.concrete, i, hw * 2 - 0.6, 1.5, top - 0.6, top);
+      solid(i, 0, across + thick, thick, bed, top - 0.55);
+      solid(i, 0, hw * 2 - 0.6, 1.5, top - 0.6, top);
       if (sp.kind === 'pier') addPier({ x: P[i][0], z: P[i][1], ux: T[i][0], uz: T[i][1], across: across / 2 + thick / 2, along: thick / 2 });
     } else {
       // a bent: round columns under a cap beam
-      const cols = Math.max(2, Math.round((hw * 2) / 6.5)), reach = hw - 1.6;
-      for (let k = 0; k < cols; k++) column(out.concrete, i, -reach + (2 * reach * k) / (cols - 1), 0.42, G[i] - 0.4, top - 0.6);
+      for (const o of bentCols(i)) {
+        // (from the ground at its own foot, which on a bank may lie lower than under the deck's middle)
+        const [fx, , fz] = atW(i, o, 0), foot = Math.min(G[i], riverbedHeight(fx, fz)) - 0.4;
+        if (inRoadUnder(fx, fz)) continue;
+        column(out.concrete, i, o, 0.42, foot, top - 0.6);
+        solid(i, o, 0.9, 0.9, foot, top - 0.6, true);
+      }
       box(out.concrete, i, hw * 2 - 0.8, 1.1, top - 0.65, top);
+      solid(i, 0, hw * 2 - 0.8, 1.1, top - 0.65, top);
     }
   }
 

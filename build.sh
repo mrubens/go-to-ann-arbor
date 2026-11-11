@@ -89,6 +89,8 @@ if [[ -z "$PLAYER" ]]; then
   if [[ "$PLACE" != "ios" && -n "${LAMP_SWIFT_BUILT:-}" && -f .build/lamp-mac-bin ]] && BIN="$(<.build/lamp-mac-bin)" && [[ -x "$BIN" ]]; then
     :
   else
+    # Lamp's own Swift is kept beside what it builds, written before each build of Lamp's.
+    if [[ ! -f build/lamp-swift/LampSupport.swift ]]; then echo "Lamp's own Swift isn't in build/lamp-swift: build the app from Lamp, which writes it first." >&2; exit 1; fi
     BIN="$(swift build "${FLAGS[@]}" --show-bin-path)/NewYork3"
     swift build "${FLAGS[@]}" 2>&1
     [[ "$PLACE" == "ios" ]] || print -r -- "$BIN" > .build/lamp-mac-bin

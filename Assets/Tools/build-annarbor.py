@@ -102,6 +102,19 @@ _loops = [g for g in getattr(_out, 'geoms', [_out]) if g.length > 60 and _rim.co
 if _loops:
     LAND = Polygon(max(parts(unary_union([LAND] + [g.buffer(55, cap_style=2) for g in _loops]).buffer(30, join_style=2).buffer(-30, join_style=2).simplify(4)), key=lambda p: p.area).exterior)
     print(f'freeway stretches taken into town: {len(_loops)}, {sum(g.length for g in _loops):.0f} m')
+# (Lamp) and out to the freeways where they run just outside the line (the US-23 / M-14 interchanges at the north-east
+# and north, I-94 and US-23's at the south-east): the town filled from its edge to any freeway within 600 m of it and
+# 45 m past its carriageways and ramps, closing gaps up to ~640 m across, so the freeway is the town's edge there; and a
+# corridor 45 m either side along every freeway the map's data carries on out of town, so the lanes run on through the
+# town's ground and lawns, not the countryside's
+if _fw:
+    _F = unary_union(_fw)
+    _near = _F.intersection(LAND.buffer(600))
+    _grown = unary_union([LAND, _near.buffer(45)]).buffer(320, join_style=1).buffer(-320, join_style=1)
+    _fill = _grown.difference(LAND).intersection(_near.buffer(55))
+    _before = LAND.area
+    LAND = Polygon(max(parts(unary_union([LAND, _fill, _F.buffer(45, cap_style=2)]).buffer(20, join_style=2).buffer(-20, join_style=2).simplify(4)), key=lambda p: p.area).exterior)
+    print(f'filled out to the freeways: {(LAND.area - _before) / 1e6:.2f} km2')
 # and streets asked for whole that run out past the line (Elizabeth Road, west of Maple), with ~90 m each side for the
 # houses on them; their houses come from OpenStreetMap where the city has no footprints (Buildings below)
 WHOLE_STREETS = ('Elizabeth Road',)
@@ -326,7 +339,9 @@ for w in ways:
     pts = way_pts(w)
     if len(pts) < 2:
         continue
-    if not LineString(pts).intersects(LAND.buffer(150)):
+    # (Lamp: the freeways and their ramps whole, as far as the map's data has them, so they run on out past the town's
+    # edge into the country rather than ending 150 m past it: city-config.js keeps their lanes drivable and paved)
+    if not LineString(pts).intersects(LAND.buffer(150)) and t.get('highway') not in ('motorway', 'trunk', 'motorway_link', 'trunk_link'):
         continue
     wd, lanes, d, hw = road_spec(t)
     park = 0 if hw else park_spec(t, pts)
