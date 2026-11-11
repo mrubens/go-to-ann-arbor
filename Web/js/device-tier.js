@@ -11,9 +11,9 @@ import device from '../lamp-device.js';
 const TIERS = {
   // the ground and houses within 1.5 km built, the rest as the player comes near: built whole, the city's ground drew
   // ~14M triangles of hills out to the horizon every frame and held a Mac with any GPU near 30 frames a second
-  full: { name: 'full', stream: 1500, shadows: true, bloom: true, antialias: true, scale: 1, traffic: 1, people: 1, farCut: 1, outskirts: true },
+  full: { name: 'full', stream: 1500, shadows: true, bloom: true, ao: true, antialias: true, scale: 1, traffic: 1, people: 1, farCut: 1, outskirts: true },
   // the ground and houses within 950 m built, the rest as the player comes near
-  light: { name: 'light', stream: 950, shadows: true, bloom: true, antialias: true, scale: 0.85, traffic: 0.75, people: 0.75, farCut: 0.75, outskirts: true },
+  light: { name: 'light', stream: 950, shadows: true, bloom: true, ao: true, antialias: true, scale: 0.85, traffic: 0.75, people: 0.75, farCut: 0.75, outskirts: true },
   // the Xbox's lean city (below), held tighter still: iPhone Safari ends a page at well under 2 GB, and the whole of
   // 1 km built (and the ground cut within 10 cm) came to more than that once the drafted houses and bike routes came in.
   // Within 500 m, let go of 120 m beyond that (it crashed after a few minutes of driving keeping 300 m), the ground
@@ -104,7 +104,7 @@ async function chooseTier() {
   Object.assign(TIER, TIERS[name]);
   // Firefox's macOS WebGL2 backend stalls heavily on 4x MSAA RGBA16F offscreen blits + 11-pass HDR bloom
   if (FIREFOX && !asked) {
-    Object.assign(TIER, { bloom: false, antialias: false, scale: Math.min(TIER.scale, 0.75), farCut: Math.min(TIER.farCut, 0.65) });
+    Object.assign(TIER, { bloom: false, ao: false, antialias: false, scale: Math.min(TIER.scale, 0.75), farCut: Math.min(TIER.farCut, 0.65) });
   }
   log(`[tier] ${name}${why ? ` (${why})` : ''}${memory ? ` (${Math.round(memory)} GB)` : ''}${TOUCH_DEVICE ? ', a touch device' : ''}${XBOX ? ', an Xbox' : ''}${FIREFOX ? ', firefox' : ''}`);
   return TIER;

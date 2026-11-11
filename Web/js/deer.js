@@ -6,7 +6,7 @@
 //
 // THE RULE ABOVE EVERYTHING (animals.js): no deer is ever struck, hurt or knocked down by anything. They aren't in the
 // colliders, the knock-downs or the ragdolls, and never make a thud: anything coming at one sends it off well before
-// it arrives, and if something still reaches one it quietly vanishes.
+// it arrives, and one something still reaches bounds off; one leaves only out of sight.
 //
 // The model is lofted rings round its bones, skinned (animal-models.js' Body), its winter coat gray-brown with the white
 // throat patch, muzzle band, eye ring, belly and the tail's underside; the buck carries his antlers.
@@ -385,17 +385,17 @@ function createDeer(group, { parkAt, treesNear }) {
       const weigh = t.foot ? (t.player && t.speed < 0.35 ? 1.6 : 1) : t.loud ? 0.55 : 0.8;
       if (dd * weigh < nd) { nd = dd * weigh; near = t; }
     }
-    // the rule: anything that reaches one (it couldn't get away), it's gone, untouched
-    if (near && Math.hypot(near.x - d.x, near.z - d.z) < 3 + (near.r || 1)) { d.mode = 'gone'; return; }
-    // fled or leaving, it's let go only where no one sees it go: out of the view, far off, or in among the trees
+    // (Lamp: anything that reaches one sends it off at a bound, as anything coming close does (below); it used to vanish
+    // there and then, before the player's eyes. Nothing disappears in view)
+    // fled or leaving, it's let go only where no one sees it go: out of the view or far off
     if (d.mode === 'flee') {
       d.timer -= dt;
-      if (d.timer <= 0 && (hidden(d) || d.timer < -15)) d.mode = 'gone';
+      if (d.timer <= 0 && hidden(d)) d.mode = 'gone';
       return;
     }
     if (d.mode === 'leave') {
       d.timer -= dt;
-      if (hidden(d) || Math.hypot(d.tx - d.x, d.tz - d.z) < 1.2 || d.timer <= 0) d.mode = 'gone';
+      if (hidden(d)) d.mode = 'gone';
       return;
     }
     if (nd < 17) {

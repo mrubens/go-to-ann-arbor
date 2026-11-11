@@ -70,21 +70,23 @@ const TIME_PRESETS = {
     id: 'midday',
     sunDir: new THREE.Vector3(-0.10, 0.82, 0.56).normalize(),
     sunColor: 0xfff5e8,
-    sunIntensity: 6.0, // Lamp: softer than it was (midday read too bright)
-    hemiSky: 0xaad2ff,
+    // the sun carries the day and the sky's fill is the baked sky's (envIntensity) more than the hemisphere's: with both
+    // at full the shade sat only ~1.5 stops under the sun and the whole street read flat and washed out
+    sunIntensity: 6.3,
+    hemiSky: 0xc8d8ec,
     hemiGround: 0xb89678, // Warm sunlit masonry & pavement bounce
-    hemiIntensity: 1.85,
+    hemiIntensity: 1.0,
     skyTop: 0x225ea8,
     skyHorizon: 0xc8dff5,
     fogColor: 0xc6dcf2,
     fogDensity: 0.00018,
     interiorGlow: 0.24,
     roadWetness: 0.08,
-    envIntensity: 0.58,
+    envIntensity: 0.42,
     canyonBounce: 0.58,
-    turbidity: 6.5,
+    turbidity: 3.5, // clearer air: the horizon (and the haze, which takes its color) no longer goes white
     rayleigh: 2.4,
-    mieCoefficient: 0.006,
+    mieCoefficient: 0.004,
     mieDirectionalG: 0.86,
     cloudCoverage: 0.32,
     cloudDensity: 0.35,
@@ -93,19 +95,24 @@ const TIME_PRESETS = {
   },
   twilight: {
     id: 'twilight',
-    sunDir: new THREE.Vector3(-0.87, 0.36, 0.32).normalize(),
-    sunColor: 0xff9466,
-    sunIntensity: 3.1,
-    hemiSky: 0x4c6ca8,
-    hemiGround: 0x6e5048,
-    hemiIntensity: 1.5, // Lamp: brighter fill (the game was too dark)
+    // the sun just down: what lights the streets is the west's cool afterglow, low and faint, not a sunset on the
+    // facades under a dark sky
+    sunDir: new THREE.Vector3(-0.92, 0.08, 0.34).normalize(),
+    sunColor: 0xa9b6e6,
+    sunIntensity: 0.5,
+    // the sky's own sun higher than the light's, so the sky keeps its blue overhead and its glow low in the west
+    // (with the sun's true 5 degrees the sky model goes nearly black)
+    skySunDir: new THREE.Vector3(-0.87, 0.36, 0.32).normalize(),
+    hemiSky: 0x5a7cc4,
+    hemiGround: 0x5e4c50,
+    hemiIntensity: 1.15, // the sky's blue light is what's left on the streets
     skyTop: 0x102248,
     skyHorizon: 0xb86b6c,
     fogColor: 0x353c58,
     fogDensity: 0.00032,
     interiorGlow: 1.25,
-    roadWetness: 0.55,
-    envIntensity: 0.36,
+    roadWetness: 0.1, // dry unless it has rained (weather.js wets the roads under "Now")
+    envIntensity: 0.3,
     canyonBounce: 0.32,
     turbidity: 9.5,
     rayleigh: 3.4,
@@ -113,8 +120,8 @@ const TIME_PRESETS = {
     mieDirectionalG: 0.90,
     cloudCoverage: 0.40,
     cloudDensity: 0.42,
-    skyExposure: 0.115,
-    nightFactor: 0.28
+    skyExposure: 0.1,
+    nightFactor: 0.5
   },
   midnight: {
     id: 'midnight',
@@ -196,7 +203,7 @@ function presetForSun({ alt, az }) {
   // (and the color grade blended between the two looks, as the rest is: post-processing.js applyPreset)
   const p = { id: 'now', look: t < 0.5 ? a.id : b.id, lookBlend: [a.id, b.id, t] };
   for (const k of Object.keys(a)) {
-    if (k === 'id' || k === 'sunDir') continue;
+    if (k === 'id' || k === 'sunDir' || k === 'skySunDir') continue;
     p[k] = /Color|^hemi(Sky|Ground)$|^sky(Top|Horizon)$/.test(k) ? mixColor(a[k], b[k], t) : a[k] + (b[k] - a[k]) * t;
   }
   // the sun from its real bearing, kept a little above the horizon so it still lights the streets; under the

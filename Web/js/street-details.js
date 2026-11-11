@@ -18,6 +18,8 @@ import {
 } from './city-config.js';
 import { cityUniforms, createSteamMaterial, createTreeGrateMaterial } from './tsl-materials.js';
 import { createTreeField, createShrubs } from './trees.js';
+import { b2bNearest, B2B_TREAD } from './b2b-route.js';
+import { log } from '../lamp-game.js';
 import { REAL_TREES, REAL_TREE_KINDS, REAL_TREE_HEIGHTS } from './tree-geodata.js';
 import { placeStreetTrees, dropCanopyFill } from './tree-placements.js';
 import { yardTreeSites, yardLeaves } from './drafted-yards.js';
@@ -1376,6 +1378,29 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   }
   const keptTrees = dropCanopyFill(treePositions);
   keptTrees.push(...champions);
+  // Lamp: none on the Border to Border Trail (b2b-route.js): a tree whose trunk stands within its half width and 0.6 m
+  // of its line is taken off it: a real one (surveyed, a champion, an Open Facades yard tree) stepped just clear of its
+  // edge, a fill tree left out
+  let offTrail = 0, steppedOff = 0;
+  keepWhere(keptTrees, (t) => {
+    const n = b2bNearest(t.x, t.z, 4, true);
+    const clear = n ? (n.way.width || B2B_TREAD) / 2 + 0.6 : 0;
+    if (!n || n.d >= clear) return true;
+    if (!(t.height || t.surveyedPark || t.champion)) { offTrail++; return false; }
+    steppedOff++;
+    let ox = t.x - n.x, oz = t.z - n.z;
+    const l = Math.hypot(ox, oz);
+    if (l > 0.05) { ox /= l; oz /= l; } else { ox = -n.tz; oz = n.tx; }
+    t.x = n.x + ox * (clear + 0.3); t.z = n.z + oz * (clear + 0.3);
+    return true;
+  });
+  log(`[trees] off the Border to Border Trail: ${offTrail} left out, ${steppedOff} stepped clear of it`);
+  // every tree's crown from above (x, z, radius), for the town's picture under the far ground (outskirts.js paintTown)
+  const canopy = new Float32Array(keptTrees.length * 3);
+  keptTrees.forEach((t, i) => {
+    canopy[i * 3] = t.x; canopy[i * 3 + 1] = t.z;
+    canopy[i * 3 + 2] = t.spread ? t.spread * 0.5 : Math.max(2.5, (t.height || 11 * (t.scale ?? 1)) * 0.3);
+  });
   const treeField = createTreeField(scene, keptTrees, colliders,
     { stream: TIER.stream, at: TIER.stream ? groundStreamCenter() : null });
   group.add(treeField.group);
@@ -1653,7 +1678,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   for (const [kind, r, height] of [['flagpole', 0.1, 9], ['grill', 0.25, 1.1], ['fountain', 0.25, 1], ['mailbox', 0.3, 1.3], ['rack', 0.4, 0.8]]) {
     for (const t of furnSites[kind]) obstacles.push({ x: t.x, z: t.z, r, kind, height, fixed: true });
   }
-  return { group, footprints, signalClock, signalIntersections, audioSignals, treeField, obstacles, update };
+  return { group, footprints, signalClock, signalIntersections, audioSignals, treeField, obstacles, update, canopy };
 }
 
 export { buildStreetDetails, createTrafficSignalLensMaterial };

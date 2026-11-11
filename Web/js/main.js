@@ -3,6 +3,7 @@ import { game, hot, save, load, log, asset, input, onInput, label, glyph, pendin
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, positionView, metalness, roughness, vec2, vec3, smoothstep } from 'three/tsl';
 import { ssr } from 'three/addons/tsl/display/SSRNode.js';
+import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { createPostProcessing } from './post-processing.js';
 import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
 import { CarRadio } from './radio.js';
@@ -11,7 +12,7 @@ import { getLocationLabel, isTypingInField, ROADS, LANDMARKS, TELEPORT_LOCATIONS
 import { buildKayakLaunches } from './kayak-launches.js';
 import { buildLivery } from './gallup-livery.js';
 import { buildCityGrid, restoreCityGrid } from './city-grid.js';
-import { buildOutskirts } from './outskirts.js';
+import { buildOutskirts, paintTown } from './outskirts.js';
 import { buildLandmarks } from './landmarks.js';
 import { buildRailways } from './railways.js';
 import { pumpSpots } from './gas-stations.js';
@@ -20,7 +21,7 @@ import { buildCityBlocks } from './buildings.js';
 import { setDistricts, setNeighborhoods } from './districts.js';
 import { setRoofShapes, setBuildingLooks } from './houses.js';
 import { buildStreetDetails } from './street-details.js';
-import { createTrafficSystem, createHighwayTraffic } from './traffic.js';
+import { createTrafficSystem, createHighwayTraffic, freewayLanes, VEHICLE_RADIUS } from './traffic.js';
 import { loadCityClosures } from './city-closures.js';
 import { buildRoadPaint } from './road-paint.js';
 import { buildTrafficControls } from './traffic-controls.js';
@@ -81,6 +82,8 @@ import { buildSkatePark } from './skate-park.js';
 import { buildParkingStructures } from './parking-structures.js';
 import { buildMtbTrails } from './mtb-trails.js';
 import { buildBikeRoutes } from './bike-routes.js';
+import { buildB2BTrail } from './b2b-trail.js';
+import { B2B_NAME, onB2B } from './b2b-route.js';
 import { dressForSnow, loadSnowCover } from './snow-cover.js';
 import { createMoon } from './moon.js';
 import { createStars } from './sky-stars.js';
@@ -184,6 +187,7 @@ async function initApp() {
     streetLights: false,
     reflections: false,
     bloom: TIER.bloom,
+    ao: !!TIER.ao,
     outskirts: TIER.outskirts
   };
   // Kept through a change: a new one would compile every shader again.
@@ -332,6 +336,8 @@ async function initApp() {
   const skatePart = await live.keep('skatePark', () => cityPart((g) => buildSkatePark(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/skate-park.js', 'data/skate-park.json'] });
   // what's on the mountain bike trails: rocks, roots, logs, berms, tabletops and trail posts (mtb-trails.js)
   const mtbPart = await live.keep('mtbTrails', () => cityPart((g) => buildMtbTrails(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/mtb-trails.js', 'data/mtb-trails.json'] });
+  // the Border to Border Trail's fresh asphalt and centre line, its wayfinding signs and markers (b2b-trail.js)
+  const b2bPart = await live.keep('b2bTrail', () => cityPart((g) => buildB2BTrail(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/b2b-trail.js', 'js/b2b-route.js', 'js/b2b-data.js'] });
   // Ann Arbor Municipal Airport south of town, with helicopters parked by the FBO to fly (airport.js)
   const airportPart = live.keep('airport', () => cityPart((g) => createAirport(g)), { inputs: [heights], from: ['js/airport.js', 'js/airport-data.js'] });
   // Lamp: the moon in its real phase (moon.js)
@@ -420,7 +426,13 @@ async function initApp() {
   ], details.made.signalIntersections, await closuresReady)), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, details, seatingPart], from: [CITY_MAP, 'data/city-closures.json', 'js/pedestrian-system.js', 'js/road-network.js', 'js/curb-parking.js'] });
   const trafficSystem = traffic.made;
   markInit('traffic');
-  const highway = live.keep('highwayTraffic', () => cityPart((g) => createHighwayTraffic(g, grid.made.highwayLanes)), { inputs: [grid], from: [CITY_MAP] });
+  // Lamp: the far fleet on the freeways (US-23, I-94, M-14), beyond the near traffic's reach round the player: thinner
+  // and not as far out on the lighter tiers
+  const highway = live.keep('highwayTraffic', () => cityPart((g) => createHighwayTraffic(g, freewayLanes(traffic.made.network), {
+    hideNear: VEHICLE_RADIUS - 20,
+    gapScale: TIER.name === 'full' ? 1 : TIER.name === 'light' ? 1.25 : TIER.name === 'slow' ? 2 : 3,
+    farCull: 1600 * Math.max(0.5, TIER.farCut)
+  })), { inputs: [grid, traffic], from: [CITY_MAP, 'js/road-network.js'] });
   const highwayTraffic = highway.made;
   await showLoadingStage('Adding road markings...');
   const roadPaint = await live.keep('roadPaint', () => cityPart(async (g) => {
@@ -620,7 +632,7 @@ async function initApp() {
   const animalsPart = live.keep('animals', () => cityPart((g) => (XBOX ? { update() {} } : buildAnimals(g))), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
   // the rooms behind the shopfronts' glass, near the player: furniture and people (shop-interiors.js)
   const shopRoomsPart = live.keep('shopRooms', () => cityPart((g) => createShopInteriors(g)), { inputs: [blocks], from: ['js/shop-interiors.js', 'js/shop-kits.js', 'js/shop-kits-b.js', 'js/shop-kits-c.js', 'js/shop-kit-core.js', 'js/shop-types.js'] });
-  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart];
+  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -649,7 +661,7 @@ async function initApp() {
   const coverWithSnow = () => loadSnowCover().then((cover) => {
     if (cover <= 0) return;
     poolsPart.group.traverse((o) => { if (o.isMesh && /^(Pool floor|Pool walls|Lane ropes)/.test(o.name)) for (const m of [o.material].flat()) m.userData.snow = 0; });
-    for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, poolsPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, parkingPart, airportPart]) dressForSnow(part.group);
+    for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, poolsPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, b2bPart, parkingPart, airportPart]) dressForSnow(part.group);
   });
   coverWithSnow();
   // Ann Arbor's date, checked about once a minute by the clock and as the page is shown again (a session left running
@@ -737,8 +749,10 @@ async function initApp() {
     person: { x: 845, z: 242, heading: Math.atan2(797 - 845, 23 - 242) },
     // Main St at William, in the northbound lane, looking up downtown's shopfronts
     car: { x: -23, z: 228, heading: Math.atan2(14.8, -378) },
-    // South University's eastbound bike lane, campus on the left
-    cyclist: { x: 660, z: 529, heading: Math.PI / 2 },
+    // on the Border to Border Trail in Gallup Park, the Huron on the right and the trail's sign ahead (b2b-route.js),
+    // 15 m back along it from the Teleport menu's "Border to Border Trail" arrival (on that very spot, the bike left
+    // there pushed the next arrival off the path, onto the bench beside it)
+    cyclist: { x: 3912.1, z: 520.3, heading: TELEPORT_LOCATIONS.b2b.heading },
     // in a helicopter on the airport's apron, in the row by the FBO (airport.js; `atAirport` takes the middle one)
     helicopter: { x: 130, z: 6075, heading: 0.15, atAirport: 1, face: { x: -29, z: 1529 } },
     // in the Argo Cascades' channel just above its first drop, facing down it (cascades.js)
@@ -940,6 +954,8 @@ async function initApp() {
     log(`Knocked someone down at ${speed.toFixed(1)} m/s`);
   });
   // the player hit by a car, on foot or on the bike
+  // a cyclist on the Border to Border Trail ringing to pass (traffic.js, b2b-riders.js)
+  trafficSystem.setTrailBellListener?.((at) => audioSystem?.trailBell(at));
   trafficSystem.setPlayerStruckListener?.((vx, vz, speed, type, who = 0) => {
     const cm = who && split.second ? split.second.cm : controllerManager;
     const at = cm.getActiveEntity().position;
@@ -1004,13 +1020,24 @@ async function initApp() {
   // 5. TSL RenderPipeline with Half-Res Screen Space Reflections (SSRNode), Bloom & Filmic Toning
   //    Fade out distant and matte surfaces so SSR spends its rays on visible glossy reflections.
   await showLoadingStage('Setting up visual effects, map and interface...');
-  let renderPipeline, scenePass, colorGrade, ssrPass = null, sceneMRT = null;
+  let renderPipeline, scenePass, colorGrade, ssrPass = null, sceneMRT = null, aoPass = null;
   if (!QUALITY.reflections) {
     scenePass = pass(scene, cameraSystem.camera);
     scenePass.renderTarget.storeMultisampledColorBuffer = false;
     scenePass.renderTarget.storeMultisampledDepthBuffer = false;
-    scenePass.renderTarget.resolveDepthBuffer = false;
-    colorGrade = createPostProcessing(renderer, scenePass.getTextureNode('output'), vec3(0), { bloom: QUALITY.bloom });
+    // Ambient occlusion (device-tier.js `ao`: full and light): ground-truth AO at half size from the scene's depth alone
+    // (its normals worked out from the depth, so no second target), 8 samples within 2 m: cars, people, benches and
+    // bins sit on the ground and the joins of walls, porches and kerbs darken. Its radius is in metres, so far off it
+    // shrinks under a pixel and fades by itself
+    scenePass.renderTarget.resolveDepthBuffer = QUALITY.ao;
+    if (QUALITY.ao) {
+      aoPass = ao(scenePass.getTextureNode('depth'), null, cameraSystem.camera);
+      aoPass.resolutionScale = 0.5;
+      aoPass.samples.value = 8;
+      aoPass.radius.value = 2.0;
+      aoPass.scale.value = 2.5;
+    }
+    colorGrade = createPostProcessing(renderer, scenePass.getTextureNode('output'), vec3(0), { bloom: QUALITY.bloom, ao: aoPass });
     renderPipeline = new THREE.RenderPipeline(renderer, colorGrade.outputNode);
   } else {
   scenePass = pass(scene, cameraSystem.camera);
@@ -1076,6 +1103,8 @@ async function initApp() {
   touchControls.onGetInOut = () => getInOrOut();
   // the touch horn (shown while driving a car), as B on the keyboard
   touchControls.onHorn = () => { if (!mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity()); };
+  // and the siren's (shown in a cruiser or the ambulance), as L
+  touchControls.onSiren = () => { if (!mapSystem.isFullMapOpen) toggleSiren(); };
 
   // the frame rate, between the name and the GitHub link (made here too, for a page opened before it was in index.html)
   if (!document.getElementById('hud-fps')) {
@@ -1108,7 +1137,9 @@ async function initApp() {
     onMapInput: (input, dt) => mapSystem.gamepad(input, dt),
     onRadio: (dir) => carRadio.tune(dir),
     // B, as B on the keyboard (not over the map): the horn, or the bicycle's bell
-    onHorn: () => { if (!mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity()); }
+    onHorn: () => { if (!mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity()); },
+    // the pad's up, as L: a cruiser's or the ambulance's lights and siren
+    onSiren: () => { if (!mapSystem.isFullMapOpen) toggleSiren(); }
   });
   const carRadio = new CarRadio();
   // split screen's state (see showSplit), here before anything that reads it
@@ -1125,24 +1156,25 @@ async function initApp() {
   // Lamp's pad). It shows the half for what the player is holding, named and drawn by Lamp's runtime.
   const orbit = { keys: ['Drag'], pad: [STICK.RIGHT], does: 'Orbit' };
   const controlHints = {
-    person: [{ keys: ['KeyW', 'KeyS'], does: 'Walk / Run' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
-      { pad: [STICK.LEFT], does: 'Walk / Run & turn' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Jump' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }],
-    car: [{ keys: ['KeyW', 'KeyS'], pad: [TRIGGER.RT, TRIGGER.LT], does: 'Drive / Reverse' },
+    person: [{ keys: ['KeyW', 'KeyS'], does: 'Walk' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
+      { pad: [STICK.LEFT], does: 'Walk' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Jump' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }],
+    car: [{ keys: ['KeyW', 'KeyS'], pad: [TRIGGER.RT, TRIGGER.LT], does: 'Drive' },
       { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Steer' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Handbrake' },
-      { keys: ['KeyB'], pad: [BUTTON.B], does: 'Horn' }, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Radio' }, { pad: [STICK.RIGHT], does: 'Orbit' },
+      { keys: ['KeyB'], pad: [BUTTON.B], does: 'Horn' }, { keys: ['KeyL'], pad: [BUTTON.UP], does: 'Siren', siren: true },
+      { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Radio' }, { pad: [STICK.RIGHT], does: 'Orbit' },
       { keys: ['KeyX'], pad: [BUTTON.LSTICK], does: 'Look back' }],
-    cyclist: [{ keys: ['KeyW', 'KeyS'], pad: [TRIGGER.RT, TRIGGER.LT], does: 'Pedal / Brake' },
-      { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Lean & Turn' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Brake' },
+    cyclist: [{ keys: ['KeyW', 'KeyS'], pad: [TRIGGER.RT, TRIGGER.LT], does: 'Pedal' },
+      { keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Steer' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Brake' },
       { keys: ['KeyB'], pad: [BUTTON.B], does: 'Bell' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' },
       { keys: ['KeyX'], pad: [BUTTON.LSTICK], does: 'Look back' }],
     helicopter: [{ keys: ['KeyW', 'KeyS'], does: 'Pitch' }, { keys: ['KeyA', 'KeyD'], does: 'Yaw' },
-      { pad: [STICK.LEFT], does: 'Pitch & Yaw' }, { keys: ['Space', 'KeyE'], pad: [TRIGGER.RT], does: 'Ascend' },
+      { pad: [STICK.LEFT], does: 'Fly' }, { keys: ['Space', 'KeyE'], pad: [TRIGGER.RT], does: 'Ascend' },
       { keys: ['KeyQ', 'KeyC'], pad: [TRIGGER.LT], does: 'Descend' }],
-    plane: [{ keys: ['KeyW', 'KeyS'], does: 'Throttle / Brake' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
-      { pad: [STICK.LEFT], does: 'Throttle & turn' }, { keys: ['Space', 'KeyE'], pad: [TRIGGER.RT], does: 'Pull up' },
+    plane: [{ keys: ['KeyW', 'KeyS'], does: 'Throttle' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
+      { pad: [STICK.LEFT], does: 'Fly' }, { keys: ['Space', 'KeyE'], pad: [TRIGGER.RT], does: 'Pull up' },
       { keys: ['KeyQ', 'KeyC'], pad: [TRIGGER.LT], does: 'Nose down' }],
-    kayak: [{ keys: ['KeyW', 'KeyS'], does: 'Paddle / Back' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
-      { pad: [STICK.LEFT], does: 'Paddle & turn' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }]
+    kayak: [{ keys: ['KeyW', 'KeyS'], does: 'Paddle' }, { keys: ['KeyA', 'KeyD'], does: 'Turn' },
+      { pad: [STICK.LEFT], does: 'Paddle' }, orbit, { keys: ['KeyR'], pad: [BUTTON.RIGHT], does: 'Music' }]
   };
   // Getting in and out, in every mode
   for (const [mode, hints] of Object.entries(controlHints)) {
@@ -1152,7 +1184,7 @@ async function initApp() {
   }
   // Lined up over a golf ball (golf-play.js): the stick or the turn keys aim, forward and back change the club, and
   // swing is held to fill the meter and let go to hit
-  controlHints.golf = [{ keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Aim' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Hold, or drag back from the golfer, let go to hit' }, { keys: ['KeyF'], pad: [BUTTON.X], does: 'Stop golfing' }];
+  controlHints.golf = [{ keys: ['KeyA', 'KeyD'], pad: [STICK.LEFT], does: 'Aim' }, { keys: ['Space'], pad: [BUTTON.A], does: 'Swing' }, { keys: ['KeyF'], pad: [BUTTON.X], does: 'Stop golfing' }];
   // Getting out of a car on the move or the helicopter in the air is a jump, and its hint says so
   let jumpOut = false;
   // On foot, what F would do now (what's in reach, looked for each quarter second below): '' with nothing near hides it
@@ -1178,6 +1210,32 @@ async function initApp() {
     if (c.rack || c.mode === 'cyclist') return 'Ride';
     return 'Get in';
   }
+  // Lamp: a police cruiser's or the ambulance's lights and siren (controllers.js setSiren), L, the pad's up or the
+  // touch siren button: on and off while the player drives one, off as they get out or take another (syncSiren, each
+  // frame), never saved. Traffic ahead pulls over for it and the police leave a speeding siren be (traffic.js)
+  const sirenCan = () => {
+    const cm = controllerManager;
+    return cm.activeMode === 'car' && !!cm.entities.car.sirenKind && !cm.entities.person.onBus;
+  };
+  let sirenShown = null;
+  function toggleSiren() {
+    if (!sirenCan()) return;
+    const car = controllerManager.entities.car;
+    const on = controllerManager.setSiren(!car.siren);
+    log(`[siren] ${car.sirenKind === 'ambulance' ? 'the ambulance' : 'the cruiser'}'s lights and siren ${on ? 'on' : 'off'}`);
+    syncSiren();
+  }
+  function syncSiren() {
+    const car = controllerManager.entities.car, can = sirenCan();
+    if (car.siren && !can) { controllerManager.setSiren(false); log('[siren] off: out of the car'); }
+    if (sirenShown && sirenShown.can === can && sirenShown.on === car.siren) return;
+    const canChanged = sirenShown?.can !== can;
+    sirenShown = { can, on: car.siren };
+    touchControls.setSiren(can, car.siren);
+    // (the hint bar shows L Siren only in such a car)
+    if (canChanged) renderControlHints(controllerManager.activeMode);
+  }
+
   // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
   const topSpeedMph = { person: 18, car: 160, cyclist: 28, helicopter: 167, kayak: 12 };
 
@@ -1213,7 +1271,7 @@ async function initApp() {
     if (mode === 'helicopter' && controllerManager.entities.helicopter.craft === 'plane') mode = 'plane';
     if (mode === 'person' && golf.active) mode = 'golf';
     const pad = on.kind === 'controller';
-    const items = (controlHints[mode] || []).filter((hint) => (pad ? hint.pad : hint.keys) && !(hint.getIn && !getInWords)).map((hint) => {
+    const items = (controlHints[mode] || []).filter((hint) => (pad ? hint.pad : hint.keys) && !(hint.getIn && !getInWords) && !(hint.siren && !sirenCan())).map((hint) => {
       const item = document.createElement('span');
       item.className = 'hint';
       for (const what of pad ? hint.pad : hint.keys) {
@@ -1693,6 +1751,7 @@ async function initApp() {
     const wet = w && (w.amount > 0 || w.kind === 'rain' || w.kind === 'storm' || w.kind === 'snow') ? 0.6 : 1;
     const cold = w && w.tempF != null && w.tempF < 25 ? 0.75 : 1;
     trafficSystem.setTrafficShare?.(trafficShare(t));
+    highwayTraffic.setShare?.(Math.min(1, trafficShare(t) * 1.1));
     return [wet * cold, crowdShares(t)];
   }
 
@@ -2048,7 +2107,8 @@ async function initApp() {
       }
       for (const name of streets.split(' & ')) {
         const sign = document.createElement('span');
-        sign.className = 'street-sign' + (shownSigns.has(name) ? '' : ' fresh');
+        // (the Border to Border Trail's in a park sign's brown)
+        sign.className = 'street-sign' + (name === B2B_NAME ? ' trail-sign' : '') + (shownSigns.has(name) ? '' : ' fresh');
         sign.textContent = name;
         row.appendChild(sign);
       }
@@ -2113,6 +2173,8 @@ async function initApp() {
       if (loc) {
         // a place to arrive at on foot (the Cube, to push it)
         if (loc.foot && controllerManager.activeMode !== 'person') selectMode('person');
+        // a trail to ride (the Border to Border Trail): on the bike
+        if (loc.bike && controllerManager.activeMode !== 'cyclist') selectMode('cyclist');
         const at = teleportTo(loc.x, loc.z, loc.heading, loc.lookUp);
         // the place label names the landmark arrived at while the player stays at its viewpoint (city-config.js)
         if (LANDMARKS.some((l) => l.id === key)) arrival = { id: key, x: at.x, z: at.z };
@@ -2192,6 +2254,9 @@ async function initApp() {
         break;
       case 'KeyB':
         audioSystem.honk(controllerManager.getActiveEntity());
+        break;
+      case 'KeyL':
+        toggleSiren();
         break;
     }
   });
@@ -2653,6 +2718,7 @@ async function initApp() {
     streetDetails.signalClock.value = elapsed;
     controlsPart.made.update(elapsed);
     trafficSystem.setStillBodies?.(stillBodies());
+    syncSiren();
     trafficSystem.update(
       dt,
       elapsed,
@@ -2902,6 +2968,8 @@ async function initApp() {
         // Lamp: the Mac app lets the page play sound unasked, so the city is heard as it appears, not at the first key
         audioSystem.unlock();
         setLoadingProgress(1);
+        // the town painted from above for the far ground (outskirts.js), once the city's on screen
+        if (QUALITY.outskirts) setTimeout(() => paintTown({ blocks: cityBlocks.allBlocks, canopy: streetDetails.canopy }), 1000);
       });
     }
 
@@ -2978,8 +3046,10 @@ async function initApp() {
       updateChampion(now, where);
       if (arrival && Math.hypot(where.x - arrival.x, where.z - arrival.z) > 25) arrival = null;
       renderLocation(getLocationLabel(where.x, where.z, arrival?.id), busLine());
+      // (no notice coming onto the Border to Border Trail: the place name up top already says so)
     }
   };
+
 
   // The city reads its own keys and draws its own touch controls; a controller, and the preview's moves, come as the
   // first pad. The canvas goes back under the HUD, where the page laid it out.
@@ -3029,7 +3099,7 @@ async function initApp() {
   }, frame, touch: false, keyboard: false, snapshot, sharp: XBOX || TIER.name !== 'phone', fill: FILLS,
     // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.
     dispose() { stopFilling?.(); golf.dispose(); groundShade.group.removeFromParent(); groundShade.dispose(); split.second?.dispose(); split.view?.dispose(); document.body.classList.remove('split');
-      cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); scenePass.dispose(); } });
+      cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); aoPass?.dispose(); scenePass.dispose(); } });
   container.appendChild(renderer.domElement);
 }
 

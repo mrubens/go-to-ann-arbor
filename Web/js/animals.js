@@ -5,7 +5,7 @@
 // THE RULE ABOVE EVERYTHING: animals are never struck, hurt or knocked down by anything (a car, a bike, the
 // helicopter, the kayak, the player falling). They are no one's obstacle: never in the colliders, the knock-downs or
 // the ragdolls, and they never make a thud. Anything coming at one sends it off well before it arrives; if something
-// still reaches one, it leaps clear or quietly vanishes, untouched.
+// still reaches one, it leaps clear or climbs higher, untouched; one only goes (home, to bed) out of sight.
 //
 // Each squirrel lives on a tree (a tree's trunk from the city's colliders, the ones the knock-downs use): which trees
 // have one is fixed by where the tree stands, so the same squirrels are there each time the player comes back. Only
@@ -20,8 +20,11 @@ import { createSquirrelKit, poseSquirrel } from './animal-models.js';
 import { createDeer } from './deer.js';
 
 const BIRDS = false;
+// Lamp: but the river's ducks and geese are back (WATERFOWL), on the water and the grass by the Huron and along the
+// Border to Border Trail: only the mallards and Canada geese, nothing perched up off the ground or circling overhead
+const WATERFOWL = true;
 // the birds' modules are only fetched when they're on (about 105 KB of code otherwise loaded for nothing)
-const { createRiverBirds } = BIRDS ? await import('./river-birds.js') : {};
+const { createRiverBirds } = BIRDS || WATERFOWL ? await import('./river-birds.js') : {};
 const { createCityBirds } = BIRDS ? await import('./city-birds.js') : {};
 
 const POPULATE = 62, RELEASE = 85; // alive within this far of the view (m); let go beyond this
@@ -99,9 +102,9 @@ function buildAnimals(group) {
   for (const m of Object.values(kit.far)) group.add(m);
   const habitat = makeHabitat();
   // Birds are off: the person asked for them gone (seen from the street they read as blimps in the sky). Set BIRDS to
-  // bring the river's and the town's birds back.
+  // bring the river's and the town's birds back. The ducks and geese on the water and its banks are on (WATERFOWL).
   const noBirds = { update() {}, dispose() {} };
-  const riverBirds = BIRDS ? createRiverBirds(group, { parkAt: habitat.parkAt }) : noBirds;
+  const riverBirds = BIRDS || WATERFOWL ? createRiverBirds(group, { parkAt: habitat.parkAt, waterfowlOnly: !BIRDS }) : noBirds;
   const deer = createDeer(group, { parkAt: habitat.parkAt, treesNear: (x, z, r, out) => treesNear(x, z, r, out) });
   const cityBirds = !BIRDS ? noBirds : createCityBirds(group, { parkAt: habitat.parkAt, treesNear: (x, z, r, out) => treesNear(x, z, r, out) });
 
@@ -283,7 +286,7 @@ function buildAnimals(group) {
       player.still = mode === 'person' && speed < 0.35 ? player.still + dt : 0;
       const r = mode === 'car' && ent.bike ? 1.1 : RADIUS[mode] ?? 1;
       const vehicle = mode === 'car' || mode === 'cyclist';
-      threats.push({ x: p.x, y: p.y, z: p.z, vx: player.vx, vz: player.vz, speed, r, loud: vehicle && speed > 2, air: mode === 'helicopter', player: true, foot: mode === 'person', still: player.still,
+      threats.push({ x: p.x, y: p.y, z: p.z, vx: player.vx, vz: player.vz, speed, r, loud: vehicle && speed > 2, air: mode === 'helicopter', player: true, foot: mode === 'person', bike: mode === 'cyclist', still: player.still,
         lawn: vehicle && speed > 2 && habitat.lawnAt(p.x, p.z) });
     }
   }
@@ -295,7 +298,8 @@ function buildAnimals(group) {
         if (!c.edge && !c.x) continue;
         if ((c.x - cx) ** 2 + (c.z - cz) ** 2 > 110 * 110) continue;
         const sp = Math.abs(c.speed || 0);
-        threats.push({ x: c.x, y: c.y ?? groundHeight(c.x, c.z), z: c.z, vx: (c.tx || 0) * sp + (c.vx || 0), vz: (c.tz || 0) * sp + (c.vz || 0), speed: sp, r: c.bus ? 6.5 : 2.5, loud: sp > 2, air: false });
+        // (a bicycle, a scooter: the trail's riders and the bike lanes' (traffic.js), stepped round as the player's bike is)
+        threats.push({ x: c.x, y: c.y ?? groundHeight(c.x, c.z), z: c.z, vx: (c.tx || 0) * sp + (c.vx || 0), vz: (c.tz || 0) * sp + (c.vz || 0), speed: sp, r: c.bus ? 6.5 : c.curb ? 1.1 : 2.5, loud: sp > 2 && !c.curb, air: false, bike: !!c.curb });
       }
     }
     // the trains on the tracks: each car of one moving near the camera, as big as the car is long (one standing at
@@ -394,7 +398,16 @@ function buildAnimals(group) {
     s.heading = Math.atan2(ax, az);
   }
 
+  // (Lamp: gone only where nobody sees it go, over 90 m from the camera; nearer, it runs off or climbs on instead.
+  // Nothing disappears in view)
+  let camNow = null;
+  const inView = (s) => camNow && (s.x - camNow.x) ** 2 + (s.z - camNow.z) ** 2 < 90 * 90;
   function vanish(s) {
+    if (inView(s)) {
+      if (s.mode === 'trunk' && !s.tree.down) { s.state = 'climb'; s.hTo = climbable(s.tree); s.urgent = true; }
+      else { if (s.mode === 'trunk') { s.mode = 'ground'; s.h = 0; } s.state = 'away'; s.timer = 2.5; }
+      return;
+    }
     s.mode = 'gone'; s.state = 'gone'; s.goneFor = 0;
     if (s.partner) { s.partner.partner = null; s.partner = null; }
     dropBody(s);
@@ -427,6 +440,7 @@ function buildAnimals(group) {
 
   function think(s, dt, now, ctx) {
     const R = s.r;
+    camNow = ctx.camera.position;
     if (s.mode === 'gone') {
       s.goneFor += dt;
       // back later, up its tree, out of sight
@@ -451,8 +465,8 @@ function buildAnimals(group) {
       const t = th.t, d = Math.max(0, Math.hypot(s.x - t.x, s.z - t.z) - t.r);
       const low = s.mode === 'ground' || (s.mode === 'trunk' && s.h < 0.9);
       const tooClose = d < 0.25 + t.speed * 0.06;
-      if (low && tooClose && t.speed > 0.3) { if (d < 0.12 || s.mode === 'trunk') { vanish(s); return; } leap(s, t); }
-      else if (t.air && s.mode === 'trunk' && d < 1.5) { vanish(s); return; }
+      if (low && tooClose && t.speed > 0.3) { if (s.mode === 'trunk') { s.state = 'climb'; s.hTo = climbable(s.tree); s.urgent = true; } else leap(s, t); }
+      else if (t.air && s.mode === 'trunk' && d < 1.5) { s.state = 'climb'; s.hTo = climbable(s.tree); s.urgent = true; }
       else if (!['bolt', 'away', 'climb'].includes(s.state) || (s.state === 'climb' && !s.urgent)) {
         if (s.mode === 'ground' || (s.mode === 'trunk' && (s.h < 1.8 || th.score > 1.2 || t.air))) flee(s, t, now);
       }
@@ -547,7 +561,7 @@ function buildAnimals(group) {
         if (s.thetaTo != null) s.theta += wrap(s.thetaTo - s.theta) * Math.min(1, dt * 2.5);
         else s.theta += s.omega * dt * 0.4;
         if (s.h >= s.hTo - 0.01) {
-          if (s.state === 'bed') { vanish(s); break; }
+          if (s.state === 'bed') { if (inView(s)) { s.timer = 30; break; } vanish(s); break; }
           s.state = 'perch'; s.timer = s.urgent ? 4 + R() * 5 : 3 + R() * 9; s.urgent = false; s.turnAt = R() * 2;
         }
         break;

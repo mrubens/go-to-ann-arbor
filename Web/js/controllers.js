@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { color, float, mix, smoothstep } from 'three/tsl';
 import {
   TOWN_BOUNDS,
   BIG_PARK_BOUNDS,
@@ -13,6 +14,8 @@ import {
   BODY_SPECS,
   buildCarGeometry,
   buildCarSidePatch,
+  buildLightbarGeometry,
+  createLightbarMaterial,
   buildSteerableWheelGeo,
   carTipZ,
   createCarWheelMaterial,
@@ -27,6 +30,7 @@ import {
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION, PERSON_BONES } from './pedestrians.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
 import { bryantParkLawn } from './landmarks.js';
+import { b2bTop } from './b2b-trail.js';
 import { groundHeight, groundTilt, nearestWater, riverDepth, riverFlow, stadiumGround, waterLevel, footbridgeTop, riverbedHeight, deckTop } from './terrain.js';
 import { WATER_RIPPLES, waterDisturb } from './tsl-materials.js';
 import { cascadeCurrent, cascadeDepth, cascadeWaveLift, inCascades, onWeirRocks, pondDraw } from './cascades.js';
@@ -78,6 +82,14 @@ function riverStillness(x, z) {
 // The player's own car: a maize sports car with GO BLU plates
 const OWN_CAR = { kind: 'sports', hex: 0xffcb05, style: 0 };
 const isOwnCar = (look) => look.kind === OWN_CAR.kind && look.hex === OWN_CAR.hex;
+// A police cruiser (cars.js livery 1, AAPD's electric car 6) or the ambulance (5) taken by the player: its light bar
+// and siren, switched on and off with L (main.js toggleSiren); 'police', 'ambulance' or null
+const sirenOf = (look) => {
+  if (!look || MOTO_SPECS[look.kind] || MACHINES[look.kind] || !BODY_SPECS[look.kind]) return null;
+  const livery = (look.style || 0) & 7;
+  return livery === 1 || livery === 6 ? 'police' : livery === 5 ? 'ambulance' : null;
+};
+let _darkLightbarMat = null;
 const groundCollider = { type: 'ground' };
 // The skids' ends and middle, [across, along] in metres from the helicopter's middle
 const HELI_SKIDS = [[0, 0], [-1.1, -1.8], [1.1, -1.8], [-1.1, 1.8], [1.1, 1.8]];
@@ -119,9 +131,9 @@ const CAR_HANDLING = {
   touring: { mass: 460, speed: 53.6, acceleration: 9, powerSpeed: 18.1, drag: 0.000848, brake: 8.9, grip: 10, cornering: 10, wheelbase: 1.62, steer: 9, roll: 0, pitch: 0.022 }, // 120 mph and 60 in 3.4 s, a Road Glide ST
   adventure: { mass: 317, speed: 62.6, acceleration: 9.4, powerSpeed: 31.7, drag: 0.001041, brake: 10.1, grip: 11, cornering: 12, wheelbase: 1.55, steer: 12, roll: 0, pitch: 0.03 }, // 140 mph and 60 in 3.0 s, a BMW R 1300 GS
   // and what's borrowed from the bike lane: a bicycle, an e-scooter and a hoverboard, at their own gentle pace
-  bicycle: { mass: 95, speed: 12.1, acceleration: 2.8, powerSpeed: 5, brake: 6, grip: 9, cornering: 10, wheelbase: 1.04, steer: 14, roll: 0, pitch: 0.02 },
+  bicycle: { mass: 95, speed: 13.4, acceleration: 2.8, powerSpeed: 5, brake: 6, grip: 9, cornering: 10, wheelbase: 1.04, steer: 14, roll: 0, pitch: 0.02 },
   // pedal-assisted to 28 mph, as a Class 3 e-bike is
-  ebike: { mass: 115, speed: 12.5, acceleration: 4.2, powerSpeed: 9, brake: 6.5, grip: 9.5, cornering: 10, wheelbase: 1.12, steer: 14, roll: 0, pitch: 0.02 },
+  ebike: { mass: 115, speed: 13.9, acceleration: 4.2, powerSpeed: 9, brake: 6.5, grip: 9.5, cornering: 10, wheelbase: 1.12, steer: 14, roll: 0, pitch: 0.02 },
   escooter: { mass: 92, speed: 6.7, acceleration: 3, powerSpeed: 5, brake: 5.5, grip: 8.5, cornering: 10, wheelbase: 0.84, steer: 16, roll: 0, pitch: 0.02 }, // 15 mph, a rental e-scooter, governed
   hoverboard: { mass: 85, speed: 4.5, acceleration: 2.6, powerSpeed: 3, brake: 5, grip: 9, cornering: 13, wheelbase: 0.5, steer: 22, roll: 0, pitch: 0.015 }, // 10 mph, a hoverboard
   // the road work's machines (road-work.js): a loaded tandem dump truck, slow to get going and wide in a turn, and a
@@ -222,12 +234,12 @@ const BIKE_SHAPES = new Map();
 // The walking camera, which the fall and the bus change for a while and give back
 const WALK_CAMERA = { d: 4.8, h: 2.4, y: -0.35 };
 
-// The player's road bike, with a strong rider's power (about 4 W/kg): about 21 mph on the flat, 14 mph up a 4.5% grade
-// and 9 mph up Broadway's 9%; freewheeling down a 6% hill it runs to about 24 mph, pedalling down it about 30. The
-// slope's pull is updateCyclist's; it freewheels without slowing itself (coast 0), and its brakes stop it at about 0.6 g
+// The player's road bike: about 30 mph flat out on the flat (Lamp: the person asked for it nearer 30 than the 21 a
+// strong rider's 4 W/kg gives), slower up the hills; the same pull away from a stop. The slope's pull is
+// updateCyclist's; it freewheels without slowing itself (coast 0), and its brakes stop it at about 0.6 g
 const BICYCLE_DRIVE = {
   speed: 14, reverseSpeed: 4.5, acceleration: 2.5,
-  powerSpeed: 1.7, // Above 6 km/h, rider power limits acceleration.
+  powerSpeed: 4.65, // Above 17 km/h, rider power limits acceleration (power over drag and rolling: ~13.4 m/s on the flat)
   rolling: 0.06, drag: 0.0045, coast: 0, brake: 6.5
 };
 // Its gears, as wheel turns per turn of the cranks (a compact double's spread), shifted for it to keep the cadence near
@@ -274,6 +286,7 @@ const RIDER_THROW_SPEED = 5.5;
 // a motorbike that hits a wall or a car this hard (m/s closing, about 16 mph) throws its rider off
 const MOTO_THROW_SPEED = 7;
 const DIVE_GET_UP = 1.15; // where a dive's prone pause begins: a fallen body gets up from there
+const _helmetUp = new THREE.Vector3();
 const hash01 = (x) => { const v = Math.sin(x * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
 
 // `box`: the car's entity, whose own size (boxW, boxL) it collides at
@@ -923,12 +936,29 @@ class ThirdPersonControllerManager {
       headLights.push(spot);
     }
 
+    // a cruiser's or the ambulance's roof light bar, dark till its siren's on (as traffic.js draws theirs): the lit
+    // bar's flashing lenses (createLightbarMaterial) and the dark one on the same shape, one shown at a time
+    const sirenKind = sirenOf(look);
+    let lightbar = null;
+    if (sirenKind) {
+      const geo = buildLightbarGeometry(spec);
+      geo.computeBoundingBox();
+      _darkLightbarMat ??= new THREE.MeshStandardNodeMaterial({ color: 0x1a1d21, roughness: 0.2, metalness: 0.25 });
+      const lit = new THREE.Mesh(geo, createLightbarMaterial(sirenKind === 'ambulance'));
+      const dark = new THREE.Mesh(geo, _darkLightbarMat);
+      lit.visible = false;
+      lit.castShadow = dark.castShadow = true;
+      chassisPivot.add(lit, dark);
+      lightbar = { lit, dark, top: geo.boundingBox.max.y, z: (geo.boundingBox.min.z + geo.boundingBox.max.z) / 2 };
+    }
+
     if (!root.parent) this.scene.add(root);
 
     const kindName = { sedan: 'Sedan', suv: 'SUV', minivan: 'Minivan', pickup: 'Pickup', van: 'Van', forester: 'Wagon', sports: 'Sports Car', tesla: 'EV Sport Sedan', ioniq: 'EV Hatch', cybertruck: 'Wedge Truck', r1s: 'EV SUV', r1t: 'EV Pickup' };
     return {
       type: 'car',
-      label: kindName[look.kind] || 'Car',
+      // (a cruiser says so: 'Police SUV'; the ambulance van is the ambulance)
+      label: sirenKind === 'police' ? `Police ${kindName[look.kind] || 'Car'}` : sirenKind === 'ambulance' ? 'Ambulance' : kindName[look.kind] || 'Car',
       // an electric car has one fixed reduction gear: no gear or revs shown (main.js)
       gears: ELECTRIC_CARS.has(look.kind) ? false : undefined,
       // its own size against walls and other cars: the body's widest and its length bumper to bumper (cars.js)
@@ -955,11 +985,28 @@ class ThirdPersonControllerManager {
       lastCollisionSpark: null,
       steerAngle: 0,
       wheelSpin: 0,
-      cameraTargetOffset: new THREE.Vector3(0, 0.96, 0),
-      chaseDistance: 6.9,
-      chaseHeight: 2.12,
-      drive: carDrive(look.kind)
+      // Lamp: the chase camera up and back with the vehicle's height and length (a high-roof van or a pickup sits it
+      // over the roof, as a sedan's does; a sedan, about 1.45 m tall and 4.4 m long, is the measure)
+      ...(() => {
+        const roof = Math.max(1.2, ...(spec.cabin?.roofY || [[0, 1.45]]).map((p) => p[1])) + Math.max(0, ...(spec.cargo?.rise || [[0, 0]]).map((p) => p[1]));
+        const tall = Math.max(0, roof - 1.45), len = Number.isFinite(spec.zFront - spec.zRear) ? Math.max(0, (spec.zFront - spec.zRear) / 2 - 2.2) : 0;
+        return { cameraTargetOffset: new THREE.Vector3(0, 0.96 + tall * 0.6, 0), chaseDistance: 6.9 + tall * 2.2 + len * 1.2, chaseHeight: 2.12 + tall * 1.1 };
+      })(),
+      drive: carDrive(look.kind),
+      // the siren this car can sound (main.js toggleSiren), its light bar, and whether it's on now
+      sirenKind, lightbar, siren: false
     };
+  }
+
+  // The player's car's lights and siren on or off (only a cruiser or the ambulance has them)
+  setSiren(on) {
+    const car = this.entities.car;
+    car.siren = Boolean(on && car.sirenKind);
+    if (car.lightbar) {
+      car.lightbar.lit.visible = car.siren;
+      car.lightbar.dark.visible = !car.siren;
+    }
+    return car.siren;
   }
 
   // A motorcycle taken from traffic or a parking spot rides as the car does (the same entity, mode and keys); its body
@@ -1281,6 +1328,9 @@ class ThirdPersonControllerManager {
       side: THREE.DoubleSide,
       depthWrite: false
     });
+    // (unlit, so as the light goes it's dimmed with it: at night a fixed pale veil over the dark city read as an opaque
+    // white plate)
+    blurDiscMat.colorNode = color(0xc8d8e8).mul(mix(float(1.0), float(0.05), smoothstep(0.7, 1.45, cityUniforms.uInteriorGlow)));
 
     // 1. 3D Lofted Monocoque Fuselage + Tailboom + Twin-Turbine Cowling + Swept Fin + Stabilizers + Tubular Skids
     const heliBodyGeo = buildHelicopterBodyGeometry();
@@ -1382,6 +1432,8 @@ class ThirdPersonControllerManager {
     car.riderMesh?.removeFromParent();
     // (and a car always shows its gear and revs, whatever had none before it)
     delete car.bike; delete car.quiet; delete car.riderMesh; delete car.riderPose; delete car.machine; delete car.boxW; delete car.boxL; delete car.gears;
+    // (and a siren and light bar only on a cruiser or the ambulance, off as it's taken)
+    delete car.sirenKind; delete car.lightbar; car.siren = false;
     this._motoThrow = 0;
     // (on its wheels: a car taken where it's parked keeps nothing of how the last one was flying)
     Object.assign(car, fresh, { position, heading, prevX: position.x, prevZ: position.z, airborne: false, vy: 0, flightTime: 0, coasting: false });
@@ -1768,6 +1820,9 @@ class ThirdPersonControllerManager {
     }
     const base = deck + (mode !== 'kayak' && onAirfield(x, z) ? PAVE + 0.04 : 0);
     let ground = Math.max(base, mode === 'kayak' ? -Infinity : this.rampTop(x, z, Number.isFinite(at) ? at : Infinity));
+    // Lamp: up on the Border to Border Trail's surface, as on a sidewalk (b2b-trail.js b2bTop: its top where it's laid,
+    // easing to the ground just past its edges), not sunk into it
+    if (mode !== 'kayak') ground = Math.max(ground, b2bTop(x, z));
     // on wheels, the bleachers are one slope up from their front row, driven up and flown off (bleachers.js ramp)
     if (mode !== 'person' && mode !== 'kayak' && this.bleachers) ground = Math.max(ground, this.bleachers.ramp(x, z));
     // up a parking structure: the deck or ramp under them, the highest within a step of where they are now (their
@@ -2238,6 +2293,22 @@ class ThirdPersonControllerManager {
           b._posedLean = b.leanAngle;
           b._posedPedal = b.pedalPhase;
         }
+      } else if (b.helmet && this.activeMode === 'person' && this.entities.person.fallen && b._thrown) {
+        // Lamp: thrown off it, the helmet stays on the rider's head till they're up again (the bike's own rider figure
+        // put away, as below)
+        const p = this.entities.person;
+        if (!b._riderHidden) {
+          b.riderCrowd.begin();
+          b.riderCrowd.end();
+          if (b.riderCrowd.updates > 2) { b.earbuds.visible = false; b._riderHidden = true; b._posedX = NaN; }
+        }
+        b.helmet.visible = true;
+        p.rig.headTransform(b.helmet.position, b.helmet.quaternion);
+        b.helmet.position.add(_helmetUp.set(0, 0.175, -0.012).applyQuaternion(b.helmet.quaternion));
+      } else if (b._thrown) {
+        // up again: the helmet's off (as when they step off it), the bike standing where it stopped
+        b._thrown = false;
+        if (b.helmet) b.helmet.visible = false;
       } else if (!b._riderHidden) {
         b.riderCrowd.begin();
         b.riderCrowd.end();
@@ -2355,6 +2426,14 @@ class ThirdPersonControllerManager {
           continue;
         }
         let [pitch, roll] = groundTilt(e.position.x, e.position.z, e.heading, e.type === 'car' ? 4.2 : 1.6, e.type === 'car' ? 1.8 : 0.4);
+        // (Lamp: steep only because a bridge's deck stands over part of it, under the deck: the ground it's on, as its
+        // height has it, not the deck over its nose)
+        if (!e.airborne && (Math.abs(pitch) > 0.45 || Math.abs(roll) > 0.45)) {
+          const L = e.type === 'car' ? 2.1 : 0.8, W = e.type === 'car' ? 0.9 : 0.2, s = Math.sin(e.heading), co = Math.cos(e.heading);
+          const g = (dx, dz) => this.getGroundHeight(e.position.x + dx, e.position.z + dz, e.type === 'car' ? 'car' : 'cyclist', e.position.y);
+          pitch = Math.atan2(g(s * L, co * L) - g(-s * L, -co * L), L * 2);
+          roll = Math.atan2(g(-co * W, s * W) - g(co * W, -s * W), W * 2);
+        }
         if (e.type === 'car') {
           // in the air it holds the attitude it left with, the nose following its path; on the stadium's stands the
           // slope is the stands' own (carSurface), not the dug ground's under them
@@ -2424,6 +2503,7 @@ class ThirdPersonControllerManager {
     const sn = Math.sin(b.heading), cs = Math.cos(b.heading);
     p.riding = null;
     b.leftEmpty = true;
+    b._thrown = true; // (its helmet goes with the rider till they're up: poseCharacters)
     p.position.set(b.position.x + sn * 0.2, b.position.y, b.position.z + cs * 0.2);
     p.heading = b.heading;
     p.rig.reset(p.position.x, p.position.z, p.heading, personGround, this);
@@ -2984,12 +3064,15 @@ class ThirdPersonControllerManager {
       const targetPitch = -Math.max(-1, Math.min(1, acceleration / D.acceleration)) * D.pitch;
       // a car's body rolls out of a bend with the tyres' pull; a bike leans into it, as far as the bend needs
       const turnRate = (nextSin * cos - nextCos * sin) / step;
-      const targetRoll = c.bike ? Math.max(-0.85, Math.min(0.85, -Math.atan(c.speed * turnRate / 9.8)))
+      // (a pedal bike or scooter taken from the lane, `quiet`, leans gently and eases into it, as the player's own
+      // bicycle does; a motorbike can lay right over, and snaps into it)
+      const pedal = c.bike && c.quiet, lean = pedal ? 0.34 : 0.85;
+      const targetRoll = c.bike ? Math.max(-lean, Math.min(lean, -Math.atan(c.speed * turnRate / 9.8)))
         : Math.max(-0.09, Math.min(0.09, correction / step * D.roll));
       c.pitchVel += ((targetPitch - c.chassisPivot.rotation.x) * 68 - c.pitchVel * 11.2) * step;
-      c.rollVel += ((targetRoll - c.chassisPivot.rotation.z) * 68 - c.rollVel * 11.2) * step;
+      c.rollVel += ((targetRoll - c.chassisPivot.rotation.z) * (pedal ? 14 : 68) - c.rollVel * (pedal ? 7.5 : 11.2)) * step;
       c.chassisPivot.rotation.x = Math.max(-0.22, Math.min(0.22, c.chassisPivot.rotation.x + c.pitchVel * step));
-      const rollMax = c.bike ? 0.85 : 0.26;
+      const rollMax = pedal ? 0.34 : c.bike ? 0.85 : 0.26;
       c.chassisPivot.rotation.z = Math.max(-rollMax, Math.min(rollMax, c.chassisPivot.rotation.z + c.rollVel * step));
       c.heaveVel += (-c.heaveY * 85 - c.heaveVel * 12) * step;
       c.heaveY = Math.max(-0.08, Math.min(0.14, c.heaveY + c.heaveVel * step));
@@ -3262,10 +3345,14 @@ class ThirdPersonControllerManager {
     if (this.keys.left) turnInput = this.keys.left;
     if (this.keys.right) turnInput = -this.keys.right;
 
+    // the bars come round gradually (about a third of a second to full lock, quicker back to straight), and at speed
+    // a bike turns wider: full lock is 2.15 rad/s at a walking pace, easing to about half that at 30 km/h
+    const steerRate = Math.abs(turnInput) > Math.abs(b.steer || 0) ? 3.2 : 5;
+    b.steer = (b.steer || 0) + Math.max(-steerRate * dt, Math.min(steerRate * dt, turnInput - (b.steer || 0)));
     let turnRate = 0;
     if (Math.abs(b.speed) > 0.15) {
       const dirSign = b.speed >= 0 ? 1 : -1;
-      turnRate = turnInput * 2.15 * dirSign;
+      turnRate = b.steer * 2.15 * dirSign * Math.min(1, 4.5 / Math.max(4.5, Math.abs(b.speed)) ** 0.6);
       b.heading += turnRate * dt;
     }
 
@@ -3288,8 +3375,9 @@ class ThirdPersonControllerManager {
     b.position.y = this.getGroundHeight(b.position.x, b.position.z, 'cyclist');
 
     // leaning as far as the turn it's making needs, at its speed (and none when it isn't turning)
-    const targetLean = Math.max(-0.42, Math.min(0.42, -Math.atan(b.speed * turnRate / 9.8)));
-    b.leanAngle += (targetLean - b.leanAngle) * Math.min(1, dt * 9);
+    // (eased in: a rider tips into a turn over a moment, not at once)
+    const targetLean = Math.max(-0.34, Math.min(0.34, -Math.atan(b.speed * turnRate / 9.8)));
+    b.leanAngle += (targetLean - b.leanAngle) * Math.min(1, dt * 3.5);
     b.leanPivot.rotation.z = b.leanAngle;
 
     const wheelDelta = (b.speed / 0.35) * dt;

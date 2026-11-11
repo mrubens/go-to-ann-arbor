@@ -15,6 +15,7 @@ import {
   TELEPORT_LOCATIONS
 } from './city-config.js';
 import { rankSearch, bestRoad, searchPlaces } from './map-search.js';
+import { B2B_NAME, B2B_LINES, B2B_BOUNDS } from './b2b-route.js';
 import { groundHeight } from './terrain.js';
 import { layOutHoles } from './golf.js';
 import { AIRPORT } from './airport-data.js';
@@ -104,6 +105,8 @@ const MAP = {
   bike: '#43d17f', // bike lanes, shown while cycling
   bikeStrong: '#0fa04f', // protected and buffered bike lanes
   bikePath: '#2fa565',
+  b2b: '#ff6b3d', // the Border to Border Trail, on both maps always: its own colour, apart from the bike greens
+  b2bCore: 'rgba(255, 226, 196, 0.85)',
   search: '#5fd0ff',
   halo: 'rgba(8, 11, 15, 0.9)',
   limits: 'rgba(255, 214, 150, 0.6)' // the City of Ann Arbor's official limits, dashed
@@ -309,6 +312,31 @@ function mapLayers() {
     const pts = [];
     for (let k = 2; k + 1 < t.length; k += 2) pts.push({ x: t[k], z: t[k + 1] });
     L.bikePaths.line(pts);
+  }
+
+  // Lamp: the Border to Border Trail (b2b-route.js), all of it (its own path and the streets it follows out of town),
+  // and the points along its own path its name is written at, each with the way it runs there
+  L.b2b = new TiledLayer(1000);
+  L.b2bOwn = new TiledLayer(1000);
+  L.b2bNames = [];
+  for (const line of B2B_LINES) {
+    L.b2b.line(line.pts);
+    if (line.own) L.b2bOwn.line(line.pts);
+    if (!line.own) continue;
+    const P = line.pts, S = [0];
+    for (let i = 1; i < P.length; i++) S.push(S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z));
+    const at = (d) => {
+      let i = 0;
+      while (i + 2 < P.length && S[i + 1] < d) i++;
+      const f = Math.max(0, Math.min(1, (d - S[i]) / (S[i + 1] - S[i] || 1)));
+      return { x: P[i].x + (P[i + 1].x - P[i].x) * f, z: P[i].z + (P[i + 1].z - P[i].z) * f };
+    };
+    for (let d = 120; d < S[S.length - 1] - 120; d += 300) {
+      const a = at(d - 60), b = at(d + 60), m = at(d);
+      // only where it runs fairly straight for the name's length
+      if (Math.hypot(b.x - a.x, b.z - a.z) < 85) continue;
+      L.b2bNames.push({ x: m.x, z: m.z, angle: Math.atan2(b.z - a.z, b.x - a.x) });
+    }
   }
 
   // The Huron River and its ponds, over the land
@@ -965,7 +993,15 @@ class CityMapSystem {
         }
         this.searchBounds = b;
       }
-      if (lmMatch) {
+      // Lamp: the Border to Border Trail: all of it lit up, the view framing its run through town
+      if (lmMatch && /^b2b/.test(lmMatch.key || '')) {
+        this.searchPath = new Path2D();
+        for (const line of B2B_LINES) addLine(this.searchPath, line.pts);
+        const b = B2B_BOUNDS, { w, h } = this.fullSize();
+        this.viewCenterX = (b.minX + b.maxX) * 0.5;
+        this.viewCenterZ = (b.minZ + b.maxZ) * 0.5;
+        this.viewZoom = Math.max(0.05, Math.min(1.2, Math.min(w / ((b.maxX - b.minX) * 1.15), h / ((b.maxZ - b.minZ) * 1.3 + 1))));
+      } else if (lmMatch) {
         this.viewCenterX = lmMatch.x;
         this.viewCenterZ = lmMatch.z;
         this.viewZoom = Math.max(this.viewZoom, lmMatch.art ? 1.2 : 0.9);
@@ -986,6 +1022,9 @@ class CityMapSystem {
     if (!this.placeList) {
       const menu = [...document.querySelectorAll('[data-teleport]')].map((b) => ({ key: b.getAttribute('data-teleport'), name: b.querySelector('.pop-name')?.textContent?.trim() }));
       this.placeList = searchPlaces(LANDMARKS, menu, TELEPORT_LOCATIONS);
+      // Lamp: the Border to Border Trail by its other names (its Teleport place, at Gallup Park, on the bike)
+      const b2b = this.placeList.find((p) => p.key === 'b2b');
+      if (b2b) b2b.names.push('B2B', 'B2B Trail', 'Border-to-Border Trail', 'Huron River Trail', 'Bike Trail');
     }
     return this.placeList;
   }
@@ -1356,6 +1395,25 @@ class CityMapSystem {
       ctx.strokeStyle = MAP.bikeStrong;
       ctx.lineWidth = Math.max(px(3.2), 5.5);
       L.bikeStrong.each(v, (p) => ctx.stroke(p));
+    }
+
+    // 7c. The Border to Border Trail, on both maps always: a dark edge, its own orange and a pale dashed core on its own
+    // path (the streets it follows out of town plain), over the bike routes so it's easy to follow
+    {
+      const width = Math.max(px(isMinimap ? 4.2 : 3.8), 7);
+      ctx.strokeStyle = MAP.halo;
+      ctx.lineWidth = width + Math.max(px(3), 4);
+      L.b2b.each(v, (p) => ctx.stroke(p));
+      ctx.strokeStyle = MAP.b2b;
+      ctx.lineWidth = width;
+      L.b2b.each(v, (p) => ctx.stroke(p));
+      if (s > 0.12) {
+        ctx.strokeStyle = MAP.b2bCore;
+        ctx.lineWidth = width * 0.28;
+        ctx.setLineDash([Math.max(px(6), 10), Math.max(px(6), 10)]);
+        L.b2bOwn.each(v, (p) => ctx.stroke(p));
+        ctx.setLineDash([]);
+      }
     }
 
     // 8. Freeways
@@ -1942,6 +2000,39 @@ class CityMapSystem {
       placed.push(box);
       ctx.fillText(label, dx, dy);
     }
+    if (tracking) ctx.letterSpacing = '0px';
+    // Lamp: the Border to Border Trail's name along it, upright, wherever it fits (every 300 m along its straighter
+    // stretches, at least 240 px apart on the screen)
+    if (s >= 0.05) {
+      ctx.font = `700 11px ${FONT}`;
+      const half = this.textWidth(ctx, B2B_NAME) * 0.5 + 6;
+      const shown = [];
+      for (const n of mapLayers().b2bNames) {
+        const dx = toX(n.x), dy = toY(n.z);
+        if (Math.abs(dx) > w * 0.46 || Math.abs(dy) > h * 0.46) continue;
+        if (shown.some(([x, y]) => Math.hypot(x - dx, y - dy) < 240)) continue;
+        let a = n.angle;
+        if (a > Math.PI / 2) a -= Math.PI;
+        if (a < -Math.PI / 2) a += Math.PI;
+        const ex = Math.abs(Math.cos(a)) * half + 8, ey = Math.abs(Math.sin(a)) * half + 8;
+        const box = [dx - ex, dy - ey, dx + ex, dy + ey];
+        if (overlaps(placed, box)) continue;
+        placed.push(box);
+        shown.push([dx, dy]);
+        ctx.save();
+        ctx.translate(dx, dy);
+        ctx.rotate(a);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        // set off the line, on its upper side
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = MAP.halo;
+        ctx.strokeText(B2B_NAME, 0, -11);
+        ctx.fillStyle = MAP.b2b;
+        ctx.fillText(B2B_NAME, 0, -11);
+        ctx.restore();
+      }
+    }
     // Lamp: the city's neighbourhoods (build-neighborhoods.py), zoomed in a little, each at the point deepest inside it
     // and only where its name fits across it (on two lines at its dash or last space if need be), after the central names above
     if (s >= 0.06 && s <= 1.2) {
@@ -2044,6 +2135,22 @@ class CityMapSystem {
     ctx.strokeText(label, x0 + len + 8, y0 + 3);
     ctx.fillStyle = 'rgba(236, 239, 244, 0.95)';
     ctx.fillText(label, x0 + len + 8, y0 + 3);
+    // Lamp: the key to the Border to Border Trail's line, over the scale
+    const ly = y0 - 22;
+    ctx.beginPath();
+    ctx.moveTo(x0, ly);
+    ctx.lineTo(x0 + 22, ly);
+    ctx.strokeStyle = MAP.halo;
+    ctx.lineWidth = 9;
+    ctx.stroke();
+    ctx.strokeStyle = MAP.b2b;
+    ctx.lineWidth = 5;
+    ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = MAP.halo;
+    ctx.strokeText(B2B_NAME, x0 + 30, ly + 4);
+    ctx.fillStyle = 'rgba(236, 239, 244, 0.95)';
+    ctx.fillText(B2B_NAME, x0 + 30, ly + 4);
   }
 }
 

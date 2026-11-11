@@ -2,9 +2,11 @@ import * as THREE from 'three/webgpu';
 import { TIER, XBOX } from './device-tier.js';
 import { blockAt, districtAt, LANDMARKS } from './city-config.js';
 import { GEO } from './city-geodata.js';
+import { onB2B } from './b2b-route.js';
+import { b2bTop } from './b2b-trail.js';
 import { createPedestrianRoutes } from './pedestrian-routes.js';
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION, PERSON_STYLE } from './pedestrians.js';
-import { groundHeight } from './terrain.js';
+import { groundHeight, groundUnderStreets } from './terrain.js';
 import { LIFE, patiosOpen, mild } from './street-life.js';
 import { createUmbrellas, createDogs } from './crowd-props.js';
 
@@ -69,6 +71,9 @@ function trailBase(t) {
   let w = t.park ? 0.4 : Math.max(0.1, (PLACE_CROWD[district] ?? 0.05) * 0.8);
   if (diag < 260) { w = Math.max(w, 1 - (diag / 260) * 0.35); t.park = false; }
   if (t.kind === 1) w *= 0.55;
+  // Lamp: the Border to Border Trail (b2b-route.js), the town's busiest path along the river: twice a park path's
+  // walkers, runners and dogs (dressFor)
+  if (t.park && onB2B(mx, mz, 0.5)) { t.b2b = true; w = Math.max(w, 0.8); }
   return (t.crowd = w);
 }
 function parkHour(h) {
@@ -88,7 +93,9 @@ function trailCrowd(t) {
 // (what's laid on the ground there: a curbed block's sidewalk height, else the ground's own)
 const floorAt = (x, z) => {
   const b = blockAt(x, z);
-  return groundHeight(x, z) + (b && !(b.park > 0.6 && !b.median) ? 0.22 : 0.03);
+  // (Lamp: and up on the Border to Border Trail's surface where it's laid: b2b-trail.js)
+  // (Lamp: under a street's bridge, on the ground under it, never up on the deck over their heads: terrain.js)
+  return Math.max(groundUnderStreets(x, z) + (b && !(b.park > 0.6 && !b.median) ? 0.22 : 0.03), b2bTop(x, z));
 };
 
 // Lamp: the places to sit (seats.js, from main.js once they're gathered): diners at the patio tables in season, open
@@ -218,7 +225,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
   const nearTrails = [];
   let trailSum = 0, edgeSum = 0;
   const nearSeats = [], seatScratch = [];
-  let sitWanted = 0, sitting = 0, sitCheck = 0;
+  let sitWanted = 0, sitting = 0, sitCheck = 0, benchTop = 0; // (benchTop: the likeliest near bench's share sat on)
   const track = { ax: 0, az: 0, ux: 0, uz: 1, len: 1, node: null, side: 0, line: 0, route: null };
 
   function sidewalkTrack(e) {
@@ -291,10 +298,11 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     p.rig.setStyle((Math.random() < mb ? PERSON_STYLE.MAIZE_BLUE : 0) + (Math.random() < casual ? PERSON_STYLE.CASUAL : 0));
     p.speed = p.baseSpeed;
     const h = LIFE.hour;
-    if (p.trail && !p.seat && Math.random() < ((h >= 6 && h < 9) || (h >= 16 && h < 19.5) ? 0.35 : 0.15)) p.speed = 2.6 + Math.random() * 0.8;
+    const b2b = p.trail && p.route?.b2b;
+    if (p.trail && !p.seat && Math.random() < ((h >= 6 && h < 9) || (h >= 16 && h < 19.5) ? (b2b ? 0.5 : 0.35) : b2b ? 0.25 : 0.15)) p.speed = 2.6 + Math.random() * 0.8;
     if (dogs && !p.seat && p.speed < 2 && dogs.available) {
       const dogHour = (h >= 6.5 && h < 9.5) || (h >= 16.5 && h < 20.5) ? 1 : h >= 9.5 && h < 16.5 ? 0.4 : 0.1;
-      const where = p.trail ? (p.route?.chain && trailBase(p.route) && p.route.park ? 0.2 : 0.06) : home ? 0.16 : 0.03;
+      const where = p.trail ? (p.route?.chain && trailBase(p.route) && p.route.park ? (b2b ? 0.3 : 0.2) : 0.06) : home ? 0.16 : 0.03;
       if (Math.random() < where * dogHour * (LIFE.rain || LIFE.snow ? 0.5 : 1)) {
         p.dog = dogs.take(Math.random());
         if (p.dog) p.speed = Math.min(p.speed, 1.12 + Math.random() * 0.18);
@@ -340,6 +348,8 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     for (let attempt = 0; attempt < 6; attempt++) {
       const seat = nearSeats[Math.floor(Math.random() * nearSeats.length)];
       if (!seatFree(seat)) continue;
+      // (a bench by the trail picked as often as it's sat on, against the town's other benches)
+      if (seat.y == null && benchTop > 0 && Math.random() > (seat.sitRate || 0) / benchTop) continue;
       const dx = seat.x - focusX, dz = seat.z - focusZ, d2 = dx * dx + dz * dz;
       if (d2 < rMinSq || d2 > rMaxSq || (protectView && nearView(seat.x, seat.z, 2, PED_SPAWN_DISTANCE))) continue;
       if (player.active && (seat.x - player.x) ** 2 + (seat.z - player.z) ** 2 < 100) continue;
@@ -838,8 +848,20 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     p.t = t;
     const dodgeStep = (diving || p.dodgeTarget ? PED_DODGE_SPEED : 1.8) * dt;
     p.dodge += clamp(p.dodgeTarget - p.dodge, -dodgeStep, dodgeStep);
-    p.x = p.ax + p.ux * t + p.uz * p.dodge;
-    p.z = p.az + p.uz * t - p.ux * p.dodge;
+    // Lamp: on the Border to Border Trail, kept to the right of its middle for their way (a quarter of its width), and
+    // off to its right edge while they stand (a rest, a look at the river), as the trail's etiquette has it
+    const keepTo = p.trail && p.route?.b2b && !p.seat ? -p.dir * (p.v > 0.2 || p.pause > 0 ? 0.72 : 1.3) : 0;
+    p.keep = (p.keep || 0) + clamp(keepTo - (p.keep || 0), -0.9 * dt, 0.9 * dt);
+    const lateral = p.dodge + p.keep;
+    p.x = p.ax + p.ux * t + p.uz * lateral;
+    p.z = p.az + p.uz * t - p.ux * lateral;
+    // Lamp: shouldered aside by someone they bumped into (bumpPeople), easing back onto their way
+    if (p.bx || p.bz) {
+      const k = Math.exp(-dt * 1.8);
+      p.bx *= k; p.bz *= k;
+      if (Math.abs(p.bx) + Math.abs(p.bz) < 0.005) p.bx = p.bz = 0;
+      p.x += p.bx; p.z += p.bz;
+    }
     if (p.node && ((t > KERB && t < p.len - KERB) || (p.waiting && walkOn(p)))) {
       p.coord = p.x * p.clx + p.z * p.clz; // along the crossing, as traffic.js measures its lanes there
       if (!p.node.walkers.length) walkedNodes.push(p.node);
@@ -1087,7 +1109,9 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     if (p.dog) {
       dogOwner = p;
       const near = draw && distSq < DOG_RANGE * DOG_RANGE;
-      dogs.step(p.dog, dt, p.x, p.z, p.ux * p.dir, p.uz * p.dir, dogGround, near, near ? p.rig.handAt(0, leashHand) : null);
+      // (on the Border to Border Trail, on a short leash on the walker's right: the trail's edge, out of the way)
+      const right = p.trail && p.route?.b2b;
+      dogs.step(p.dog, dt, p.x, p.z, p.ux * p.dir, p.uz * p.dir, dogGround, near, near ? p.rig.handAt(right ? 1 : 0, leashHand) : null, right ? -1 : 1);
     }
     if (!draw) return;
     if (p.hold > 0.6) umbrellas.add(p.rig.handAt(1, handPos), p.x, p.z, hash(p.rig.seed, 14));
@@ -1133,15 +1157,25 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
         const open = patiosOpen() && !LIFE.rain && !LIFE.snow && mild();
         const benches = !LIFE.rain && !LIFE.snow && LIFE.hour >= 8 && LIFE.hour < 20.5
           ? (LIFE.tempF != null && LIFE.tempF < 40 ? 0.04 : LIFE.month >= 5 && LIFE.month <= 9 ? 0.2 : 0.1) : 0;
+        // Lamp: and a bench by the Border to Border Trail (b2b-route.js) is sat on more: a rest on a ride or a run, a look
+        // at the river, in all but the hardest cold
+        const day = !LIFE.rain && !LIFE.snow && LIFE.hour >= 8 && LIFE.hour < 20.5, t = LIFE.tempF;
+        const trailBenches = !day ? 0 : t != null && t < 25 ? 0.08 : t != null && t < 40 ? 0.18 : LIFE.month >= 5 && LIFE.month <= 9 ? 0.4 : 0.25;
         let patio = 0, bench = 0;
+        benchTop = 0;
         for (const st of SIT_SPOTS.within(focusX, focusZ, PLACE_MAX, seatScratch)) {
           if (st.kind === 'bleacher' || st.box?.knock?.down) continue;
           const isPatio = st.y != null; // (a park bench's height is the ground's under it: y null)
-          if (isPatio ? !open : !benches) continue;
+          if (!isPatio) {
+            st.b2b ??= onB2B(st.x, st.z, 6);
+            st.sitRate = st.b2b ? trailBenches : benches;
+          }
+          if (isPatio ? !open : !st.sitRate) continue;
           nearSeats.push(st);
-          if (isPatio) patio++; else bench++;
+          if (isPatio) patio++;
+          else { bench += st.sitRate; benchTop = Math.max(benchTop, st.sitRate); }
         }
-        sitWanted = Math.min(SIT_CAP, Math.round((patio * 0.35 * mealHour(LIFE.hour) + bench * benches) * busy));
+        sitWanted = Math.min(SIT_CAP, Math.round((patio * 0.35 * mealHour(LIFE.hour) + bench) * busy));
       }
     }
     const wanted = Math.round(NUM_PEDS * clamp(crowdShare * 1.5, 0.05, 1) * busy * perf);
@@ -1194,6 +1228,7 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       if (!p.ragdoll && !p.seat) { react(p); avoidPlayer(p); }
     }
     meet(dt);
+    bumpPeople(activeMode);
     gatherCurbs();
     pedCrowd.begin();
     umbrellas.begin();
@@ -1221,6 +1256,64 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
     pedCrowd.end();
     umbrellas.end();
     dogs?.end();
+  }
+
+  // Lamp: people bump into each other, gently: two walkers whose shoulders meet (within about 60 cm) are each eased
+  // half the overlap apart, sideways off their way (bx, bz in walk, which fades back), and the player on foot walking
+  // into someone shoulders them aside, the player eased back a little too. Nobody goes over: that's for the cars and
+  // the bikes (strike). Only near the player, where it's seen: a 1 m grid of the walkers within 45 m.
+  const BUMP_R = 0.3, BUMP_NEAR = 45, bumpGrid = new Map();
+  const bumpKey = (x, z) => Math.floor(x) * 100003 + Math.floor(z);
+  function shoulder(p, x, z, share) {
+    p.bx = (p.bx || 0) + x * share; p.bz = (p.bz || 0) + z * share;
+    const l = Math.hypot(p.bx, p.bz);
+    if (l > 1.2) { p.bx *= 1.2 / l; p.bz *= 1.2 / l; }
+    p.x += x * share; p.z += z * share;
+  }
+  function bumpPeople(activeMode) {
+    bumpGrid.clear();
+    let order = 0;
+    for (const p of peds) {
+      p.bumpOrder = order++;
+      if (!p.placed || p.seat || p.ragdoll) continue;
+      if (Math.abs(p.x - focusX) > BUMP_NEAR || Math.abs(p.z - focusZ) > BUMP_NEAR) continue;
+      const k = bumpKey(p.x, p.z);
+      let cell = bumpGrid.get(k);
+      if (!cell) bumpGrid.set(k, (cell = []));
+      cell.push(p);
+    }
+    const near = (x, z, fn) => {
+      const ix = Math.floor(x), iz = Math.floor(z);
+      for (let i = ix - 1; i <= ix + 1; i++) for (let j = iz - 1; j <= iz + 1; j++) {
+        const cell = bumpGrid.get(i * 100003 + j);
+        if (cell) for (const q of cell) fn(q);
+      }
+    };
+    for (const cell of bumpGrid.values()) for (const p of cell) {
+      near(p.x, p.z, (q) => {
+        if (q === p) return;
+        if (p.conversation && (p.conversation.a === q || p.conversation.b === q)) return; // (talking: close by choice)
+        if (p.dog === q || q.dog === p) return;
+        const dx = p.x - q.x, dz = p.z - q.z, d = Math.hypot(dx, dz), min = BUMP_R * 2;
+        if (d >= min || d < 1e-4 || p === q) return;
+        // (each pair once: the one first in the list does it)
+        if (q.bumpOrder < p.bumpOrder) return;
+        const o = (min - d) / 2, nx = dx / d, nz = dz / d;
+        shoulder(p, nx * o, nz * o, 1);
+        shoulder(q, -nx * o, -nz * o, 1);
+      });
+    }
+    // the player on foot
+    if (player.active && activeMode === 'person' && player.entity.position.y > -1 && !player.entity.fallen) {
+      const pe = player.entity.position;
+      near(pe.x, pe.z, (q) => {
+        const dx = q.x - pe.x, dz = q.z - pe.z, d = Math.hypot(dx, dz), min = BUMP_R + 0.32;
+        if (d >= min || d < 1e-4) return;
+        const o = min - d, nx = dx / d, nz = dz / d;
+        shoulder(q, nx * o, nz * o, 0.8);
+        pe.x -= nx * o * 0.2; pe.z -= nz * o * 0.2;
+      });
+    }
   }
 
   // 0 (empty streets) to 1 (a warm evening downtown), from the hour and the weather

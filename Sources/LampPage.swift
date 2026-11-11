@@ -978,6 +978,8 @@ enum LampPageGuard {
     /// Each download is written beside where it goes, under a hidden name, and takes that place only once it's whole: a
     /// file it replaces is kept if it fails.
     private var places: [ObjectIdentifier: (writing: URL, final: URL)] = [:]
+    /// How each download set off by Lamp's builder goes, which `use_app` tells it (`LampSaves` in LampSupport.swift).
+    private var saves: [ObjectIdentifier: LampSaves.Save] = [:]
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
                   completionHandler: @escaping @MainActor @Sendable (URL?) -> Void) {
@@ -986,7 +988,14 @@ enum LampPageGuard {
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         panel.canCreateDirectories = true
         let chosen: (NSApplication.ModalResponse) -> Void = { answer in
-            guard answer == .OK, let url = panel.url else { return completionHandler(nil) }
+            // Kept from when its panel is answered, whenever the download began (`LampSaves.began`).
+            let save = LampSaves.began(suggestedFilename)
+            guard answer == .OK, let url = panel.url else {
+                LampSaves.ended(save, .canceled)
+                return completionHandler(nil)
+            }
+            LampSaves.chose(save, url)
+            if let save { self.saves[ObjectIdentifier(download)] = save }
             let writing = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).download")
             self.places[ObjectIdentifier(download)] = (writing, url)
             completionHandler(writing)
@@ -995,20 +1004,24 @@ enum LampPageGuard {
     }
 
     func downloadDidFinish(_ download: WKDownload) {
+        let save = saves.removeValue(forKey: ObjectIdentifier(download))
         guard let place = places.removeValue(forKey: ObjectIdentifier(download)) else { return }
         let files = FileManager.default
         do {
             // The save panel asked before replacing a file of that name.
             if files.fileExists(atPath: place.final.path) { _ = try files.replaceItemAt(place.final, withItemAt: place.writing) }
             else { try files.moveItem(at: place.writing, to: place.final) }
+            LampSaves.ended(save, .saved)
         } catch {
             try? files.removeItem(at: place.writing)
+            LampSaves.ended(save, .notMoved(error.localizedDescription))
             FileHandle.standardError.write(Data("A download couldn't be saved: \(error.localizedDescription)\n".utf8))
         }
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         if let place = places.removeValue(forKey: ObjectIdentifier(download)) { try? FileManager.default.removeItem(at: place.writing) }
+        LampSaves.ended(saves.removeValue(forKey: ObjectIdentifier(download)), .failed(error.localizedDescription))
         FileHandle.standardError.write(Data("A download failed: \(error.localizedDescription)\n".utf8))
     }
 }
@@ -1332,7 +1345,9 @@ typealias LampPageHolderBase = UIView
     private static let pages = NSHashTable<WKWebView>.weakObjects()
     /// What each window's pages held when last read, by the window's number.
     private static var read: [Int: [LampScreen.Item]] = [:]
-    private static let script = "(function () {\n  var FOCUSABLE = \'[data-focus], button, a[href], input, select, textarea, [tabindex]\';\n  var focused = document.activeElement, out = [];\n  function box(el) {\n    var r = el.getBoundingClientRect();\n    if (r.width <= 0 || r.height <= 0 || r.right < 0 || r.bottom < 0 || r.left > window.innerWidth || r.top > window.innerHeight) return null;\n    var s = window.getComputedStyle(el);\n    if (s.visibility === \'hidden\' || s.display === \'none\' || parseFloat(s.opacity) === 0) return null;\n    return r;\n  }\n  function words(t) { return (t || \'\').replace(/\\s+/g, \' \').trim(); }\n  var all = document.body ? document.body.querySelectorAll(\'*\') : [];\n  for (var i = 0; i < all.length; i++) {\n    var el = all[i], r = box(el);\n    if (!r || el.tagName === \'SCRIPT\' || el.tagName === \'STYLE\') continue;\n    var takes = el === focused || (el.matches(FOCUSABLE) && !(el.getAttribute(\'tabindex\') === \'-1\' && !el.hasAttribute(\'data-focus\')));\n    if (takes) {\n      var field = el.tagName === \'INPUT\' || el.tagName === \'TEXTAREA\';\n      out.push({ kind: field ? \'field\' : el.tagName === \'SELECT\' ? \'choice\' : \'button\',\n        name: words(el.getAttribute(\'aria-label\') || el.getAttribute(\'alt\') || (field ? el.getAttribute(\'placeholder\') : el.innerText)).slice(0, 120),\n        value: field ? String(el.value || \'\') : \'\', focused: el === focused, x: r.left, y: r.top, w: r.width, h: r.height });\n      continue;\n    }\n    if (el.closest && el.parentElement && el.parentElement.closest(FOCUSABLE)) continue;\n    var own = \'\';\n    for (var c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 3) own += c.nodeValue;\n    own = words(own);\n    if (own) out.push({ kind: \'text\', name: own.slice(0, 160), value: \'\', focused: false, x: r.left, y: r.top, w: r.width, h: r.height });\n    else if (el.tagName === \'IMG\' && el.getAttribute(\'alt\')) out.push({ kind: \'image\', name: words(el.getAttribute(\'alt\')), value: \'\', focused: false, x: r.left, y: r.top, w: r.width, h: r.height });\n  }\n  return JSON.stringify(out);\n})();"
+    private static let script = "(function () {\n  var FOCUSABLE = \'[data-focus], button, a[href], input, select, textarea, [tabindex]\';\n  var focused = document.activeElement, out = [], els = [];\n  // Each thing listed is kept, by its place in the list (`ref`), so a click names the very thing read\n  // (`PageScreen.click`), whatever else shares its box.\n  function add(el, entry) { entry.ref = els.length; els.push(el); out.push(entry); }\n  function box(el) {\n    var r = el.getBoundingClientRect();\n    if (r.width <= 0 || r.height <= 0 || r.right < 0 || r.bottom < 0 || r.left > window.innerWidth || r.top > window.innerHeight) return null;\n    var s = window.getComputedStyle(el);\n    if (s.visibility === \'hidden\' || s.display === \'none\' || parseFloat(s.opacity) === 0) return null;\n    return r;\n  }\n  function words(t) { return (t || \'\').replace(/\\s+/g, \' \').trim(); }\n  var all = document.body ? document.body.querySelectorAll(\'*\') : [];\n  for (var i = 0; i < all.length; i++) {\n    var el = all[i], r = box(el);\n    if (!r || el.tagName === \'SCRIPT\' || el.tagName === \'STYLE\') continue;\n    var takes = el === focused || (el.matches(FOCUSABLE) && !(el.getAttribute(\'tabindex\') === \'-1\' && !el.hasAttribute(\'data-focus\')));\n    if (takes) {\n      var field = el.tagName === \'INPUT\' || el.tagName === \'TEXTAREA\';\n      add(el, { kind: field ? \'field\' : el.tagName === \'SELECT\' ? \'choice\' : \'button\',\n        name: words(el.getAttribute(\'aria-label\') || el.getAttribute(\'alt\') || (field ? el.getAttribute(\'placeholder\') : el.innerText)).slice(0, 120),\n        value: field ? String(el.value || \'\') : \'\', focused: el === focused, x: r.left, y: r.top, w: r.width, h: r.height });\n      continue;\n    }\n    if (el.closest && el.parentElement && el.parentElement.closest(FOCUSABLE)) continue;\n    var own = \'\';\n    for (var c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 3) own += c.nodeValue;\n    own = words(own);\n    if (own) add(el, { kind: \'text\', name: own.slice(0, 160), value: \'\', focused: false, x: r.left, y: r.top, w: r.width, h: r.height });\n    else if (el.tagName === \'IMG\' && el.getAttribute(\'alt\')) add(el, { kind: \'image\', name: words(el.getAttribute(\'alt\')), value: \'\', focused: false, x: r.left, y: r.top, w: r.width, h: r.height });\n  }\n  window.__lampScreenItems = els;\n  return JSON.stringify(out);\n})();"
+    /// A click that says what it landed on, and won't click a thing named that's dimmed or under another (`PageScreen.click`).
+    private static let click = "(function (x, y, want, clicks) {\n  var FOCUSABLE = \'[data-focus], button, a[href], input, select, textarea, [tabindex]\';\n  function words(t) { return (t || \'\').replace(/\\s+/g, \' \').trim(); }\n  function dimmed(el) {\n    return !!(el.disabled || el.getAttribute(\'aria-disabled\') === \'true\' || (el.closest && el.closest(\'fieldset[disabled]\')));\n  }\n  function describe(el) {\n    if (!el) return \'nothing\';\n    var name = words(el.getAttribute(\'aria-label\') || el.getAttribute(\'alt\') || (el.matches(FOCUSABLE) ? el.innerText : \'\')).slice(0, 60);\n    var kind = el.tagName === \'INPUT\' || el.tagName === \'TEXTAREA\' ? \'field\' : el.tagName === \'SELECT\' ? \'choice\' : el.matches(FOCUSABLE) ? \'button\' : \'\';\n    var tag = el.tagName.toLowerCase() + (el.id ? \'#\' + el.id : \'\');\n    var cls = typeof el.className === \'string\' ? el.className : (el.getAttribute(\'class\') || \'\');\n    cls = words(cls).split(\' \').filter(Boolean).slice(0, 2);\n    if (cls.length) tag += \'.\' + cls.join(\'.\');\n    var said = kind && name ? kind + \' \"\' + name + \'\" (\' + tag + \')\' : \'the page\\\'s \' + tag;\n    var holder = el.parentElement && el.parentElement.closest(\'[id]\');\n    if (!(kind && name) && holder && holder !== document.body) said += \' in \' + holder.tagName.toLowerCase() + \'#\' + holder.id;\n    return said;\n  }\n  function within(el, hit) { return !!hit && (hit === el || el.contains(hit)); }\n  function press(el) {\n    if (el.focus) el.focus();\n    for (var i = 0; i < clicks; i++) if (el.click) el.click();\n    if (clicks === 2) el.dispatchEvent(new MouseEvent(\'dblclick\', { bubbles: true, cancelable: true }));\n  }\n  var verb = clicks === 2 ? \'double-clicked\' : \'clicked\';\n  var hit = document.elementFromPoint(x, y);\n  if (!want) {\n    if (!hit) return JSON.stringify({ did: false, said: \'nothing in the page there, so nothing was clicked\' });\n    var at = hit.closest(FOCUSABLE) || hit;\n    if (dimmed(at)) return JSON.stringify({ did: false, said: describe(at) + \' is dimmed right now, so nothing happened\' });\n    press(at);\n    return JSON.stringify({ did: true, said: verb + \' \' + describe(at) + \' in the page\' });\n  }\n  // The thing named: the very one the screen read listed (a control, a piece of text, a picture), still on the\n  // page and where it was read.\n  var found = (window.__lampScreenItems || [])[want.ref], r = found && found.isConnected ? found.getBoundingClientRect() : null;\n  if (!r || Math.abs(r.left + r.width / 2 - x) > 2 || Math.abs(r.top + r.height / 2 - y) > 2 ||\n      Math.abs(r.width - want.w) > 2 || Math.abs(r.height - want.h) > 2) found = null;\n  if (!found) return JSON.stringify({ did: false, said: \'missed: it has moved or gone since the screen was read, so nothing was clicked. Look again\' });\n  if (dimmed(found)) return JSON.stringify({ did: false, said: \'blocked: it\\\'s dimmed right now, so nothing happened\' });\n  if (within(found, hit)) { press(found); return JSON.stringify({ did: true, said: verb + \' it in the page\' }); }\n  // Its middle is under something else: a part of it a person could click, from the middle outwards.\n  var box = found.getBoundingClientRect(), spot = null;\n  for (var ring = 1; ring <= 4 && !spot; ring++) {\n    for (var gx = -ring; gx <= ring && !spot; gx++) for (var gy = -ring; gy <= ring && !spot; gy++) {\n      if (Math.max(Math.abs(gx), Math.abs(gy)) !== ring) continue;\n      var px = x + gx * box.width / 10, py = y + gy * box.height / 10;\n      if (within(found, document.elementFromPoint(px, py))) spot = { x: px, y: py };\n    }\n  }\n  if (!spot) return JSON.stringify({ did: false, said: \'missed: \' + describe(hit) + \' is over it, so the click would land there and nothing was clicked\' });\n  press(found);\n  return JSON.stringify({ did: true, spot: spot, said: verb + \' it in the page where it shows, \' + Math.round(spot.x - x) + \',\' + Math.round(spot.y - y) +\n    \' CSS pixels from its middle: its middle is under \' + describe(hit) + \', which a click there would land on\' });\n})"
 
     /// The page shown in a window, or, with none there, the first shown anywhere: what the app menu's Reload reopens.
     static func page(in window: NSWindow?) -> WKWebView? {
@@ -1344,7 +1359,7 @@ typealias LampPageHolderBase = UIView
         pages.add(view)
         LampPageItems.refresh = refresh
         LampPageItems.items = { read[$0.windowNumber] ?? [] }
-        LampPageItems.act = act
+        LampPageItems.act = { act($0, at: $1, meant: $2, in: $3, said: $4) }
         LampPageItems.own = { own($0, batch: $1) }
         LampPageItems.hold = { hold($0, in: $1, for: $2, said: $3) }
     }
@@ -1418,17 +1433,23 @@ typealias LampPageHolderBase = UIView
     ]
 
     /// A click, a key or typing on a page, carried out in the page: the point (in the window's frame view) turned into
-    /// the page's own, or, with none, whatever the page has focused while it holds the window's keyboard.
-    private static func act(_ action: LampDriver.Action, at point: NSPoint?, in window: NSWindow) -> String? {
+    /// the page's own, or, with none, whatever the page has focused while it holds the window's keyboard. A click's
+    /// outcome is the page's answer, given to `said` once it comes (with whether it clicked): what it landed on, and for
+    /// the thing `meant` (one of the page's own, as listed), whether it was that thing at all.
+    private static func act(_ action: LampDriver.Action, at point: NSPoint?, meant: LampScreen.Item?, in window: NSWindow,
+                            said: @escaping @MainActor (String, Bool) -> Void) -> String? {
         guard let frame = window.contentView?.superview ?? window.contentView else { return nil }
         let shown = pages.allObjects.filter { $0.window === window }
         let page: WKWebView, spot: String
+        var css = CGPoint.zero, zoom: CGFloat = 1
         if let point {
             guard let hit = shown.first(where: { $0.frame.contains($0.superview?.convert(point, from: frame) ?? .zero) }) else { return nil }
-            let local = hit.convert(point, from: frame), zoom = max(hit.pageZoom, 0.01)
+            let local = hit.convert(point, from: frame)
+            zoom = max(hit.pageZoom, 0.01)
             let y = hit.isFlipped ? local.y : hit.bounds.height - local.y
             page = hit
-            spot = "document.elementFromPoint(\(local.x / zoom), \(y / zoom))"
+            css = CGPoint(x: local.x / zoom, y: y / zoom)
+            spot = "document.elementFromPoint(\(css.x), \(css.y))"
         } else {
             guard let focused = shown.first(where: { page in
                 (window.firstResponder as? NSView).map { $0 === page || $0.isDescendant(of: page) } ?? false
@@ -1441,15 +1462,22 @@ typealias LampPageHolderBase = UIView
         case "click", "double_click":
             guard point != nil else { return nil }
             let clicks = action.action == "click" ? 1 : 2
-            run("""
-                var focusable = el.closest('[data-focus], button, a[href], input, select, textarea, [tabindex]') || el;
-                if (focusable.focus) focusable.focus();
-                for (var i = 0; i < \(clicks); i++) if (focusable.click) focusable.click();
-                if (\(clicks) === 2) focusable.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
-                """)
-            // Sent, not proof: a game takes a click in its own time, and may not take it at all.
-            if action.page == true { return (clicks == 1 ? "clicked" : "double-clicked") + " in the game's page; the picture shows whether the game took it" }
-            return clicks == 1 ? "clicked in the page" : "double-clicked in the page"
+            // The thing as the page's read listed it, with its box in the page's own pixels: the page clicks that very
+            // thing, once it's checked it's still there, at its middle (the point).
+            let scale = LampRuntime.scale(of: window)
+            let want = meant.map { "{ ref: \($0.ref ?? -1), w: \($0.frame.width / scale / zoom), h: \($0.frame.height / scale / zoom) }" } ?? "null"
+            page.evaluateJavaScript(click + "(\(css.x), \(css.y), \(want), \(clicks))") { answer, error in
+                MainActor.assumeIsolated {
+                    guard error == nil, let json = answer as? String,
+                          let told = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any], let words = told["said"] as? String else {
+                        return said("the page couldn't take the click (\(error?.localizedDescription ?? "it gave no answer")), so it may not have happened", false)
+                    }
+                    let did = told["did"] as? Bool ?? false
+                    // Sent, not proof: a game takes a click in its own time, and may not take it at all.
+                    said(words + (did && action.page == true ? "; the picture shows whether the game took it" : ""), did)
+                }
+            }
+            return LampPageItems.sent
         case "type":
             let text = action.text ?? ""
             let quoted = String(decoding: (try? JSONSerialization.data(withJSONObject: [text])) ?? Data("[\"\"]".utf8), as: UTF8.self)
@@ -1539,7 +1567,7 @@ typealias LampPageHolderBase = UIView
             let role = ["button": "button", "field": "text field", "choice": "choice", "image": "picture"][kind] ?? "text"
             return LampScreen.Item(role: role, label: entry["name"] as? String ?? "", value: entry["value"] as? String ?? "",
                                    frame: CGRect(x: (box.minX + n("x")) * scale, y: (top + n("y")) * scale, width: n("w") * scale, height: n("h") * scale),
-                                   selected: entry["focused"] as? Bool ?? false)
+                                   selected: entry["focused"] as? Bool ?? false, ref: (entry["ref"] as? NSNumber)?.intValue)
         }
     }
 }

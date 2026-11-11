@@ -10,17 +10,23 @@ import { XBOX } from './device-tier.js';
 
 // Lamp: the rest of Ann Arbor's landmark buildings, modelled by hand on the city survey's own outline of each (found by
 // a point inside it, so the model stands exactly where the survey's plain block stood, which it replaces):
-// - Michigan League (1929): tan-red brick, limestone bands, a slate mansard, a stone frontispiece of three arches
-//   facing Ingalls Mall.
-// - Rackham Building (1938): pale limestone, tall bronze-framed windows and its green copper hipped roof.
-// - Museum of Art, Alumni Memorial Hall (1910): limestone with a colonnade of columns along State Street.
+// - Michigan League (1929): brick with limestone bands and a dentilled cornice, round-arched windows below, tall ones
+//   (some paired) and small square ones above, a steep slate roof with dormers and tall chimneys, and the stone
+//   frontispiece of three arches under a balustrade facing Ingalls Mall.
+// - Rackham Building (1938): Art Deco limestone on a granite base, bronze windows deep between fluted piers with
+//   Deco spandrels and carved frieze panels, the bronze-doored south entrance and the green copper hipped roof.
+// - Museum of Art: Alumni Memorial Hall (1910), limestone with window surrounds, a balustrade and its Ionic colonnade
+//   on State Street, and the 2009 Frankel Wing behind it, stone panels and glass, cantilevered over S University.
 // - Hatcher Graduate Library: the 1920 front on the Diag in buff brick with five tall arched windows in a stone
 //   centre, and the taller stacks behind.
 // - Crisler Center (1967): the round arena, concrete walls with a blue and maize band under its low domed roof.
 // - Yost Ice Arena (1923): the brick field house with its barrel-vaulted roof and great arched end windows.
-// - Kerrytown: the old brick market buildings under a gabled roof.
-// - Ann Arbor Farmers Market: the long open sheds on green steel posts (no walls, so you can walk under them).
-// - Ann Arbor District Library downtown: brick and concrete with long bands of windows.
+// - Kerrytown Market & Shops: three old brick buildings round a courtyard, each its own height and brick, with
+//   segmental-arched windows, wood-and-glass shopfronts, loading-dock decks and the Kerrytown Chime's belfry.
+// - Ann Arbor Farmers Market: long open sheds, gabled along their length on green steel trusses, the stalls' tables
+//   under them (no walls, so you can walk under them).
+// - Ann Arbor District Library downtown: tan brick and precast, bronze window bands between brick piers, a deep fascia,
+//   the Fifth Ave entrance's two-storey glass bay under a thin canopy on posts.
 // - Tower Plaza: the 26-storey brown brick tower, windows in vertical strips, and its rooftop penthouse.
 // - The Gandy Dancer (1886): the Michigan Central depot in rough fieldstone with red sandstone arches, a red hipped
 //   roof, its round tower and the platform porch along the tracks.
@@ -165,15 +171,66 @@ function tools(B) {
 function michiganLeague(B, T) {
   const s = surveyAt(891, 37);
   if (!s) return null;
+  const K = ktTools(B, T);
   const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
+  const EAVE = 13.4, IN = 3, RIDGE = 19.2, SLOPE = (RIDGE - EAVE) / IN;
   B.prism(r, g - 2, Y(1.2), LIME_DARK);
-  T.walls(r, Y(1.2), Y(13.4), BRICK_LEAGUE);
-  B.ringWindows(r, [[2.2, 4.4], [5.4, 7.8], [8.8, 11.2]], 3.2, 1.4, GLASS, 0.03, g);
-  T.band(r, Y(4.8), Y(5.1), LIME);
-  T.band(r, Y(12.6), Y(13.4), LIME, 0.25);
-  T.slope(r, Y(13.4), 3, Y(17.4), SLATE);
+  const fe = edgeFacing(r, -1, 0), isFront = (e) => Math.abs(e.ax - fe.ax) < 0.01 && Math.abs(e.az - fe.az) < 0.01;
+  // brick walls, stone bands and a dentilled cornice; windows a floor at a time: round-arched with keystones on the
+  // ground floor, tall ones under flat stone arches on the second (paired in every third bay), small square ones on
+  // the third; a dormer over every other bay, on the slate roof
+  edgesOf(r).forEach((e, ei) => {
+    K.face(e, 0, e.L, Y(1.2), Y(EAVE), 0.01, BRICK_LEAGUE, B.brick);
+    T.ebox(e, -0.05, e.L + 0.05, Y(1.1), Y(1.35), 0, 0.15, LIME);
+    T.ebox(e, -0.05, e.L + 0.05, Y(4.8), Y(5.1), 0, 0.15, LIME);
+    T.ebox(e, -0.15, e.L + 0.15, Y(12.6), Y(13.0), 0, 0.25, LIME);
+    for (let u = 0.25; u < e.L - 0.1; u += 0.5) T.ebox(e, u - 0.09, u + 0.09, Y(12.4), Y(12.6), 0, 0.18, LIME);
+    T.ebox(e, -0.3, e.L + 0.3, Y(13.0), Y(EAVE), 0, 0.45, LIME);
+    if (e.L < 3.2) return;
+    const n = Math.floor((e.L - 0.8) / 3.2), off = (e.L - n * 3.2) / 2 + 1.6;
+    for (let k = 0; k < n; k++) {
+      const u = off + k * 3.2;
+      if (isFront(e) && Math.abs(u - e.L / 2) < 8.6) continue;
+      T.earch(e, u, Y(2.0), Y(4.4), 1.5, 0.03, GLASS);
+      T.ebox(e, u - 0.18, u + 0.18, Y(4.2), Y(4.75), 0, 0.12, LIME);
+      T.ebox(e, u - 0.9, u + 0.9, Y(1.85), Y(2.0), 0, 0.14, LIME);
+      const pair = (k + ei) % 3 === 1;
+      for (const du of pair ? [-0.45, 0.45] : [0]) {
+        const w = pair ? 0.7 : 1.3;
+        K.face(e, u + du - w / 2, u + du + w / 2, Y(5.6), Y(7.9), 0.02, GLASS, B.glass);
+        K.face(e, u + du - 0.03, u + du + 0.03, Y(5.6), Y(7.9), 0.04, KT_SASH);
+        K.face(e, u + du - w / 2, u + du + w / 2, Y(6.9), Y(6.96), 0.04, KT_SASH);
+      }
+      T.ebox(e, u - 0.95, u + 0.95, Y(7.9), Y(8.3), 0, 0.1, LIME);
+      T.ebox(e, u - 0.85, u + 0.85, Y(5.45), Y(5.6), 0, 0.14, LIME);
+      K.face(e, u - 0.6, u + 0.6, Y(9.3), Y(10.7), 0.02, GLASS, B.glass);
+      K.face(e, u - 0.03, u + 0.03, Y(9.3), Y(10.7), 0.04, KT_SASH);
+      T.ebox(e, u - 0.75, u + 0.75, Y(9.15), Y(9.3), 0, 0.14, LIME);
+      // a dormer over every other bay, its face a metre in from the wall, set in the slate
+      if (k % 2 || e.L < 6) continue;
+      const d0 = -0.9, d1 = -2.6, y0 = EAVE + 0.9 * SLOPE - 0.2, y1 = y0 + 2.2, top = y1 + 0.9, w = 0.85;
+      T.ebox(e, u - w, u + w, Y(y0), Y(y1), d1, d0, SLATE);
+      K.face(e, u - 0.5, u + 0.5, Y(y0 + 0.3), Y(y1 - 0.3), d0 + 0.02, GLASS, B.glass);
+      T.ebox(e, u - 0.6, u + 0.6, Y(y0 + 0.2), Y(y0 + 0.3), d0, d0 + 0.08, LIME);
+      K.face(e, u - 0.03, u + 0.03, Y(y0 + 0.3), Y(y1 - 0.3), d0 + 0.04, KT_SASH);
+      const P = (uu, y, d) => K.P(e, uu, Y(y), d);
+      B.quad(B.stone, P(u - w - 0.15, y1, d0 + 0.2), P(u, top, d0 + 0.2), P(u, top, d1), P(u - w - 0.15, y1, d1), SLATE);
+      B.quad(B.stone, P(u, top, d0 + 0.2), P(u + w + 0.15, y1, d0 + 0.2), P(u + w + 0.15, y1, d1), P(u, top, d1), SLATE);
+      B.tri(B.stone, P(u - w, y1, d0), P(u + w, y1, d0), P(u, top - 0.1, d0), LIME);
+    }
+  });
+  // the slate roof, steeper than before, a ridge cap round its flat, and tall chimneys of the brick with stone caps
+  const flat = T.slope(insetRing(r, -0.3), Y(EAVE), IN, Y(RIDGE), SLATE);
+  B.prism(flat, Y(RIDGE), Y(RIDGE + 0.15), [0.2, 0.2, 0.22]);
+  const es = edgesOf(r);
+  for (const e of es.slice(0, 6)) {
+    const p = K.P(e, e.L * 0.3, 0, -IN - 0.6);
+    B.box(p[0] - 0.7, p[0] + 0.7, Y(RIDGE - 1), Y(RIDGE + 2.6), p[2] - 0.45, p[2] + 0.45, BRICK_LEAGUE);
+    B.box(p[0] - 0.8, p[0] + 0.8, Y(RIDGE + 2.6), Y(RIDGE + 2.8), p[2] - 0.55, p[2] + 0.55, LIME);
+    for (const dx of [-0.35, 0.35]) B.box(p[0] + dx - 0.12, p[0] + dx + 0.12, Y(RIDGE + 2.8), Y(RIDGE + 3.2), p[2] - 0.12, p[2] + 0.12, [0.5, 0.3, 0.22]);
+  }
   // the frontispiece on the west wall: limestone, three tall arches, a balustrade
-  const e = edgeFacing(r, -1, 0), c = e.L / 2;
+  const e = fe, c = e.L / 2;
   T.ebox(e, c - 8, c + 8, Y(0), Y(14.4), 0, 0.7, LIME);
   for (const du of [-5, 0, 5]) {
     T.earch(e, c + du, Y(0.3), Y(5.6), 2.6, 0.72, BRONZE, B.stone);
@@ -181,56 +238,283 @@ function michiganLeague(B, T) {
   }
   for (const du of [-7.5, -2.5, 2.5, 7.5]) T.ebox(e, c + du - 0.45, c + du + 0.45, Y(0), Y(13.6), 0.7, 1.0, LIME_DARK);
   T.ebox(e, c - 8.3, c + 8.3, Y(14.4), Y(15.4), -0.2, 0.9, LIME_DARK);
-  return { s, maxY: Y(17.4) };
+  for (let u = c - 7.8; u < c + 7.9; u += 0.4) T.ebox(e, u - 0.08, u + 0.08, Y(15.4), Y(16.2), 0.1, 0.3, LIME);
+  T.ebox(e, c - 8.3, c + 8.3, Y(16.2), Y(16.45), 0, 0.4, LIME_DARK);
+  return { s, maxY: Y(RIDGE + 0.15) };
 }
 
+// The Rackham Building (1938, William Kapp of Smith, Hinchman & Grylls): Art Deco in Indiana limestone on a pink-grey
+// granite base under a green copper hipped roof. Two tall storeys of windows stacked in bays between shallow fluted
+// stone piers, so each window sits deep in its reveal: bronze frames and mullions, a bronze spandrel panel with a
+// stepped Deco pattern between the floors, and over each bay a carved stone panel in the frieze (a stepped chevron),
+// under a stepped cornice. The south front on E Washington (the recess between its end pavilions): three tall bronze
+// doors with grilles over them in a stepped stone surround, wide granite steps, bronze lanterns. The curved north wall
+// round the lecture hall is blind but for its piers and carved panels.
+const RK_LIME = [0.86, 0.83, 0.75];
+const RK_LIME_DARK = [0.74, 0.71, 0.64];
+const RK_GRANITE = [0.5, 0.4, 0.38];
+const RK_BRONZE = [0.26, 0.19, 0.11];
+const RK_BRONZE_LIGHT = [0.42, 0.32, 0.18];
+const RK_COPPER = [0.36, 0.56, 0.48];
+const RK_COPPER_DARK = [0.29, 0.47, 0.4];
 function rackham(B, T) {
   const s = surveyAt(834, -132);
   if (!s) return null;
+  const K = ktTools(B, T);
   const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
-  B.prism(r, g - 2, Y(1.6), LIME_DARK);
-  T.walls(r, Y(1.6), Y(17), LIME);
-  B.ringWindows(r, [[3, 8.4], [10, 15]], 4.4, 2, GLASS, 0.03, g);
-  T.band(r, Y(8.9), Y(9.4), LIME_DARK);
-  T.band(r, Y(16.2), Y(17.6), LIME_DARK, 0.4);
-  // the copper roof
-  T.slope(r, Y(17.6), 5, Y(24.5), COPPER);
-  // the entrance on the south, on E Washington facing the mall's fountain: three tall bronze doors under a stone
-  // frame, up wide steps
-  const e = edgeFacing(r, 0, 1), c = e.L / 2;
-  T.ebox(e, c - 9, c + 9, Y(0), Y(15.5), 0, 0.9, LIME);
-  for (const du of [-4.5, 0, 4.5]) {
-    T.ebox(e, c + du - 1.6, c + du + 1.6, Y(0.8), Y(6.5), 0.9, 0.95, BRONZE);
-    T.ebox(e, c + du - 1.6, c + du + 1.6, Y(7.2), Y(14), 0.9, 0.95, GLASS, B.glass);
+  const BASE = 1.6, TOP = 17, PITCH = 4.4;
+  B.prism(r, g - 2, Y(BASE), RK_GRANITE);
+  B.prism(r, Y(TOP) - 0.05, Y(TOP), [0.3, 0.3, 0.31]);
+  const front = edgeFacing(r, 0, 1), isFront = (e) => Math.abs(e.ax - front.ax) < 0.01 && Math.abs(e.az - front.az) < 0.01;
+  // a carved panel: a stepped chevron in relief on a sunk field
+  const relief = (e, u, y0, y1, w) => {
+    K.face(e, u - w / 2, u + w / 2, y0, y1, 0.36, RK_LIME_DARK);
+    for (let k = 0; k < 4; k++) {
+      const hw = (w / 2) * (1 - k * 0.22), y = y0 + 0.12 + k * ((y1 - y0 - 0.24) / 4);
+      T.ebox(e, u - hw + 0.1, u + hw - 0.1, y, y + (y1 - y0) / 8, 0.36, 0.42, RK_LIME);
+    }
+    T.ebox(e, u - 0.06, u + 0.06, y0 + 0.1, y1 - 0.1, 0.36, 0.44, RK_LIME);
+  };
+  // a fluted pier from y0 to y1
+  const pier = (e, u, y0, y1, w = 0.9) => {
+    T.ebox(e, u - w / 2, u + w / 2, y0, y1, 0, 0.35, RK_LIME);
+    for (const f of [-0.22, 0, 0.22]) K.face(e, u + f * w - 0.03, u + f * w + 0.03, y0 + 0.4, y1 - 0.3, 0.351, RK_LIME_DARK);
+  };
+  for (const e of edgesOf(r)) {
+    K.face(e, 0, e.L, Y(BASE), Y(TOP), 0.01, RK_LIME);
+    // the granite base's top course and the stepped cornice
+    T.ebox(e, -0.1, e.L + 0.1, Y(BASE - 0.25), Y(BASE), 0, 0.45, RK_GRANITE);
+    T.ebox(e, -0.1, e.L + 0.1, Y(TOP - 1.9), Y(TOP - 1.6), 0, 0.42, RK_LIME_DARK);
+    T.ebox(e, -0.15, e.L + 0.15, Y(TOP - 0.6), Y(TOP - 0.3), 0, 0.5, RK_LIME);
+    T.ebox(e, -0.25, e.L + 0.25, Y(TOP - 0.3), Y(TOP + 0.3), 0, 0.65, RK_LIME_DARK);
+    if (e.L < 3) continue;
+    const blind = e.nz < -0.4 && e.L < 12; // the curved hall's segments
+    const n = Math.max(1, Math.round(e.L / PITCH)), w = e.L / n;
+    for (let k = 0; k <= n; k++) pier(e, k * w, Y(BASE), Y(TOP - 1.9), k === 0 || k === n ? 1.2 : 0.9);
+    for (let k = 0; k < n; k++) {
+      const u = (k + 0.5) * w, ww = Math.min(2.4, w - 1.5);
+      relief(e, u, Y(TOP - 1.55), Y(TOP - 0.65), Math.min(2.6, w - 1.1));
+      if (blind || ww < 0.8) { relief(e, u, Y(6), Y(10), Math.min(2, w - 1.3)); continue; }
+      if (isFront(e) && Math.abs(u - e.L / 2) < 9.5) continue;
+      // the two windows, the bronze spandrel between, the frames and mullions
+      for (const [y0, y1] of [[2.6, 8.2], [9.9, 14.9]]) {
+        K.face(e, u - ww / 2, u + ww / 2, Y(y0), Y(y1), 0.02, GLASS, B.glass);
+        for (const yy of [y0, y1 - 0.1]) T.ebox(e, u - ww / 2, u + ww / 2, Y(yy), Y(yy + 0.1), 0.02, 0.1, RK_BRONZE);
+        for (const du of [-ww / 2, -ww / 6, ww / 6, ww / 2 - 0.08]) T.ebox(e, u + du, u + du + 0.08, Y(y0), Y(y1), 0.02, 0.1, RK_BRONZE);
+        T.ebox(e, u - ww / 2, u + ww / 2, Y(y0 + (y1 - y0) * 0.7), Y(y0 + (y1 - y0) * 0.7 + 0.08), 0.02, 0.1, RK_BRONZE);
+      }
+      K.face(e, u - ww / 2, u + ww / 2, Y(8.3), Y(9.8), 0.04, RK_BRONZE);
+      for (let j = 0; j < 3; j++) T.ebox(e, u - ww / 2 + 0.2 + j * 0.2, u + ww / 2 - 0.2 - j * 0.2, Y(8.5 + j * 0.4), Y(8.6 + j * 0.4), 0.04, 0.08, RK_BRONZE_LIGHT);
+      // a stone sill under the lower window
+      T.ebox(e, u - ww / 2 - 0.1, u + ww / 2 + 0.1, Y(2.45), Y(2.6), 0, 0.3, RK_LIME_DARK);
+    }
   }
-  for (let k = 0; k < 4; k++) T.ebox(e, c - 10, c + 10, g - 1, Y(0.2 * (4 - k)), 0.9, 1.4 + k * 0.5, LIME_DARK);
-  return { s, maxY: Y(24.5) };
+  // the copper roof: hipped in from the cornice, its standing seams, the ridge's flat
+  const top = T.slope(insetRing(r, -0.2), Y(TOP + 0.3), 5, Y(24.5), RK_COPPER);
+  const eaves = insetRing(r, -0.2), inner = insetRing(r, 4.8), m = eaves.length / 2;
+  for (let i = 0; i < m; i++) {
+    const j = (i + 1) % m, L = Math.hypot(eaves[j * 2] - eaves[i * 2], eaves[j * 2 + 1] - eaves[i * 2 + 1]);
+    for (let t = 0.6 / L; t < 1; t += 1.2 / L) {
+      const ax = eaves[i * 2] + (eaves[j * 2] - eaves[i * 2]) * t, az = eaves[i * 2 + 1] + (eaves[j * 2 + 1] - eaves[i * 2 + 1]) * t;
+      const bx = inner[i * 2] + (inner[j * 2] - inner[i * 2]) * t, bz = inner[i * 2 + 1] + (inner[j * 2 + 1] - inner[i * 2 + 1]) * t;
+      K.beam([ax, Y(TOP + 0.35), az], [bx, Y(24.45), bz], 0.06, RK_COPPER_DARK);
+    }
+  }
+  B.prism(top, Y(24.5), Y(24.8), RK_COPPER_DARK);
+  // the south front: a stepped stone surround round three tall bronze doors, grilles over them, steps and lanterns
+  const e = front, c = e.L / 2;
+  T.ebox(e, c - 9.5, c + 9.5, Y(BASE), Y(TOP - 1.9), 0, 0.5, RK_LIME);
+  T.ebox(e, c - 8.5, c + 8.5, Y(BASE), Y(TOP - 1.2), 0.5, 0.9, RK_LIME);
+  T.ebox(e, c - 7.6, c + 7.6, Y(TOP - 1.2), Y(TOP + 0.6), 0, 0.95, RK_LIME_DARK);
+  for (const du of [-4.6, 0, 4.6]) {
+    // the door's reveal (stone jambs), the bronze door leaves with their panels, the grille over them
+    T.ebox(e, c + du - 2.05, c + du - 1.75, Y(0.6), Y(14.4), 0.5, 1.25, RK_LIME_DARK);
+    T.ebox(e, c + du + 1.75, c + du + 2.05, Y(0.6), Y(14.4), 0.5, 1.25, RK_LIME_DARK);
+    K.face(e, c + du - 1.75, c + du + 1.75, Y(0.6), Y(6.4), 0.92, RK_BRONZE);
+    for (let y = 1.1; y < 6.2; y += 1.25) T.ebox(e, c + du - 1.6, c + du + 1.6, Y(y), Y(y + 0.08), 0.92, 0.97, RK_BRONZE_LIGHT);
+    T.ebox(e, c + du - 0.04, c + du + 0.04, Y(0.6), Y(6.4), 0.92, 0.98, RK_BRONZE_LIGHT);
+    T.ebox(e, c + du - 1.75, c + du + 1.75, Y(6.4), Y(7.1), 0.92, 1.0, RK_BRONZE);
+    K.face(e, c + du - 1.75, c + du + 1.75, Y(7.1), Y(14.2), 0.92, GLASS, B.glass);
+    for (let u = -1.5; u <= 1.51; u += 0.5) T.ebox(e, c + du + u - 0.04, c + du + u + 0.04, Y(7.1), Y(14.2), 0.93, 1.0, RK_BRONZE);
+    for (const y of [9.5, 11.9]) T.ebox(e, c + du - 1.75, c + du + 1.75, Y(y), Y(y + 0.1), 0.93, 1.0, RK_BRONZE);
+    relief(e, c + du, Y(14.5), Y(15.5), 3.2);
+  }
+  // the granite steps across the front, and a lantern at each end of them
+  for (let k = 0; k < 4; k++) T.ebox(e, c - 11, c + 11, g - 1, Y(0.15 * (4 - k)), 0.9, 1.6 + k * 0.45, RK_GRANITE);
+  for (const du of [-12, 12]) {
+    T.ebox(e, c + du - 0.5, c + du + 0.5, g - 0.5, Y(1.2), 1.4, 2.4, RK_GRANITE);
+    K.beam(K.P(e, c + du, Y(1.2), 1.9), K.P(e, c + du, Y(4.2), 1.9), 0.18, RK_BRONZE);
+    T.ebox(e, c + du - 0.3, c + du + 0.3, Y(4.2), Y(5.0), 1.6, 2.2, [0.95, 0.85, 0.6], B.glass);
+    T.ebox(e, c + du - 0.36, c + du + 0.36, Y(5.0), Y(5.15), 1.54, 2.26, RK_BRONZE);
+  }
+  return { s, maxY: Y(24.8) };
 }
 
+// The University of Michigan Museum of Art: Alumni Memorial Hall (1910, Donaldson & Meier), Beaux-Arts limestone, its
+// Ionic colonnade between two end pavilions on State Street, and the Maxine and Stuart Frankel and Frankel Family Wing
+// (2009, Allied Works) behind it to the south and east, toward S University. Laid out by hand inside the survey's one
+// outline of both (found by a point inside it):
+// - the hall: a banded base, windows in moulded stone surrounds (the ground floor's under cornice hoods, the upper
+//   ones with keystones), the entablature with its dentils, and a balustrade round the roof over it; the colonnade's
+//   columns with bases and volute capitals on a porch up a flight of steps; skylights on the flat roof;
+// - the wing: pale limestone panels in a grid of joints, a full-height glass front along S University with the upper
+//   floors cantilevered out over the walk as a stone box with a long window, its rounded glass corner to the east,
+//   ribbons of windows elsewhere, a thin metal coping.
+const MA_LIME = [0.86, 0.83, 0.76];
+const MA_LIME_DARK = [0.74, 0.71, 0.64];
+const MA_PANEL = [0.83, 0.82, 0.78];
+const MA_JOINT = [0.66, 0.65, 0.62];
+const MA_MULLION = [0.22, 0.23, 0.24];
+const MA_ROOF = [0.42, 0.42, 0.43];
 function museumOfArt(B, T) {
   const s = surveyAt(705, 450);
   if (!s) return null;
-  const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
-  B.prism(r, g - 2, Y(1.4), LIME_DARK);
-  T.walls(r, Y(1.4), Y(13.2), LIME);
-  B.ringWindows(r, [[2.6, 5.6], [7.2, 11]], 4, 1.8, GLASS, 0.03, g);
-  T.band(r, Y(12.4), Y(13.6), LIME_DARK, 0.4);
-  T.walls(r, Y(13.6), Y(15), LIME);
-  // the colonnade along State Street (west): eight columns on a stone porch, under the entablature
-  const e = edgeFacing(r, -1, 0), c = e.L / 2, span = Math.min(28, e.L - 6);
-  T.ebox(e, c - span / 2 - 1.5, c + span / 2 + 1.5, g - 1, Y(1.4), 0, 4.2, LIME_DARK);
-  for (let k = 0; k < 3; k++) T.ebox(e, c - span / 2 - 1.5, c + span / 2 + 1.5, g - 1, Y(1.4 - 0.35 * (k + 1)), 4.2, 4.6 + k * 0.45, LIME_DARK);
-  for (let k = 0; k < 8; k++) {
-    const u = c - span / 2 + (k * span) / 7;
-    T.ebox(e, u - 0.7, u + 0.7, Y(1.4), Y(1.9), 2.3, 3.7, LIME);
-    T.ecolumn(e, u, Y(1.9), Y(11.6), 0.55, 3, LIME);
-    T.ebox(e, u - 0.75, u + 0.75, Y(11.6), Y(12.1), 2.25, 3.75, LIME);
+  const K = ktTools(B, T);
+  const g = groundOf(s.ring) - 0.3, Y = (y) => g + y;
+  // Alumni Memorial Hall: the north pavilion, the middle block behind the colonnade, the south pavilion
+  const hall = [
+    [678, 417.5, 713, 417.2, 713, 433.3, 678.5, 433.5],
+    [696.5, 433.3, 713, 433.3, 713, 455, 696.5, 455],
+    [681.5, 455, 713, 455, 713, 471, 677.6, 471, 677.5, 464, 681.6, 464]
+  ];
+  // the Frankel Wing: along S University with its rounded corner, and the strip on the north-east
+  const wing = [
+    [677.6, 471, 713, 471, 713, 456.5, 719.5, 456.5, 719.5, 466, 724, 467, 726, 469, 726.5, 472, 726, 476, 724, 477.5, 719, 478.5,
+      719, 489.5, 684.5, 489.5, 684.5, 481, 678, 481.5],
+    [713, 417.2, 738.5, 417, 739, 430.5, 713, 431]
+  ];
+  // a point a metre in front of a wall: is it inside another part of the museum?
+  const parts = [...hall, ...wing];
+  const polys = parts.map((p) => ({ ring: p, poly: { outer: ringPts(p), holes: [] } }));
+  const inside = (x, z, own) => polys.some(({ ring, poly }) => ring !== own && polygonContains(poly, x, z));
+  const H = 13.6, ATTIC = 15.2;
+  // a window in a moulded stone surround
+  const surround = (e, u, y0, y1, w, hood) => {
+    K.face(e, u - w / 2, u + w / 2, Y(y0), Y(y1), 0.02, GLASS, B.glass);
+    T.ebox(e, u - w / 2 - 0.25, u - w / 2, Y(y0 - 0.1), Y(y1 + 0.1), 0, 0.1, MA_LIME_DARK);
+    T.ebox(e, u + w / 2, u + w / 2 + 0.25, Y(y0 - 0.1), Y(y1 + 0.1), 0, 0.1, MA_LIME_DARK);
+    T.ebox(e, u - w / 2 - 0.25, u + w / 2 + 0.25, Y(y1), Y(y1 + 0.3), 0, 0.1, MA_LIME_DARK);
+    T.ebox(e, u - w / 2 - 0.35, u + w / 2 + 0.35, Y(y0 - 0.3), Y(y0 - 0.1), 0, 0.2, MA_LIME_DARK);
+    K.face(e, u - 0.04, u + 0.04, Y(y0), Y(y1), 0.05, MA_MULLION);
+    K.face(e, u - w / 2, u + w / 2, Y(y0 + (y1 - y0) * 0.62), Y(y0 + (y1 - y0) * 0.62 + 0.07), 0.05, MA_MULLION);
+    if (hood) {
+      T.ebox(e, u - w / 2 - 0.5, u + w / 2 + 0.5, Y(y1 + 0.35), Y(y1 + 0.6), 0, 0.4, MA_LIME);
+      for (const du of [-w / 2 - 0.4, w / 2 + 0.25]) T.ebox(e, u + du, u + du + 0.15, Y(y1 - 0.2), Y(y1 + 0.35), 0, 0.3, MA_LIME_DARK);
+    } else {
+      T.ebox(e, u - 0.25, u + 0.25, Y(y1 - 0.1), Y(y1 + 0.45), 0, 0.18, MA_LIME);
+    }
+  };
+  for (const ring of hall) {
+    B.prism(ring, g - 2, Y(1.4), MA_LIME_DARK);
+    B.prism(ring, Y(H) - 0.05, Y(H), MA_ROOF);
+    for (const e of edgesOf(ring)) {
+      const front = (u) => !inside(e.ax + e.tx * u + e.nx * 0.8, e.az + e.tz * u + e.nz * 0.8, ring);
+      if (!front(e.L / 2)) continue;
+      K.face(e, 0, e.L, Y(1.4), Y(H), 0.01, MA_LIME);
+      // the base's bands, the floor band, the entablature: architrave, frieze, dentils and the cornice
+      for (let y = 0.45; y < 1.4; y += 0.45) K.face(e, 0, e.L, Y(y), Y(y + 0.05), 0.012, MA_JOINT);
+      T.ebox(e, -0.05, e.L + 0.05, Y(1.3), Y(1.55), 0, 0.2, MA_LIME_DARK);
+      T.ebox(e, -0.05, e.L + 0.05, Y(6.3), Y(6.6), 0, 0.15, MA_LIME_DARK);
+      T.ebox(e, -0.1, e.L + 0.1, Y(11.9), Y(12.4), 0, 0.2, MA_LIME_DARK);
+      for (let u = 0.2; u < e.L - 0.1; u += 0.5) T.ebox(e, u - 0.1, u + 0.1, Y(12.95), Y(13.15), 0, 0.3, MA_LIME_DARK);
+      T.ebox(e, -0.4, e.L + 0.4, Y(13.15), Y(13.6), 0, 0.65, MA_LIME);
+      // the balustrade: a plinth, balusters, a rail, pedestals at the ends
+      T.ebox(e, 0, e.L, Y(H), Y(H + 0.3), -0.1, 0.25, MA_LIME_DARK);
+      for (let u = 0.6; u < e.L - 0.5; u += 0.42) T.ebox(e, u - 0.08, u + 0.08, Y(H + 0.3), Y(ATTIC - 0.2), 0.02, 0.18, MA_LIME);
+      T.ebox(e, -0.1, e.L + 0.1, Y(ATTIC - 0.2), Y(ATTIC), -0.12, 0.28, MA_LIME_DARK);
+      for (const u of [0.2, e.L - 0.2]) T.ebox(e, u - 0.4, u + 0.4, Y(H), Y(ATTIC + 0.15), -0.1, 0.3, MA_LIME);
+      if (e.L < 4) continue;
+      // the windows in their surrounds
+      const n = Math.max(1, Math.floor(e.L / 4.2)), w = e.L / n;
+      for (let k = 0; k < n; k++) {
+        const u = (k + 0.5) * w;
+        if (!front(u)) continue;
+        surround(e, u, 2.4, 5.3, 1.7, true);
+        surround(e, u, 7.4, 11.0, 1.7, false);
+      }
+    }
   }
-  T.ebox(e, c - span / 2 - 1.5, c + span / 2 + 1.5, Y(12.1), Y(13.6), 0, 4, LIME);
-  T.ebox(e, c - span / 2 - 1.8, c + span / 2 + 1.8, Y(13.6), Y(14.2), -0.2, 4.3, LIME_DARK);
-  for (let k = 0; k < 3; k++) T.ebox(e, c - 2.2 + k * 2.2 - 0.9, c - 2.2 + k * 2.2 + 0.9, Y(1.4), Y(5.2), 0.02, 0.06, BRONZE);
-  return { s, maxY: Y(15) };
+  // the colonnade in the recess facing State St: a porch up the steps, six Ionic columns, the entablature over them
+  const recess = edgesOf(hall[1]).find((e) => e.nx < -0.8);
+  if (recess) {
+    const e = recess, c = e.L / 2, span = e.L - 3;
+    T.ebox(e, -1.5, e.L + 1.5, g - 1, Y(1.4), 0, 4.6, MA_LIME_DARK);
+    for (let k = 0; k < 4; k++) T.ebox(e, c - span / 2 - 1, c + span / 2 + 1, g - 1, Y(1.4 - 0.35 * (k + 1)), 4.6, 5.0 + k * 0.42, MA_LIME_DARK);
+    for (let k = 0; k < 6; k++) {
+      const u = c - span / 2 + (k * span) / 5;
+      T.ebox(e, u - 0.65, u + 0.65, Y(1.4), Y(1.75), 2.35, 3.65, MA_LIME_DARK);
+      T.ebox(e, u - 0.55, u + 0.55, Y(1.75), Y(2.0), 2.45, 3.55, MA_LIME);
+      T.ecolumn(e, u, Y(2.0), Y(10.9), 0.48, 3, MA_LIME);
+      // the capital: an echinus, the volutes either side, the abacus
+      T.ebox(e, u - 0.55, u + 0.55, Y(10.9), Y(11.25), 2.45, 3.55, MA_LIME_DARK);
+      for (const sg of [-1, 1]) T.ebox(e, u + sg * 0.62 - 0.14, u + sg * 0.62 + 0.14, Y(10.75), Y(11.25), 2.4, 3.6, MA_LIME);
+      T.ebox(e, u - 0.7, u + 0.7, Y(11.25), Y(11.45), 2.3, 3.7, MA_LIME);
+    }
+    T.ebox(e, -0.5, e.L + 0.5, Y(11.45), Y(12.95), 0, 3.85, MA_LIME);
+    for (let u = 0; u < e.L; u += 0.5) T.ebox(e, u - 0.1, u + 0.1, Y(12.95), Y(13.15), 3.6, 4.0, MA_LIME_DARK);
+    T.ebox(e, -0.5, e.L + 0.5, Y(13.15), Y(13.6), 0, 4.3, MA_LIME);
+    T.ebox(e, -0.5, e.L + 0.5, Y(H), Y(ATTIC + 0.4), 3.2, 3.9, MA_LIME);
+    // the three doors behind the columns
+    for (const du of [-4, 0, 4]) {
+      K.face(e, c + du - 1.1, c + du + 1.1, Y(1.4), Y(5.4), 0.03, [0.24, 0.18, 0.11]);
+      K.face(e, c + du - 1.1, c + du + 1.1, Y(5.6), Y(7.2), 0.03, GLASS, B.glass);
+      T.ebox(e, c + du - 1.4, c + du + 1.4, Y(5.4), Y(5.6), 0, 0.25, MA_LIME_DARK);
+    }
+  }
+  // skylights over the galleries
+  for (const [x0, x1, z0, z1] of [[684, 708, 421, 430], [684, 708, 459, 468], [700, 710, 437, 452]]) {
+    B.box(x0, x1, Y(H), Y(H + 0.6), z0, z1, MA_LIME_DARK);
+    B.hip(x0 + 0.2, x1 - 0.2, z0 + 0.2, z1 - 0.2, Y(H + 0.6), Y(H + 2.0), [0.55, 0.6, 0.62]);
+    for (let x = x0 + 1.5; x < x1 - 1; x += 1.5) K.beam([x, Y(H + 0.62), z0 + 0.2], [x, Y(H + 2.0), (z0 + z1) / 2], 0.06, MA_MULLION);
+  }
+
+  // the Frankel Wing
+  const FH = 15.2;
+  for (const ring of wing) {
+    B.prism(ring, g - 2, Y(0.3), MA_LIME_DARK);
+    B.prism(ring, Y(FH) - 0.05, Y(FH), MA_ROOF);
+    for (const e of edgesOf(ring)) {
+      const free = (u) => !inside(e.ax + e.tx * u + e.nx * 0.8, e.az + e.tz * u + e.nz * 0.8, ring);
+      if (!free(e.L / 2)) continue;
+      T.ebox(e, -0.05, e.L + 0.05, Y(FH), Y(FH + 0.25), -0.1, 0.12, [0.55, 0.56, 0.57]);
+      const south = e.nz > 0.8 && e.L > 20, curved = e.L < 5.5;
+      if (curved) {
+        // the rounded corner: glass all the way up between slim fins
+        K.face(e, 0, e.L, Y(0.3), Y(FH), 0.01, GLASS, B.glass);
+        T.ebox(e, 0, 0.08, Y(0.3), Y(FH), 0, 0.3, MA_MULLION);
+        for (const y of [4.8, 9.8]) T.ebox(e, 0, e.L, Y(y), Y(y + 0.25), 0, 0.2, MA_PANEL);
+        continue;
+      }
+      if (south) {
+        // the glass front at the foot, the cantilevered stone box over it with its long window
+        K.face(e, 0.5, e.L - 0.5, Y(0.3), Y(5.0), 0.01, GLASS, B.glass);
+        for (let u = 0.5; u <= e.L - 0.49; u += 1.6) T.ebox(e, u - 0.05, u + 0.05, Y(0.3), Y(5.0), 0, 0.12, MA_MULLION);
+        T.ebox(e, 0.5, e.L - 0.5, Y(2.9), Y(3.0), 0, 0.12, MA_MULLION);
+        const out = 3.2;
+        T.ebox(e, 2, e.L - 6, Y(5.0), Y(FH - 0.2), 0, out, MA_PANEL);
+        for (let y = 6.5; y < FH - 0.5; y += 1.5) K.face(e, 2, e.L - 6, Y(y), Y(y + 0.04), out + 0.01, MA_JOINT);
+        for (let u = 2 + 3; u < e.L - 6; u += 3) K.face(e, u, u + 0.04, Y(5.0), Y(FH - 0.2), out + 0.01, MA_JOINT);
+        K.face(e, 4, e.L - 8, Y(8.6), Y(11.0), out + 0.02, GLASS, B.glass);
+        for (let u = 4; u <= e.L - 7.99; u += 2) T.ebox(e, u - 0.05, u + 0.05, Y(8.6), Y(11.0), out, out + 0.1, MA_MULLION);
+        K.face(e, 0, e.L, Y(5.0), Y(FH), 0.01, MA_PANEL);
+        continue;
+      }
+      // elsewhere: stone panels in their grid, ribbons of windows on the upper floors
+      K.face(e, 0, e.L, Y(0.3), Y(FH), 0.01, MA_PANEL);
+      for (let y = 1.8; y < FH; y += 1.5) K.face(e, 0, e.L, Y(y), Y(y + 0.04), 0.015, MA_JOINT);
+      for (let u = 3; u < e.L; u += 3) K.face(e, u, u + 0.04, Y(0.3), Y(FH), 0.015, MA_JOINT);
+      if (e.L > 6) {
+        for (const [y0, y1] of [[1.0, 3.8], [6.2, 8.4], [10.6, 12.8]]) {
+          if (y0 < 2 && e.nz < 0.5) continue; // the street doors and windows only toward S University
+          K.face(e, 1.2, e.L - 1.2, Y(y0), Y(y1), 0.03, GLASS, B.glass);
+          for (let u = 1.2; u <= e.L - 1.19; u += 1.8) T.ebox(e, u - 0.04, u + 0.04, Y(y0), Y(y1), 0.02, 0.1, MA_MULLION);
+        }
+      }
+    }
+  }
+  return { s, maxY: Y(ATTIC + 0.4) };
 }
+const ringPts = (r) => { const out = []; for (let i = 0; i < r.length; i += 2) out.push({ x: r[i], z: r[i + 1] }); return out; };
 
 function hatcher(B, T) {
   const front = surveyAt(840, 365), stacks = surveyAt(840, 410);
@@ -333,78 +617,525 @@ function yost(B, T) {
   return { s: { ...s, ring }, maxY: Y(wallH + rise) };
 }
 
-function kerrytown(B, T) {
-  const s = surveyAt(175, -556);
-  if (!s) return null;
-  const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
-  B.prism(r, g - 2, Y(0.5), LIME_DARK);
-  T.walls(r, Y(0.5), Y(7), BRICK_RED);
-  for (const e of edgesOf(r)) {
-    for (let u = 2.5; u < e.L - 2; u += 3.6) {
-      T.earch(e, u, Y(0.8), Y(3.8), 2, 0.03, GLASS);
-      T.ebox(e, u - 0.7, u + 0.7, Y(4.6), Y(6.2), 0.03, 0.06, GLASS, B.glass);
-      T.ebox(e, u - 0.85, u + 0.85, Y(6.2), Y(6.45), 0, 0.15, LIME);
+// Kerrytown Market & Shops: three old brick commercial buildings on the block between N Fourth and N Fifth Aves south
+// of E Kingsley, joined into one market of shops in 1969, each still its own height and brick, round a small courtyard,
+// with the Farmers Market's sheds against its south side. On the survey's three outlines (found by a point inside each):
+// - the corner building at Kingsley and Fifth: two storeys of red brick under a slate gable that runs along Kingsley,
+//   its gable end to Fifth Ave;
+// - the Fifth Ave building south of the courtyard: three storeys of warm orange-red brick under a corbelled parapet,
+//   the Kerrytown Chime's little open timber belfry on its roof by Fifth;
+// - the Fourth Ave building by the market: three tall storeys of darker brown brick, plain, its flat parapet higher.
+// Segmental-arched windows (a shallow brick arch over each, a stone sill under) a floor at a time; wood-and-glass
+// shopfronts with their doors along the streets (Fifth, and the sides toward the market and Detroit St; no awnings);
+// back walls plainer, with fewer windows; and wooden loading-dock decks under shed roofs on posts facing each other
+// across the courtyard, with steps down. The brick is brickMaterial's courses; the glass is the landmarks' (lit at night).
+const KT_BRICK = { corner: [0.5, 0.25, 0.19], fifth: [0.6, 0.35, 0.24], fourth: [0.4, 0.26, 0.2] };
+const KT_ARCH = [0.36, 0.17, 0.13];
+const KT_STONE = [0.7, 0.66, 0.58];
+const KT_BASE = [0.46, 0.43, 0.39];
+const KT_WOOD = [[0.12, 0.22, 0.16], [0.3, 0.1, 0.08], [0.15, 0.11, 0.08], [0.1, 0.17, 0.2]];
+const KT_SASH = [0.86, 0.83, 0.74];
+const KT_DECK = [0.42, 0.31, 0.21];
+const KT_DECK_DARK = [0.3, 0.22, 0.15];
+const KT_TIMBER = [0.55, 0.47, 0.37];
+const KT_BELL = [0.3, 0.22, 0.12];
+const KT_GOLD = [0.7, 0.56, 0.26];
+function ktTools(B, T) {
+  // a point on a wall: u along it, y up, d out from it
+  const P = (e, u, y, d) => [e.ax + e.tx * u + e.nx * d, y, e.az + e.tz * u + e.nz * d];
+  // one face on a wall, facing out
+  const face = (e, u0, u1, y0, y1, d, col, m = B.stone) => B.quad(m, P(e, u0, y0, d), P(e, u1, y0, d), P(e, u1, y1, d), P(e, u0, y1, d), col);
+  // a square beam from p to q, s thick (its four sides)
+  const beam = (p, q, s, col, m = B.stone) => {
+    const dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2], L = Math.hypot(dx, dy, dz) || 1;
+    const t = [dx / L, dy / L, dz / L];
+    const up = Math.abs(t[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const cr = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let u = cr(t, up); const ul = Math.hypot(...u); u = u.map((v) => (v / ul) * s / 2);
+    let v = cr(t, u); const vl = Math.hypot(...v); v = v.map((w) => (w / vl) * s / 2);
+    const c = (o, a, b) => [o[0] + a[0] + b[0], o[1] + a[1] + b[1], o[2] + a[2] + b[2]];
+    const n = (a) => a.map((w) => -w);
+    const k = [[u, v], [n(u), v], [n(u), n(v)], [u, n(v)]];
+    for (let i = 0; i < 4; i++) {
+      const [a1, b1] = k[i], [a2, b2] = k[(i + 1) % 4];
+      B.quad(m, c(p, a1, b1), c(p, a2, b2), c(q, a2, b2), c(q, a1, b1), col);
     }
-  }
-  T.band(r, Y(7), Y(7.4), LIME, 0.2);
-  // a gabled roof along its length
-  const x0 = s.b.minX, x1 = s.b.maxX, z0 = s.b.minZ, z1 = s.b.maxZ, zc = (z0 + z1) / 2, top = Y(11);
-  B.quad(B.stone, [x0 - 0.3, Y(7.4), z0 - 0.3], [x0 - 0.3, top, zc], [x1 + 0.3, top, zc], [x1 + 0.3, Y(7.4), z0 - 0.3], SLATE);
-  B.quad(B.stone, [x1 + 0.3, Y(7.4), z1 + 0.3], [x1 + 0.3, top, zc], [x0 - 0.3, top, zc], [x0 - 0.3, Y(7.4), z1 + 0.3], SLATE);
-  for (const x of [x0, x1]) B.tri(B.stone, [x, Y(7.4), z0], [x, top - 0.3, zc], [x, Y(7.4), z1], BRICK_RED);
-  for (const x of [x0, x1]) B.tri(B.stone, [x, Y(7.4), z1], [x, top - 0.3, zc], [x, Y(7.4), z0], BRICK_RED);
-  return { s, maxY: top };
+  };
+  // a segmental-arched window: glass from y0 up to y1 and a shallow arch `rise` over that, a rowlock arch of darker
+  // brick round its head, a stone sill, pale sash frames and a meeting rail
+  const segWin = (e, u, y0, y1, w, rise = 0.3, sash = KT_SASH) => {
+    const h = rise, R = (w * w / 4 + h * h) / (2 * h), cy = y1 + h - R, phi = Math.asin(Math.min(1, w / 2 / R)), n = 5;
+    const arc = (k, r) => { const a = -phi * 1.12 + (k / n) * phi * 2.24; return [u + Math.sin(a) * r, cy + Math.cos(a) * r]; };
+    face(e, u - w / 2, u + w / 2, y0, y1, 0.02, GLASS, B.glass);
+    for (let k = 0; k < n; k++) {
+      const a0 = -phi + (k / n) * phi * 2, a1 = -phi + ((k + 1) / n) * phi * 2;
+      B.tri(B.glass, P(e, u, y1, 0.02), P(e, u + Math.sin(a0) * R, cy + Math.cos(a0) * R, 0.02), P(e, u + Math.sin(a1) * R, cy + Math.cos(a1) * R, 0.02), GLASS);
+      const [p0u, p0y] = arc(k, R + 0.02), [p1u, p1y] = arc(k + 1, R + 0.02), [q0u, q0y] = arc(k, R + 0.3), [q1u, q1y] = arc(k + 1, R + 0.3);
+      B.quad(B.brick, P(e, p0u, p0y, 0.035), P(e, p1u, p1y, 0.035), P(e, q1u, q1y, 0.035), P(e, q0u, q0y, 0.035), KT_ARCH);
+    }
+    T.ebox(e, u - w / 2 - 0.12, u + w / 2 + 0.12, y0 - 0.16, y0, 0, 0.14, KT_STONE);
+    face(e, u - w / 2, u - w / 2 + 0.08, y0, y1, 0.04, sash);
+    face(e, u + w / 2 - 0.08, u + w / 2, y0, y1, 0.04, sash);
+    face(e, u - w / 2, u + w / 2, (y0 + y1) / 2 - 0.04, (y0 + y1) / 2 + 0.04, 0.04, sash);
+    face(e, u - w / 2, u + w / 2, y1 - 0.06, y1, 0.04, sash);
+  };
+  // a wood-and-glass shopfront from u0 to u1 over a wall's ground y: bays of a panelled bulkhead, a big pane, a
+  // transom of small lights and a sign band under a cornice, wood pilasters between, and a door in each bay, its own
+  // colours per bay
+  const shopfront = (e, u0, u1, y, k0 = 0) => {
+    const n = Math.max(1, Math.round((u1 - u0) / 6)), bw = (u1 - u0) / n;
+    for (let i = 0; i < n; i++) {
+      const a = u0 + i * bw, b = a + bw, wood = KT_WOOD[(k0 + i) % KT_WOOD.length];
+      const door = i % 2 ? a + 0.5 : b - 1.6; // the door at alternate ends, so pairs of shops share a pier
+      T.ebox(e, a, a + 0.4, y, y + 4.3, 0, 0.22, wood);
+      if (i === n - 1) T.ebox(e, b - 0.4, b, y, y + 4.3, 0, 0.22, wood);
+      // the bulkhead and its panel, either side of the door
+      for (const [p, q] of [[a + 0.4, door], [door + 1.1, b - (i === n - 1 ? 0.4 : 0)]]) {
+        if (q - p < 0.3) continue;
+        T.ebox(e, p, q, y, y + 0.75, 0, 0.12, wood);
+        face(e, p + 0.15, q - 0.15, y + 0.15, y + 0.6, 0.13, KT_WOOD[(k0 + i + 2) % KT_WOOD.length]);
+        face(e, p, q, y + 0.75, y + 3.1, 0.03, GLASS, B.glass);
+        face(e, (p + q) / 2 - 0.04, (p + q) / 2 + 0.04, y + 0.75, y + 3.1, 0.06, wood);
+      }
+      // the door: glass over a wood panel, in a wood frame, a stone step
+      face(e, door, door + 1.1, y + 1.0, y + 2.75, 0.02, GLASS, B.glass);
+      face(e, door, door + 1.1, y, y + 1.0, 0.025, wood);
+      T.ebox(e, door - 0.08, door, y, y + 3.1, 0, 0.1, wood);
+      T.ebox(e, door + 1.1, door + 1.18, y, y + 3.1, 0, 0.1, wood);
+      T.ebox(e, door - 0.1, door + 1.2, y - 0.3, y, 0, 0.45, KT_STONE);
+      // the transom's small lights and the sign band under a moulded cornice
+      face(e, a + 0.4, b, y + 3.25, y + 3.75, 0.03, GLASS, B.glass);
+      T.ebox(e, a + 0.4, b, y + 3.1, y + 3.25, 0, 0.12, wood);
+      for (let u = a + 1.2; u < b - 0.3; u += 0.8) face(e, u - 0.03, u + 0.03, y + 3.25, y + 3.75, 0.05, wood);
+      T.ebox(e, a, b, y + 3.75, y + 4.35, 0, 0.16, wood);
+      T.ebox(e, a - 0.05, b + 0.05, y + 4.35, y + 4.5, 0, 0.3, wood);
+    }
+  };
+  return { P, face, beam, segWin, shopfront };
 }
 
+// is (x, z) inside one of the survey's buildings other than `self` (the market's open sheds aside)?
+function otherBuildingAt(x, z, self, open) {
+  for (const b of REAL_BUILDINGS) {
+    if (b === self || b === open || x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
+    for (const p of b.polygons) if (polygonContains(p, x, z)) return true;
+  }
+  return false;
+}
+
+function kerrytown(B, T) {
+  const K = ktTools(B, T), { face, beam, segWin, shopfront } = K;
+  const out = [];
+  // the street walls (shops along them) by the way they face: Fifth Ave east, Kingsley north, the market south,
+  // Fourth Ave west
+  const facing = (e, dx, dz) => e.nx * dx + e.nz * dz > 0.8;
+  const market = surveyAt(168, -470)?.b;
+  const building = ({ at, brick, floors, H, roof, shops, front }) => {
+    const s = surveyAt(at[0], at[1]);
+    if (!s) return null;
+    const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
+    const roofY = roof === 'gable' ? H : H - 0.9;
+    B.prism(r, g - 2, Y(0.5), KT_BASE);
+    // the walls: a stone base, then brick to the roof (a parapet's inner face over a flat roof), the roof itself
+    B.prism(r, Y(roofY) - 0.05, Y(roofY), [0.25, 0.25, 0.27]);
+    for (const e of edgesOf(r)) {
+      face(e, 0, e.L, Y(0.5), Y(H), 0.012, brick, B.brick);
+      if (roof !== 'gable') face(e, e.L, 0, Y(roofY), Y(H), -0.3, brick, B.brick);
+      // the ground under this wall (the ground floor's doors and shopfronts stand on it)
+      const gw = Math.min(groundHeight(e.ax, e.az), groundHeight(e.ax + e.tx * e.L, e.az + e.tz * e.L)) - 0.3;
+      const lift = Math.min(Math.max(0, gw - g), floors[0][0] - 0.2);
+      const street = shops.some(([dx, dz]) => facing(e, dx, dz));
+      const back = !street && !front.some(([dx, dz]) => facing(e, dx, dz));
+      // a party wall or one a metre from its neighbour gets no windows
+      const free = (u) => !otherBuildingAt(e.ax + e.tx * u + e.nx * 1.2, e.az + e.tz * u + e.nz * 1.2, s.b, market);
+      if (e.L < 2.6) continue;
+      // the shopfronts, then each floor's windows
+      if (street && e.L > 5.5 && free(e.L / 2)) shopfront(e, 0.6, e.L - 0.6, Y(lift + 0.15), Math.round(e.ax));
+      const pitch = back ? 4.2 : 2.9;
+      const n = Math.max(1, Math.floor((e.L - 1.2) / pitch)), off = (e.L - n * pitch) / 2 + pitch / 2;
+      for (let f = 0; f < floors.length; f++) {
+        if (f === 0 && street && e.L > 5.5) continue;
+        const [y0, y1, w] = floors[f];
+        for (let k = 0; k < n; k++) {
+          const u = off + k * pitch;
+          if (!free(u)) continue;
+          // the back's ground floor: every other window, a plain door at its middle
+          if (f === 0 && back && k % 2) continue;
+          segWin(e, u, Y(y0 + (f === 0 ? lift : 0)), Y(y1 + (f === 0 ? lift : 0)), w);
+        }
+      }
+      // the stone base course and a stone belt course over the ground floor
+      T.ebox(e, 0, e.L, Y(0.4), Y(0.6), 0, 0.06, KT_STONE);
+      if (roof !== 'gable') {
+        // a corbelled brick cornice: two stepped courses over a row of dentils, under a stone coping
+        T.ebox(e, -0.05, e.L + 0.05, Y(H - 1.05), Y(H - 0.9), 0, 0.09, brick, B.brick);
+        T.ebox(e, -0.1, e.L + 0.1, Y(H - 0.9), Y(H - 0.7), 0, 0.18, brick, B.brick);
+        for (let u = 0.3; u < e.L - 0.2; u += 0.55) T.ebox(e, u - 0.12, u + 0.12, Y(H - 1.4), Y(H - 1.05), 0, 0.1, brick, B.brick);
+        T.ebox(e, -0.1, e.L + 0.1, Y(H), Y(H + 0.15), -0.35, 0.1, KT_STONE);
+      } else {
+        T.ebox(e, -0.1, e.L + 0.1, Y(H - 0.35), Y(H), 0, 0.14, KT_STONE);
+      }
+    }
+    return { s, r, g, Y, roofY };
+  };
+
+  // the corner building at Kingsley and Fifth
+  const A = building({ at: [175, -556], brick: KT_BRICK.corner, H: 8.2, roof: 'gable', front: [[0, 1], [0, -1]],
+    floors: [[1.0, 3.6, 1.5], [5.0, 7.0, 1.2]], shops: [[1, 0]] });
+  if (A) {
+    const { r, Y, s } = A;
+    // its slate gable along Kingsley: the ridge between the middles of the two short walls, the eaves out over the
+    // long ones, a brick gable end at each short wall (Fifth Ave's with a round window) under a stone rake
+    const pts = []; for (let i = 0; i < r.length; i += 2) pts.push([r[i], r[i + 1]]);
+    let i0 = 0, best = 0;
+    for (let i = 0; i < pts.length; i++) { const j = (i + 1) % pts.length, L = Math.hypot(pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]); if (L > best) { best = L; i0 = i; } }
+    const c = (k) => pts[(i0 + k) % pts.length];
+    const a0 = c(0), a1 = c(1), b1 = c(2), b0 = c(3);
+    const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+    const m0 = mid(a0, b0), m1 = mid(a1, b1);
+    const eaveY = Y(8.2), ridgeY = Y(12.6), o = 0.45;
+    const away = (p, m, d) => { const dx = p[0] - m[0], dz = p[1] - m[1], l = Math.hypot(dx, dz); return [p[0] + (dx / l) * d, p[1] + (dz / l) * d]; };
+    const ext = (p, q, d) => { const dx = p[0] - q[0], dz = p[1] - q[1], l = Math.hypot(dx, dz); return [p[0] + (dx / l) * d, p[1] + (dz / l) * d]; };
+    // eave corners out by `o` from the walls and past the gable ends by 0.3
+    const A0 = ext(away(a0, m0, o), a1, 0.3), A1 = ext(away(a1, m1, o), a0, 0.3), B0 = ext(away(b0, m0, o), b1, 0.3), B1 = ext(away(b1, m1, o), b0, 0.3);
+    const R0 = ext(m0, m1, 0.3), R1 = ext(m1, m0, 0.3);
+    const dropY = eaveY - o * (ridgeY - eaveY) / Math.hypot(a0[0] - m0[0], a0[1] - m0[1]);
+    const v = (p, y) => [p[0], y, p[1]];
+    B.quad(B.stone, v(A0, dropY), v(A1, dropY), v(R1, ridgeY), v(R0, ridgeY), SLATE);
+    B.quad(B.stone, v(B1, dropY), v(B0, dropY), v(R0, ridgeY), v(R1, ridgeY), SLATE);
+    // the fascia boards and the ridge's cap
+    beam(v(A0, dropY - 0.1), v(A1, dropY - 0.1), 0.22, KT_STONE);
+    beam(v(B0, dropY - 0.1), v(B1, dropY - 0.1), 0.22, KT_STONE);
+    beam(v(R0, ridgeY + 0.05), v(R1, ridgeY + 0.05), 0.2, [0.2, 0.2, 0.22]);
+    for (const [p, q, m] of [[a0, b0, m0], [a1, b1, m1]]) {
+      B.tri(B.brick, v(p, eaveY), v(q, eaveY), v(m, ridgeY - 0.05), KT_BRICK.corner);
+      beam(v(p, eaveY + 0.1), v(m, ridgeY + 0.15), 0.3, KT_STONE);
+      beam(v(q, eaveY + 0.1), v(m, ridgeY + 0.15), 0.3, KT_STONE);
+    }
+    // a round window in the gable end on Fifth Ave (the short wall facing east)
+    const gableEnd = edgesOf(r).find((e) => e.nx > 0.8);
+    if (gableEnd) {
+      const u = gableEnd.L / 2, cy = Y(10.0);
+      for (let k = 0; k < 12; k++) {
+        const t0 = (k / 12) * Math.PI * 2, t1 = ((k + 1) / 12) * Math.PI * 2;
+        B.tri(B.glass, K.P(gableEnd, u, cy, 0.03), K.P(gableEnd, u + Math.cos(t0) * 0.75, cy + Math.sin(t0) * 0.75, 0.03), K.P(gableEnd, u + Math.cos(t1) * 0.75, cy + Math.sin(t1) * 0.75, 0.03), GLASS);
+        B.quad(B.stone, K.P(gableEnd, u + Math.cos(t0) * 0.75, cy + Math.sin(t0) * 0.75, 0.05), K.P(gableEnd, u + Math.cos(t1) * 0.75, cy + Math.sin(t1) * 0.75, 0.05),
+          K.P(gableEnd, u + Math.cos(t1) * 0.98, cy + Math.sin(t1) * 0.98, 0.05), K.P(gableEnd, u + Math.cos(t0) * 0.98, cy + Math.sin(t0) * 0.98, 0.05), KT_STONE);
+      }
+    }
+    // two brick chimneys on the ridge
+    for (const t of [0.25, 0.7]) {
+      const x = m0[0] + (m1[0] - m0[0]) * t, z = m0[1] + (m1[1] - m0[1]) * t;
+      B.box(x - 0.45, x + 0.45, ridgeY - 1.5, ridgeY + 1.3, z - 0.45, z + 0.45, KT_BRICK.corner);
+      B.box(x - 0.55, x + 0.55, ridgeY + 1.3, ridgeY + 1.45, z - 0.55, z + 0.55, KT_STONE);
+    }
+    out.push({ s, maxY: ridgeY, decks: [] });
+  }
+
+  // the Fifth Ave building, south of the courtyard
+  const C = building({ at: [175, -526], brick: KT_BRICK.fifth, H: 11.4, roof: 'flat', front: [[0, -1]],
+    floors: [[1.0, 3.7, 1.5], [5.0, 7.1, 1.25], [8.3, 10.0, 1.25]], shops: [[1, 0], [0, 1]] });
+  if (C) {
+    const { r, Y, s, roofY } = C;
+    // the Kerrytown Chime's belfry by Fifth Ave: four timber posts over a railed deck, a pyramid roof on them, a
+    // finial, and its bells hung in the open
+    const cx = 190.5, cz = -527, hw = 1.5, y0 = Y(roofY), y1 = y0 + 3.6;
+    B.box(cx - hw - 0.2, cx + hw + 0.2, y0, y0 + 0.4, cz - hw - 0.2, cz + hw + 0.2, KT_TIMBER);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) beam([cx + sx * hw, y0 + 0.4, cz + sz * hw], [cx + sx * hw, y1, cz + sz * hw], 0.24, KT_TIMBER);
+    for (const [p, q] of [[[-1, -1], [1, -1]], [[1, -1], [1, 1]], [[1, 1], [-1, 1]], [[-1, 1], [-1, -1]]]) {
+      beam([cx + p[0] * hw, y0 + 1.3, cz + p[1] * hw], [cx + q[0] * hw, y0 + 1.3, cz + q[1] * hw], 0.12, KT_TIMBER);
+      beam([cx + p[0] * hw, y1 - 0.1, cz + p[1] * hw], [cx + q[0] * hw, y1 - 0.1, cz + q[1] * hw], 0.2, KT_TIMBER);
+      // a cross brace under each side's head
+      beam([cx + p[0] * hw, y1 - 0.9, cz + p[1] * hw], [cx + (p[0] + q[0]) / 2 * hw, y1 - 0.1, cz + (p[1] + q[1]) / 2 * hw], 0.1, KT_TIMBER);
+      beam([cx + q[0] * hw, y1 - 0.9, cz + q[1] * hw], [cx + (p[0] + q[0]) / 2 * hw, y1 - 0.1, cz + (p[1] + q[1]) / 2 * hw], 0.1, KT_TIMBER);
+    }
+    B.hip(cx - hw - 0.45, cx + hw + 0.45, cz - hw - 0.45, cz + hw + 0.45, y1, y1 + 2.2, [0.32, 0.5, 0.44]);
+    beam([cx, y1 + 2.1, cz], [cx, y1 + 3.1, cz], 0.08, KT_GOLD);
+    // the bells, smaller down the frame
+    for (const [bx, bz, br] of [[-0.6, -0.5, 0.42], [0.55, -0.45, 0.36], [0, 0.55, 0.3], [-0.55, 0.5, 0.25], [0.6, 0.6, 0.22]]) {
+      const top = y1 - 0.3, ring = [];
+      for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2; ring.push(cx + bx + Math.cos(a) * br, cz + bz + Math.sin(a) * br); }
+      B.prism(ring, top - br * 1.6, top - br * 1.5, KT_BELL);
+      for (let k = 0; k < 8; k++) {
+        const j = (k + 1) % 8;
+        B.quad(B.stone, [ring[k * 2], top - br * 1.5, ring[k * 2 + 1]], [ring[j * 2], top - br * 1.5, ring[j * 2 + 1]],
+          [cx + bx + (ring[j * 2] - cx - bx) * 0.55, top, cz + bz + (ring[j * 2 + 1] - cz - bz) * 0.55],
+          [cx + bx + (ring[k * 2] - cx - bx) * 0.55, top, cz + bz + (ring[k * 2 + 1] - cz - bz) * 0.55], KT_BELL);
+      }
+      beam([cx + bx, top, cz + bz], [cx + bx, y1 - 0.1, cz + bz], 0.05, [0.1, 0.1, 0.1]);
+    }
+    // rooftop units and a roof hatch, back from Fifth
+    B.box(162, 165.5, Y(roofY), Y(roofY + 1.5), -531, -528.5, [0.6, 0.61, 0.61]);
+    B.box(170, 172, Y(roofY), Y(roofY + 1.0), -523, -521, [0.55, 0.56, 0.56]);
+    // its roof is the parapet's height; the belfry a solid of its own on it
+    out.push({ s, maxY: Y(11.55), decks: [{ minX: cx - hw - 0.45, maxX: cx + hw + 0.45, minZ: cz - hw - 0.45, maxZ: cz + hw + 0.45,
+      minY: y0, maxY: y1 + 2.2, keepsSurvey: true }] });
+  }
+
+  // the Fourth Ave building, by the market
+  const D = building({ at: [130, -516], brick: KT_BRICK.fourth, H: 12.6, roof: 'flat', front: [[-1, 0]],
+    floors: [[1.1, 3.9, 1.5], [5.4, 7.6, 1.3], [9.0, 11.0, 1.3]], shops: [[0, 1]] });
+  if (D) {
+    const { s, Y, r, roofY } = D;
+    // its entrance on Fourth Ave: a door under a transom and a stone lintel
+    const w = edgesOf(r).find((e) => e.nx < -0.8);
+    if (w) {
+      const u = w.L / 2;
+      face(w, u - 0.9, u + 0.9, Y(0.5), Y(2.9), 0.02, GLASS, B.glass);
+      face(w, u - 0.9, u + 0.9, Y(3.0), Y(3.6), 0.02, GLASS, B.glass);
+      T.ebox(w, u - 1.05, u - 0.9, Y(0.5), Y(3.6), 0, 0.12, KT_WOOD[0]);
+      T.ebox(w, u + 0.9, u + 1.05, Y(0.5), Y(3.6), 0, 0.12, KT_WOOD[0]);
+      T.ebox(w, u - 0.9, u + 0.9, Y(2.9), Y(3.0), 0, 0.12, KT_WOOD[0]);
+      T.ebox(w, u - 1.3, u + 1.3, Y(3.6), Y(3.95), 0, 0.2, KT_STONE);
+      T.ebox(w, u - 1.4, u + 1.4, Y(0) - 0.3, Y(0.5), 0, 1.2, KT_STONE);
+    }
+    B.box(125, 128, Y(roofY), Y(roofY + 1.6), -520, -517.5, [0.6, 0.61, 0.61]);
+    out.push({ s, maxY: Y(12.75), decks: [] });
+  }
+
+  // the loading-dock decks: wood on posts a metre up, a shed roof over them on posts, steps down at one end; solid to
+  // walk into (a jump gets up on them), the posts left open
+  const deck = (x0, x1, z0, z1, wallZ, gY, stepsAt, high = 0.95) => {
+    const top = gY + high, out2 = wallZ < (z0 + z1) / 2 ? 1 : -1; // which way is away from the wall
+    B.box(x0, x1, top - 0.12, top, z0, z1, KT_DECK);
+    for (let x = x0; x < x1 + 0.01; x += 0.45) B.box(x - 0.01, x + 0.01, top, top + 0.005, z0, z1, KT_DECK_DARK);
+    B.box(x0, x1, gY - 0.3, top - 0.12, out2 > 0 ? z1 - 0.08 : z0, out2 > 0 ? z1 : z0 + 0.08, KT_DECK_DARK);
+    const outer = out2 > 0 ? z1 : z0, inner = out2 > 0 ? z0 : z1;
+    const roofIn = gY + 4.75, roofOut = gY + 3.95;
+    for (let x = x0 + 0.2; x <= x1 - 0.19; x += Math.max(2.5, (x1 - x0 - 0.4) / Math.round((x1 - x0 - 0.4) / 3))) {
+      beam([x, gY - 0.3, outer - out2 * 0.15], [x, roofOut, outer - out2 * 0.15], 0.18, KT_DECK);
+      // a railing between the posts
+      beam([x, top + 0.95, outer - out2 * 0.15], [Math.min(x1 - 0.2, x + 3), top + 0.95, outer - out2 * 0.15], 0.07, KT_DECK);
+    }
+    // the shed roof: corrugated metal from the wall out past the posts
+    B.quad(B.stone, [x0 - 0.3, roofIn, inner], [x1 + 0.3, roofIn, inner], [x1 + 0.3, roofOut - 0.1, outer + out2 * 0.5], [x0 - 0.3, roofOut - 0.1, outer + out2 * 0.5], [0.45, 0.47, 0.47]);
+    beam([x0 - 0.3, roofOut - 0.1, outer + out2 * 0.5], [x1 + 0.3, roofOut - 0.1, outer + out2 * 0.5], 0.12, [0.38, 0.4, 0.4]);
+    beam([x0, roofOut - 0.2, outer - out2 * 0.15], [x1, roofOut - 0.2, outer - out2 * 0.15], 0.2, KT_DECK);
+    // the steps down at one end
+    const sx = stepsAt < 0 ? x0 : x1, dir = stepsAt;
+    for (let k = 0; k < 4; k++) {
+      if (k * 0.24 >= high - 0.05) break;
+      const y = gY + k * 0.24, d = (Math.ceil(high / 0.24) - k) * 0.3;
+      const a = sx + dir * d, b = sx;
+      B.box(Math.min(a, b), Math.max(a, b), y, y + 0.24, z0 + 0.2, z1 - 0.2, KT_DECK);
+    }
+    return { minX: x0, maxX: x1, minZ: z0, maxZ: z1, maxY: top, keepsSurvey: true };
+  };
+  const yAt = (x, z) => groundHeight(x, z) - 0.05;
+  const level = (x0, x1, z) => Math.min(yAt(x0, z), yAt(x1, z));
+  const byS = (q) => out.find((o) => o.s === q?.s);
+  // in the courtyard: along the corner building's south wall and the Fifth Ave building's north wall (the alley on
+  // the market side is the survey's parking lot, so none there)
+  if (A) byS(A).decks.push(deck(165, 180, -546.3, -543.8, -546.6, level(165, 180, -545), -1));
+  if (C) byS(C).decks.push(deck(164.2, 181.2, -539.6, -536.9, -536.5, level(164, 181, -538), 1));
+  // colliders: each building's own strips, then its decks
+  return out.map(({ s, maxY, decks }) => ({ s, maxY, colliders: [...strips(s.ring, maxY), ...decks] }));
+}
+
+// The Ann Arbor Farmers Market: long open sheds on the survey's outline of their roofs, each a gable along its own
+// length on green steel trusses (a post each side, a tie, rafters to the ridge, a king post and braces) every 6 m or
+// so, a pale standing-seam metal roof with its ridge cap, and the stalls' tables down both sides under the eaves, with
+// produce crates on some. The north shed along the Kerrytown side, the long one along Detroit St and two short sheds
+// off it, and the stub by Fifth Ave; laid out by hand on the outline (found by a point inside it). Open: only the posts
+// stop anyone.
 function farmersMarket(B, T) {
   const s = surveyAt(168, -470);
   if (!s) return null;
-  const r = s.ring, g = groundOf(r) - 0.2, Y = (y) => g + y, poly = s.b.polygons[0];
-  // green steel posts on a grid under the roof, the roof's tin edge and its low pitch
-  for (let x = s.b.minX + 2; x < s.b.maxX - 1; x += 6) {
-    for (let z = s.b.minZ + 2; z < s.b.maxZ - 1; z += 6) {
-      if (!polygonContains(poly, x, z) || !polygonContains(poly, x + 1.2, z) || !polygonContains(poly, x - 1.2, z) ||
-        !polygonContains(poly, x, z + 1.2) || !polygonContains(poly, x, z - 1.2)) continue;
-      B.box(x - 0.14, x + 0.14, g - 0.5, Y(4.1), z - 0.14, z + 0.14, GREEN_STEEL);
-      // a stall's table beside every other post
-      if (((x + z) | 0) % 2) B.box(x + 0.6, x + 2.6, Y(0.8), Y(0.9), z - 0.5, z + 0.5, [0.5, 0.36, 0.22]);
+  const K = ktTools(B, T), { beam } = K;
+  const g = groundOf(s.ring) - 0.2;
+  // each shed: from a to b along its ridge, w wide
+  const sheds = [
+    { a: [115.5, -501.25], b: [184.5, -498.5], w: 8.6 },
+    { a: [192.1, -501.6], b: [147.1, -442.1], w: 8.4 },
+    { a: [144, -476], b: [172.5, -475.8], w: 8.6 },
+    { a: [138, -452.25], b: [154.5, -452.1], w: 8.4 },
+    { a: [191.75, -511.5], b: [191.75, -502.5], w: 8.5 }
+  ];
+  const ROOF_TOP = [0.72, 0.73, 0.71], ROOF_SEAM = [0.6, 0.61, 0.6], TABLE = [0.48, 0.35, 0.22], CLOTH = [[0.75, 0.2, 0.15], [0.2, 0.4, 0.6], [0.85, 0.8, 0.65]];
+  const CROPS = [[0.85, 0.4, 0.1], [0.7, 0.12, 0.1], [0.4, 0.55, 0.15], [0.55, 0.3, 0.45], [0.9, 0.75, 0.2]];
+  const colliders = [];
+  let maxY = g;
+  sheds.forEach(({ a, b, w }, si) => {
+    const dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz), tx = dx / L, tz = dz / L, nx = -tz, nz = tx;
+    const at = (u, v, y) => [a[0] + tx * u + nx * v, y, a[1] + tz * u + nz * v];
+    const gy = Math.min(groundHeight(...[a[0], a[1]]), groundHeight(b[0], b[1]), groundHeight((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)) - 0.15;
+    const eave = gy + 3.5, ridge = gy + 5.6, hw = w / 2, o = 0.6;
+    maxY = Math.max(maxY, ridge);
+    // the roof's two slopes, out past the posts, a seam every 0.6 m and the ridge's cap
+    const ey = eave - (o * (ridge - eave)) / hw;
+    for (const sg of [-1, 1]) {
+      B.quad(B.stone, at(-0.4, sg * (hw + o), ey), at(L + 0.4, sg * (hw + o), ey), at(L + 0.4, 0, ridge), at(-0.4, 0, ridge), ROOF_TOP);
+      // the underside, darker, a little below
+      B.quad(B.stone, at(L + 0.4, sg * (hw + o), ey - 0.08), at(-0.4, sg * (hw + o), ey - 0.08), at(-0.4, 0, ridge - 0.08), at(L + 0.4, 0, ridge - 0.08), [0.36, 0.38, 0.36]);
+      for (let u = 0.2; u < L + 0.3; u += 0.6) {
+        B.quad(B.stone, at(u - 0.03, sg * (hw + o), ey + 0.025), at(u + 0.03, sg * (hw + o), ey + 0.025), at(u + 0.03, 0, ridge + 0.025), at(u - 0.03, 0, ridge + 0.025), ROOF_SEAM);
+      }
+      beam(at(-0.4, sg * (hw + o), ey - 0.04), at(L + 0.4, sg * (hw + o), ey - 0.04), 0.12, GREEN_STEEL);
     }
+    beam(at(-0.45, 0, ridge + 0.04), at(L + 0.45, 0, ridge + 0.04), 0.22, ROOF_SEAM);
+    // the trusses: a post each side, a tie across, rafters to the ridge, a king post, braces; purlins between them
+    const n = Math.max(1, Math.round(L / 6)), step = L / n;
+    for (let k = 0; k <= n; k++) {
+      const u = k * step, pv = hw - 0.3;
+      for (const sg of [-1, 1]) {
+        beam(at(u, sg * pv, gy - 0.3), at(u, sg * pv, eave), 0.2, GREEN_STEEL);
+        // a knee brace from the post to the tie
+        beam(at(u, sg * pv, eave - 0.9), at(u, sg * (pv - 0.9), eave), 0.08, GREEN_STEEL);
+        beam(at(u, sg * pv, eave), at(u, 0, ridge - 0.12), 0.14, GREEN_STEEL);
+        beam(at(u, sg * pv * 0.5, eave), at(u, 0, ridge - 0.15), 0.07, GREEN_STEEL);
+        const p = at(u, sg * pv, 0);
+        colliders.push({ minX: p[0] - 0.15, maxX: p[0] + 0.15, minZ: p[2] - 0.15, maxZ: p[2] + 0.15, maxY: eave, keepsSurvey: true });
+      }
+      beam(at(u, -pv, eave), at(u, pv, eave), 0.12, GREEN_STEEL);
+      beam(at(u, 0, eave), at(u, 0, ridge - 0.1), 0.08, GREEN_STEEL);
+      if (k < n) {
+        for (const v of [-pv, -pv * 0.5, 0, pv * 0.5, pv]) {
+          const y = v === 0 ? ridge - 0.2 : eave + ((ridge - eave) * (1 - Math.abs(v) / pv)) - 0.12;
+          beam(at(u, v, Math.abs(v) === pv ? eave : y), at(u + step, v, Math.abs(v) === pv ? eave : y), 0.08, GREEN_STEEL);
+        }
+        // the stalls in this bay, both sides: a table under a cloth, crates of produce on some
+        for (const sg of [-1, 1]) {
+          const c0 = u + 0.6, c1 = u + step - 0.6, v0 = sg * (pv - 2.0), v1 = sg * (pv - 1.0);
+          const q = (uu, vv, yy) => at(uu, vv, yy);
+          const box = (u0, u1, w0, w1, y0, y1, col) => {
+            const A = q(u0, w0, y0), Bq = q(u1, w0, y0), C = q(u1, w1, y0), D = q(u0, w1, y0);
+            const A2 = q(u0, w0, y1), B2 = q(u1, w0, y1), C2 = q(u1, w1, y1), D2 = q(u0, w1, y1);
+            B.quad(B.stone, A2, B2, C2, D2, col);
+            B.quad(B.stone, A, Bq, B2, A2, col); B.quad(B.stone, Bq, C, C2, B2, col);
+            B.quad(B.stone, C, D, D2, C2, col); B.quad(B.stone, D, A, A2, D2, col);
+          };
+          const hash = (si * 31 + k * 7 + (sg > 0 ? 3 : 0)) % 10;
+          if (hash === 9) continue; // an empty stall
+          box(c0, c1, Math.min(v0, v1), Math.max(v0, v1), gy + 0.72, gy + 0.78, TABLE);
+          box(c0 + 0.02, c1 - 0.02, Math.min(v0, v1) - 0.02, Math.max(v0, v1) + 0.02, gy + 0.3, gy + 0.72, CLOTH[hash % 3]);
+          if (XBOX || hash % 3 === 0) continue;
+          for (let cu = c0 + 0.3; cu < c1 - 0.5; cu += 0.75) {
+            const crop = CROPS[(hash + Math.round(cu * 3)) % CROPS.length];
+            box(cu, cu + 0.55, Math.min(v0, v1) + 0.15, Math.min(v0, v1) + 0.75, gy + 0.78, gy + 0.98, TABLE);
+            box(cu + 0.04, cu + 0.51, Math.min(v0, v1) + 0.19, Math.min(v0, v1) + 0.71, gy + 0.98, gy + 1.05, crop);
+          }
+        }
+      }
+    }
+  });
+  return { s, maxY, colliders };
+}
+
+// The downtown library (Alden B. Dow's 1957 building, its 1974 and 1991 additions): tan brick and precast concrete,
+// four floors over Library Lane in the main block and two in the front wing on Fifth Ave. Each floor a band of
+// bronze-tinted windows in dark bronze frames between brick piers, a precast spandrel at each floor line, the corners
+// left solid brick, a deep precast fascia at the top and the plant room set back on the roof. The front wing: a
+// ribbon of tall windows on Fifth, its entrance a two-storey glass bay in bronze mullions under a thin flat canopy
+// that reaches out over the walk on slim posts, a low limestone sign wall (no lettering) and a book drop.
+const LIB_BRICK = [0.66, 0.54, 0.4];
+const LIB_PRECAST = [0.78, 0.75, 0.68];
+const LIB_BRONZE = [0.2, 0.15, 0.1];
+const LIB_GLASS = [0.3, 0.27, 0.22];
+const LIB_ROOF = [0.3, 0.3, 0.31];
+// a band of windows along a wall between brick piers: floors [y0, y1] (over the ground y), a pier every `every` m,
+// solid brick `end` m in from each corner; windows only where nothing stands a metre in front
+function windowBands(B, T, K, e, Y, floors, { every = 3, pier = 0.55, end = 1.6, brick = LIB_BRICK, frame = LIB_BRONZE,
+  glass = LIB_GLASS, spandrel = LIB_PRECAST, free = () => true, mullions = 1 } = {}) {
+  const u0 = end, u1 = e.L - end;
+  if (u1 - u0 < every) return;
+  const n = Math.max(1, Math.round((u1 - u0) / every)), w = (u1 - u0) / n;
+  for (const [y0, y1] of floors) {
+    for (let k = 0; k < n; k++) {
+      const a = u0 + k * w, b = a + w, mid = (a + b) / 2;
+      if (!free(mid)) continue;
+      K.face(e, a + pier / 2, b - pier / 2, Y(y0), Y(y1), 0.02, glass, B.glass);
+      // the frame round it and its mullions
+      T.ebox(e, a + pier / 2, b - pier / 2, Y(y0), Y(y0 + 0.08), 0, 0.08, frame);
+      T.ebox(e, a + pier / 2, b - pier / 2, Y(y1 - 0.08), Y(y1), 0, 0.08, frame);
+      for (let m = 1; m <= mullions; m++) {
+        const u = a + pier / 2 + ((b - a - pier) * m) / (mullions + 1);
+        T.ebox(e, u - 0.04, u + 0.04, Y(y0), Y(y1), 0, 0.08, frame);
+      }
+      // the brick pier at its left (and the last one's right), standing proud
+      T.ebox(e, a - pier / 2, a + pier / 2, Y(y0 - 0.1), Y(y1 + 0.1), 0, 0.16, brick, B.brick);
+      if (k === n - 1) T.ebox(e, b - pier / 2, b + pier / 2, Y(y0 - 0.1), Y(y1 + 0.1), 0, 0.16, brick, B.brick);
+    }
+    // the precast spandrel under the band
+    T.ebox(e, u0 - pier, u1 + pier, Y(y0 - 0.75), Y(y0 - 0.1), 0, 0.2, spandrel);
   }
-  const eave = insetRing(r, -0.6);
-  B.prism(eave, Y(4.1), Y(4.4), GREEN_STEEL, TIN);
-  T.slope(eave, Y(4.4), 2.5, Y(5.2), TIN);
-  return { s, maxY: Y(5.2), open: true };
 }
 
 function districtLibrary(B, T) {
   const s = surveyAt(235, 160);
   if (!s) return null;
-  const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y, h = s.height;
-  B.prism(r, g - 2, Y(0.6), CONCRETE);
-  T.walls(r, Y(0.6), Y(h - 0.8), BRICK_BUFF);
-  // long bands of windows a floor, between concrete bands
-  for (let f = 0; f < 4; f++) {
-    const y = 0.9 + f * 4.2;
-    if (y + 3 > h - 1) break;
-    for (const e of edgesOf(r)) if (e.L > 6) T.ebox(e, 1, e.L - 1, Y(y), Y(y + (f ? 2.2 : 3)), 0.02, 0.06, GLASS, B.glass);
-    T.band(r, Y(y + 3.3), Y(y + 4), CONCRETE, 0.12);
-  }
-  T.band(r, Y(h - 0.8), Y(h), CONCRETE, 0.25);
-  // the low front wing on Fifth Avenue, the survey's own block: buff brick under a concrete band, a ribbon of
-  // windows, and the entrance, a two-storey glass bay in dark frames under a deep flat canopy
+  const K = ktTools(B, T);
   const w = surveyAt(200, 160);
-  if (!w) return { s, maxY: Y(h) };
-  const wr = w.ring, wg = groundOf(wr) - 0.3, WY = (y) => wg + y, wh = Math.max(7, w.height);
-  B.prism(wr, wg - 2, WY(0.6), CONCRETE);
-  T.walls(wr, WY(0.6), WY(wh - 0.8), BRICK_BUFF);
-  T.band(wr, WY(wh - 0.8), WY(wh), CONCRETE, 0.25);
-  for (const ed of edgesOf(wr)) if (ed.L > 8) T.ebox(ed, 1, ed.L - 1, WY(3.6), WY(5.4), 0.02, 0.06, GLASS, B.glass);
-  const e = edgeFacing(wr, -1, 0), c = e.L / 2;
-  T.ebox(e, c - 6, c + 6, WY(0.3), WY(wh - 0.9), 0, 1.6, GLASS, B.glass);
-  for (let u = c - 6; u <= c + 6.01; u += 2) T.ebox(e, u - 0.08, u + 0.08, WY(0.3), WY(wh - 0.9), 1.6, 1.7, BRONZE);
-  T.ebox(e, c - 6, c + 6, WY(3.2), WY(3.4), 1.6, 1.7, BRONZE);
-  T.ebox(e, c - 4.5, c + 4.5, WY(3.4), WY(3.7), 1.6, 4.6, CONCRETE);
-  return [{ s, maxY: Y(h) }, { s: w, maxY: WY(wh) }];
+  const free = (self) => (e) => (u) => !otherBuildingAt(e.ax + e.tx * u + e.nx * 1.2, e.az + e.tz * u + e.nz * 1.2, self);
+  // the main block: four floors
+  const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y, H = Math.max(16, s.height - 0.5);
+  B.prism(r, g - 2, Y(0.6), CONCRETE);
+  B.prism(r, Y(H - 1.2) - 0.05, Y(H - 1.2), LIB_ROOF);
+  for (const e of edgesOf(r)) {
+    K.face(e, 0, e.L, Y(0.6), Y(H - 1.6), 0.01, LIB_BRICK, B.brick);
+    if (e.L < 4) continue;
+    windowBands(B, T, K, e, Y, [[1.3, 3.5], [5.0, 7.4], [8.8, 11.2], [12.4, 14.4]].filter(([, y1]) => y1 < H - 1.9), { free: free(s.b)(e), every: 3.2 });
+    // the fascia: a deep precast band, its soffit and a thin coping; its back face over the roof
+    T.ebox(e, -0.3, e.L + 0.3, Y(H - 1.6), Y(H), 0, 0.3, LIB_PRECAST);
+    K.face(e, e.L, 0, Y(H - 1.2), Y(H), -0.25, LIB_PRECAST);
+    T.ebox(e, -0.35, e.L + 0.35, Y(H), Y(H + 0.12), -0.3, 0.35, [0.62, 0.6, 0.55]);
+    T.ebox(e, 0, e.L, Y(0.4), Y(0.6), 0, 0.08, LIB_PRECAST);
+  }
+  // the plant room and its louvres, set back on the roof, and two units
+  const pr = scaleRing(r, 0.42);
+  B.prism(pr, Y(H - 1.2), Y(H + 2.8), [0.58, 0.57, 0.54], LIB_ROOF);
+  for (const e of edgesOf(pr)) for (let u = 0.6; u < e.L - 0.5; u += 0.35) K.face(e, u, u + 0.18, Y(H), Y(H + 2.2), 0.02, [0.36, 0.36, 0.35]);
+  const out = [{ s, maxY: Y(H + 2.8) }];
+  if (!w) return out;
+  // the front wing on Fifth Ave: two floors
+  const wr = w.ring, wg = groundOf(wr) - 0.3, WY = (y) => wg + y, wh = Math.max(8.4, w.height + 1.2);
+  B.prism(wr, wg - 2, WY(0.5), CONCRETE);
+  B.prism(wr, WY(wh - 1.1) - 0.05, WY(wh - 1.1), LIB_ROOF);
+  const front = edgeFacing(wr, -1, 0), c = front.L / 2;
+  for (const e of edgesOf(wr)) {
+    K.face(e, 0, e.L, WY(0.5), WY(wh - 1.4), 0.01, LIB_BRICK, B.brick);
+    T.ebox(e, -0.3, e.L + 0.3, WY(wh - 1.4), WY(wh), 0, 0.3, LIB_PRECAST);
+    K.face(e, e.L, 0, WY(wh - 1.1), WY(wh), -0.25, LIB_PRECAST);
+    T.ebox(e, -0.35, e.L + 0.35, WY(wh), WY(wh + 0.12), -0.3, 0.35, [0.62, 0.6, 0.55]);
+    if (e.L < 4) continue;
+    const f = free(w.b)(e);
+    if (Math.abs(e.ax - front.ax) < 0.01 && Math.abs(e.az - front.az) < 0.01) {
+      // tall windows down Fifth either side of the entrance, the upper floor's band over them
+      const left = { ...e, L: c - 7 }, right = { ...e, ax: e.ax + e.tx * (c + 7), az: e.az + e.tz * (c + 7), L: e.L - c - 7 };
+      for (const part of [left, right]) {
+        windowBands(B, T, K, part, WY, [[0.9, 3.6]], { every: 2.6, end: 1.2, mullions: 0, free: () => true });
+        windowBands(B, T, K, part, WY, [[4.6, 6.4]], { every: 2.6, end: 1.2, free: () => true });
+      }
+    } else {
+      windowBands(B, T, K, e, WY, [[1.1, 3.4], [4.6, 6.4]], { every: 3.2, free: f });
+    }
+  }
+  // the entrance: a two-storey glass bay standing out from the front between brick fins, bronze mullions and
+  // transoms, the doors at its foot
+  const e = front, bh = wh - 1.5;
+  T.ebox(e, c - 6.4, c - 5.6, WY(0), WY(wh), 0, 2.2, LIB_BRICK, B.brick);
+  T.ebox(e, c + 5.6, c + 6.4, WY(0), WY(wh), 0, 2.2, LIB_BRICK, B.brick);
+  K.face(e, c - 5.6, c + 5.6, WY(0.4), WY(bh), 1.6, LIB_GLASS, B.glass);
+  for (let u = c - 5.6; u <= c + 5.61; u += 1.4) T.ebox(e, u - 0.05, u + 0.05, WY(0.4), WY(bh), 1.6, 1.72, LIB_BRONZE);
+  for (const y of [0.4, 3.0, 3.4, bh - 0.1]) T.ebox(e, c - 5.6, c + 5.6, WY(y), WY(y + 0.1), 1.6, 1.72, LIB_BRONZE);
+  for (const du of [-2.1, -0.7, 0.7]) K.face(e, c + du + 0.05, c + du + 1.35, WY(0.45), WY(2.8), 1.73, [0.12, 0.1, 0.08]);
+  T.ebox(e, c - 5.6, c + 5.6, WY(bh), WY(wh), 0, 1.75, LIB_PRECAST);
+  // the canopy: a thin precast slab out over the walk on four slim posts
+  T.ebox(e, c - 8, c + 8, WY(3.9), WY(4.25), 1.7, 6.5, LIB_PRECAST);
+  for (const du of [-7.2, -2.4, 2.4, 7.2]) K.beam(K.P(e, c + du, WY(0), 6.0), K.P(e, c + du, WY(3.9), 6.0), 0.16, LIB_BRONZE);
+  // a low limestone sign wall on the walk (no lettering) and the book drop beside the doors
+  T.ebox(e, c - 13, c - 8.5, wg - 0.5, WY(1.3), 4.5, 5.1, [0.8, 0.77, 0.7]);
+  T.ebox(e, c + 6.8, c + 7.6, WY(0.3), WY(1.4), 2.2, 2.9, [0.25, 0.28, 0.32]);
+  const walls = strips(wr, WY(wh + 0.12));
+  // the canopy's posts (the walk stays open under it)
+  for (const du of [-7.2, -2.4, 2.4, 7.2]) {
+    const p = K.P(e, c + du, 0, 6.0);
+    walls.push({ minX: p[0] - 0.15, maxX: p[0] + 0.15, minZ: p[2] - 0.15, maxZ: p[2] + 0.15, maxY: WY(3.9), keepsSurvey: true });
+  }
+  const bay = [K.P(e, c - 6.4, 0, 0), K.P(e, c + 6.4, 0, 2.2)];
+  walls.push({ minX: Math.min(bay[0][0], bay[1][0]), maxX: Math.max(bay[0][0], bay[1][0]), minZ: Math.min(bay[0][2], bay[1][2]),
+    maxZ: Math.max(bay[0][2], bay[1][2]), maxY: WY(wh), keepsSurvey: true });
+  out.push({ s: w, maxY: WY(wh + 0.12), colliders: walls });
+  return out;
 }
 
 function towerPlaza(B, T) {

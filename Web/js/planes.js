@@ -1,5 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { attribute, cameraPosition, clamp, float, fract, length, smoothstep, step, time, uv, vec2, vec3, vec4, mix } from 'three/tsl';
+import { cityUniforms } from './tsl-materials.js';
 import { asset, log, random } from '../lamp-game.js';
 import { nativeJSON, toWorld } from './live-feeds.js';
 import { groundHeight } from './terrain.js';
@@ -77,6 +79,39 @@ function createPlanes(group) {
   trails.frustumCulled = false;
   trails.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   group.add(trails);
+  // their lights after dark: a red beacon and a white strobe, a few pixels across however far (only what's seen of a
+  // plane at night); one draw, drawn only at night and while one's up
+  const beams = new Float32Array(MAX * 4);
+  const lights = (() => {
+    const quad = new THREE.PlaneGeometry(1, 1);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = quad.index;
+    geo.setAttribute('position', quad.attributes.position);
+    geo.setAttribute('uv', quad.attributes.uv);
+    const at = new THREE.InstancedBufferAttribute(beams, 4);
+    at.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('aBeam', at);
+    geo.instanceCount = 0;
+    const mat = new THREE.SpriteNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
+    const beam = attribute('aBeam', 'vec4');
+    const dist = length(beam.xyz.sub(cameraPosition));
+    mat.positionNode = beam.xyz;
+    mat.scaleNode = vec2(clamp(dist.mul(0.006), 1.5, 80.0));
+    const r = length(uv().sub(0.5)).mul(2.0);
+    const spot = float(1.0).sub(smoothstep(0.0, 1.0, r)).pow(2.0);
+    // (each plane's own phase: the strobe a double flash every ~1.3 s, the beacon a slower red pulse)
+    const t = fract(time.mul(0.77).add(beam.w));
+    const strobe = step(t, 0.05).add(step(0.12, t).mul(step(t, 0.17)));
+    const beacon = smoothstep(0.5, 0.6, t).mul(smoothstep(0.85, 0.75, t));
+    const night = smoothstep(0.7, 1.45, cityUniforms.uInteriorGlow);
+    mat.colorNode = vec4(mix(vec3(1.0, 0.08, 0.04).mul(beacon).mul(3.0), vec3(1.0, 1.0, 1.0).mul(6.0), strobe).mul(spot).mul(night), 1.0);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'PlaneLights';
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    group.add(mesh);
+    return mesh;
+  })();
   const kinds = {
     jet: new THREE.InstancedMesh(jetGeometry(), paint, MAX),
     prop: new THREE.InstancedMesh(propGeometry(), paint, MAX)
@@ -237,7 +272,7 @@ function createPlanes(group) {
       ask().finally(() => { busy = false; });
     }
     const n = { jet: 0, prop: 0 };
-    let nt = 0;
+    let nt = 0, nl = 0;
     const ease = Math.min(1, dt / 4);
     for (const p of planes.values()) {
       if (p.ground) flyProp(p, dt);
@@ -253,6 +288,7 @@ function createPlanes(group) {
       q.setFromEuler(e);
       m4.compose(pos.set(p.x, p.y, p.z), q, scl);
       mesh.setMatrixAt(n[p.kind]++, m4);
+      if (nl < MAX) { beams[nl * 4] = p.x; beams[nl * 4 + 1] = p.y; beams[nl * 4 + 2] = p.z; beams[nl * 4 + 3] = (p.phase ??= random()); nl++; }
       if (sunlit && p.y > 7500 && nt < MAX) { // a contrail, a couple of km long, from the engines back
         scl.set(1, 1, 1800);
         m4.compose(pos.set(p.x - Math.sin(p.yaw) * 20, p.y, p.z + Math.cos(p.yaw) * 20), q, scl);
@@ -261,6 +297,9 @@ function createPlanes(group) {
       }
     }
     // (an empty one isn't drawn at all: no draw for the contrails on most frames, or for a kind with none up)
+    lights.geometry.instanceCount = nl;
+    lights.visible = nl > 0 && look !== 'midday' && look !== 'golden';
+    if (lights.visible) lights.geometry.attributes.aBeam.needsUpdate = true;
     trails.count = nt;
     trails.visible = nt > 0;
     trails.instanceMatrix.needsUpdate = true;

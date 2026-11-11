@@ -240,7 +240,13 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
     }
 
     // Lamp: a one-way main street's left edge, solid yellow
-    if (!back && lanes.length >= 2 && (e.cls ?? 4) <= 3 && !e.divided) along(e, lanes[0].o - 1.75, 0.12, YELLOW);
+    if (!back && lanes.length >= 2 && (e.cls ?? 4) <= 3 && !e.divided && !e.freeway) along(e, lanes[0].o - 1.75, 0.12, YELLOW);
+    // Lamp: a freeway's carriageway and its ramps, edge lines both sides: solid yellow on the left (the median's side),
+    // solid white on the right (the shoulder's), the dashed white lane lines between
+    if (e.freeway && !back && lanes.length) {
+      along(e, lanes[0].o - 1.75, 0.15, YELLOW, 1, 1, { edge: -1 });
+      along(e, lanes[lanes.length - 1].o + 1.75, 0.15, WHITE, 1, 1, { edge: 1 });
+    }
 
     // Lamp: a picture painted on the street at e's s, o, facing f (1 along e, -1 against it), from strips given in
     // metres as [u ahead, v to the right, u, v, width]
@@ -309,16 +315,16 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
     // traffic is made to stop: at a light or a stop sign (none at a through street's side streets, nor where a street
     // merely bends: a shape node of the centreline streets)
     for (const f of back ? [e, back] : [e]) {
-      if (f.to.shape || !stopsAt(f)) continue;
+      if (f.to.shape || !stopsAt(f) || f.cls === 0) continue;
       const left = back ? Math.max(0, f.lanes[0] - 1.8) : -f.half;
       across(f, f.len - 0.35, left + 0.1, f.half - 0.1, 0.45, WHITE);
     }
 
     // Continental crosswalks curb to curb, between the stop lines and the intersections at both ends
-    if (!e.from.shape && paintedEnd(e, -CROSSWALK / 2, e.from)) {
+    if (!e.from.shape && e.cls !== 0 && paintedEnd(e, -CROSSWALK / 2, e.from)) {
       across(e, -CROSSWALK / 2, -e.half, e.half, CROSSWALK - 0.3, WHITE, 1.2, 0.5);
     }
-    if (!e.to.shape && paintedEnd(e, e.len + CROSSWALK / 2, e.to)) {
+    if (!e.to.shape && e.cls !== 0 && paintedEnd(e, e.len + CROSSWALK / 2, e.to)) {
       across(e, e.len + CROSSWALK / 2, -e.half, e.half, CROSSWALK - 0.3, WHITE, 1.2, 0.5);
     }
 
@@ -415,6 +421,70 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
   for (const line of lines) {
     line.len = Math.hypot(line.ends[1][0] - line.ends[0][0], line.ends[1][1] - line.ends[0][1]);
   }
+  // Lamp: a street's lines stop at a freeway's carriageway it crosses (where the map has it cross on a bridge, the game
+  // has it at grade: Geddes Rd over US-23), so the freeway's own paint runs on unbroken across it. The carriageways in
+  // 50 m cells: [edge, its paint's half width]
+  const FW_CELL = 50;
+  const fwCells = new Map();
+  for (const f of network.paintEdges || network.edges) {
+    if (f.cls !== 0 || !f.lanes.length) continue;
+    const half = Math.max(Math.abs(f.lanes[0]), Math.abs(f.lanes[f.lanes.length - 1])) + 2.2;
+    const x0 = f.sx, z0 = f.sz, x1 = f.sx + f.dx * f.len, z1 = f.sz + f.dz * f.len;
+    for (let i = Math.floor((Math.min(x0, x1) - half) / FW_CELL); i <= Math.floor((Math.max(x0, x1) + half) / FW_CELL); i++) {
+      for (let j = Math.floor((Math.min(z0, z1) - half) / FW_CELL); j <= Math.floor((Math.max(z0, z1) + half) / FW_CELL); j++) {
+        const k = i * 65536 + j;
+        if (!fwCells.has(k)) fwCells.set(k, []);
+        fwCells.get(k).push(f);
+      }
+    }
+  }
+  // the stretches [t0, t1] (0 to 1 along a to b) over a carriageway
+  const overFreeway = (ax, az, bx, bz) => {
+    const out = [];
+    const seen = new Set();
+    for (const [x, z] of [[ax, az], [(ax + bx) / 2, (az + bz) / 2], [bx, bz]]) {
+      for (const f of fwCells.get(Math.floor(x / FW_CELL) * 65536 + Math.floor(z / FW_CELL)) || []) {
+        if (seen.has(f)) continue;
+        seen.add(f);
+        // the segment clipped to the carriageway's rectangle (along 0..len, across its paint's width)
+        const half = Math.max(Math.abs(f.lanes[0]), Math.abs(f.lanes[f.lanes.length - 1])) + 2.2;
+        const mid = (f.lanes[0] + f.lanes[f.lanes.length - 1]) / 2;
+        let t0 = 0, t1 = 1;
+        const clip = (p, q, lo, hi) => {
+          if (Math.abs(q - p) < 1e-9) return p >= lo && p <= hi;
+          let u = (lo - p) / (q - p), v = (hi - p) / (q - p);
+          if (u > v) [u, v] = [v, u];
+          t0 = Math.max(t0, u);
+          t1 = Math.min(t1, v);
+          return t0 < t1;
+        };
+        const sa = (ax - f.sx) * f.dx + (az - f.sz) * f.dz, sb = (bx - f.sx) * f.dx + (bz - f.sz) * f.dz;
+        const oa = (ax - f.sx) * f.rx + (az - f.sz) * f.rz, ob = (bx - f.sx) * f.rx + (bz - f.sz) * f.rz;
+        if (clip(sa, sb, -2, f.len + 2) && clip(oa, ob, mid - half, mid + half)) out.push([t0, t1]);
+      }
+    }
+    return out.sort((p, q) => p[0] - q[0]);
+  };
+  function paintLine(line) {
+    const [A, B] = line.ends;
+    const cuts = line.e.cls === 0 || line.e.freeway ? [] : overFreeway(A[0], A[1], B[0], B[1]);
+    if (!cuts.length) {
+      strip(...A, ...B, line.w, line.col, line.period, line.duty, line.phase, line.flow);
+      return;
+    }
+    let t = 0;
+    for (const [t0, t1] of cuts) {
+      if (t0 > t + 1e-3) {
+        strip(A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[0] + (B[0] - A[0]) * t0, A[1] + (B[1] - A[1]) * t0,
+          line.w, line.col, line.period, line.duty, line.phase + t * line.len * line.flow, line.flow);
+      }
+      t = Math.max(t, t1);
+    }
+    if (t < 1 - 1e-3) {
+      strip(A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, ...B, line.w, line.col, line.period, line.duty,
+        line.phase + t * line.len * line.flow, line.flow);
+    }
+  }
   for (const root of lines) {
     if (root.phase !== undefined) continue;
     root.phase = 0;
@@ -431,7 +501,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
         next.phase = ((next.phase % next.period) + next.period) % next.period;
         stack.push(next);
       }
-      strip(...line.ends[0], ...line.ends[1], line.w, line.col, line.period, line.duty, line.phase, line.flow);
+      paintLine(line);
     }
   }
 

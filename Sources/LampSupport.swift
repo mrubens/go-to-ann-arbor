@@ -5659,6 +5659,9 @@
             var frame: CGRect         // in the picture's pixels
             var selected = false
             var disabled = false
+            /// A page's own thing: its place in the list the page's read made (`LampPageReader`), by which a click
+            /// finds that very thing. Nil for what the accessibility tree lists.
+            var ref: Int? = nil
         }
 
         /// The most things listed: a full window is a few dozen, and past this the list costs more than it tells.
@@ -5850,7 +5853,7 @@
             // which keeps running while the dialog is open only because the action isn't itself on that queue.
             after(0) {
                 guard Handover.current?.carriesOn == true else { return }
-                LampShowcase.note("did", run(action))
+                LampShowcase.note("did", run(action) { said, _ in LampShowcase.note("did", said) })
             }
             try? await Task.sleep(for: .milliseconds(150))
         }
@@ -5891,8 +5894,12 @@
         static var items: (NSWindow) -> [LampScreen.Item] = { _ in [] }
         /// Carries out an action aimed at a page (`point`, in the window's frame view, on it; or none, with the page
         /// holding the keyboard) in the page's own script, which takes it whether or not the app is in front, where
-        /// WebKit lets an event made by the app go. What it did, or nil when the action isn't the page's.
-        static var act: ((LampDriver.Action, NSPoint?, NSWindow) -> String?)?
+        /// WebKit lets an event made by the app go. What it did, or nil when the action isn't the page's. A click is
+        /// meant for the page's thing given, if any, and its outcome comes later, from the page: in words, and whether
+        /// it clicked (a thing that was dimmed, gone or under another isn't).
+        static var act: ((LampDriver.Action, NSPoint?, LampScreen.Item?, NSWindow, @escaping @MainActor (String, Bool) -> Void) -> String?)?
+        /// What `act` says of a click until the page answers it: the batch waits for that answer before going on.
+        static let sent = "sent to the page, which hasn't said what it landed on"
         /// Whether the game on a page is playing (`LampPagePlaying`): nil for an app with no game, false while it loads.
         @MainActor static var playing: Bool?
         /// Gives a game's controller to Lamp for batch `id` (seconds it may run) or back (nil): only that batch's own
@@ -5902,6 +5909,116 @@
         /// otherwise the page's answer comes to `said`, in words for the report, and whether the page holds it.
         static var hold: ((LampDriver.Action, NSWindow, LampDriver.Handover, @escaping @MainActor (String, Bool) -> Void) -> Bool)?
     }
+
+    // begin LampSaves
+    /// What a save that `use_app` set off came to: a page's download (`LampPageDownloads` in LampPage.swift) says here
+    /// where it was told to go and how it ended, and the driver's answer says it, so the builder knows the file is there,
+    /// how big it is and what a zip holds without reading the person's folders itself. Only saves whose panel a batch answered
+    /// are kept: the person's own are none of the builder's business. A save can end after that batch has answered, so
+    /// each is said again once it ends, in a later answer, marked as from earlier.
+    @MainActor
+    enum LampSaves {
+        enum State: Equatable { case saving, saved, canceled, failed(String), notMoved(String) }
+
+        final class Save {
+            let name: String
+            /// The batch that answered its panel.
+            let batch: String
+            var destination: URL?
+            var state = State.saving
+            /// What the builder was last told of it.
+            var told: State?
+            init(name: String, batch: String) { self.name = name; self.batch = batch }
+        }
+
+        /// How long a batch's answer waits for a file it's saving (`Store.use` waits as long beyond the actions).
+        static let wait = 8.0
+        /// The batch running now, if any (`LampDriver.perform` sets it).
+        static var batch: String?
+        private(set) static var all: [Save] = []
+
+        /// A save the batch running now answered the panel for (its Save or Cancel): kept only during a batch, so the person's
+        /// own saves are left out, and a download whose panel came up only after the batch that clicked it had answered is
+        /// still the batch's that answers its panel.
+        static func began(_ name: String) -> Save? {
+            guard let batch else { return nil }
+            let save = Save(name: name, batch: batch)
+            all.append(save)
+            return save
+        }
+
+        static func chose(_ save: Save?, _ url: URL) { save?.destination = url }
+
+        static func ended(_ save: Save?, _ state: State) { save?.state = state }
+
+        /// Whether a save that has somewhere to go is still being written.
+        static var writing: Bool { all.contains { $0.state == .saving && $0.destination != nil } }
+
+        /// What the builder hasn't been told yet, one line per save, for batch `id`; each said is marked told, and one that
+        /// has ended is forgotten. A save still waiting in its panel has nothing to say yet.
+        static func news(for id: String) -> [String] {
+            var lines: [String] = []
+            for save in all where save.told != save.state && !(save.state == .saving && save.destination == nil) {
+                save.told = save.state
+                let earlier = save.batch == id ? "" : " (from an earlier use of the app)"
+                let place = save.destination.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "\"\(save.name)\""
+                switch save.state {
+                case .saving: lines.append("Still saving \(place)\(earlier): it isn't finished yet, so it isn't saved yet.")
+                case .saved: lines.append("Saved\(earlier): " + (save.destination.map(describe) ?? place))
+                case .canceled: lines.append("Not saved\(earlier): the save panel for \"\(save.name)\" was canceled.")
+                case .failed(let why): lines.append("Not saved\(earlier): the download of \(place) failed (\(why)).")
+                case .notMoved(let why): lines.append("Not saved\(earlier): the download of \(place) finished but couldn't be put there (\(why)).")
+                }
+            }
+            all.removeAll { $0.told == $0.state && $0.state != .saving }
+            return lines
+        }
+
+        /// The file at `url`: where it is, its size and, for a zip, the names of what it holds (never what's in them).
+        nonisolated static func describe(_ url: URL) -> String {
+            let path = (url.path as NSString).abbreviatingWithTildeInPath
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return "\(path) (Lamp couldn't inspect it)" }
+            defer { try? handle.close() }
+            guard let size = try? handle.seekToEnd() else { return "\(path) (Lamp couldn't inspect it)" }
+            let bytes = size < 1000 ? "\(size) bytes" : ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file) + " (\(size) bytes)"
+            return "\(path), \(bytes), " + zip(handle, size: size)
+        }
+
+        /// A zip's list of files is at its end: the end record says where it starts, and each entry there names a file.
+        private nonisolated static func zip(_ handle: FileHandle, size: UInt64) -> String {
+            func read(_ offset: UInt64, _ count: Int) -> [UInt8]? {
+                guard (try? handle.seek(toOffset: offset)) != nil, let data = try? handle.read(upToCount: count), data.count == count else { return nil }
+                return [UInt8](data)
+            }
+            func u16(_ b: [UInt8], _ i: Int) -> Int { Int(b[i]) | Int(b[i + 1]) << 8 }
+            func u32(_ b: [UInt8], _ i: Int) -> UInt64 { UInt64(u16(b, i)) | UInt64(u16(b, i + 2)) << 16 }
+            guard size >= 4, let head = read(0, 4) else { return "not a zip archive" }
+            guard head[0] == 0x50, head[1] == 0x4b, (head[2] == 3 && head[3] == 4) || (head[2] == 5 && head[3] == 6) else {
+                return "not a zip archive"
+            }
+            let unreadable = "it starts like a zip archive but its list of files couldn't be read, so it may be cut short or damaged"
+            let tailCount = Int(min(size, 22 + 65_535))
+            guard let tail = read(size - UInt64(tailCount), tailCount), tailCount >= 22 else { return unreadable }
+            guard let end = stride(from: tailCount - 22, through: 0, by: -1).first(where: {
+                tail[$0] == 0x50 && tail[$0 + 1] == 0x4b && tail[$0 + 2] == 5 && tail[$0 + 3] == 6
+            }) else { return unreadable }
+            let total = u16(tail, end + 10), listSize = u32(tail, end + 12), listStart = u32(tail, end + 16)
+            if total == 0xffff || listStart == 0xffff_ffff { return "a large zip archive whose files Lamp didn't list" }
+            guard listStart + listSize <= size, listSize <= 1 << 20, let list = read(listStart, Int(listSize)) else { return unreadable }
+            var names: [String] = [], at = 0
+            for _ in 0..<total {
+                guard at + 46 <= list.count, list[at] == 0x50, list[at + 1] == 0x4b, list[at + 2] == 1, list[at + 3] == 2 else { return unreadable }
+                let nameLength = u16(list, at + 28), next = at + 46 + nameLength + u16(list, at + 30) + u16(list, at + 32)
+                guard next <= list.count else { return unreadable }
+                if names.count < 12 { names.append(String(String(decoding: list[(at + 46)..<(at + 46 + nameLength)], as: UTF8.self).prefix(100))) }
+                at = next
+            }
+            guard total > 0 else { return "an empty zip archive" }
+            let more = total > names.count ? ", and \(total - names.count) more" : ""
+            return "a zip archive of \(total) \(total == 1 ? "entry" : "entries"): " + names.joined(separator: ", ") + more
+        }
+    }
+    // end LampSaves
 
     /// Lets Lamp's builder use the app the way a person would: it clicks, types, presses keys and picks from
     /// menus in the front window, from inside the app, so no Accessibility permission is needed. An action names
@@ -6096,7 +6213,15 @@
             let front = LampRuntime.windowsOnScreen.first
             let before = front.flatMap(LampRuntime.picture), dialog = front.map(isDialog) ?? false
             var report: [String] = []
+            // A download the actions set off is this batch's until it answers (`LampSaves`).
+            LampSaves.batch = id
             func answer(stopped: Bool) {
+                // A newer batch, begun meanwhile, says what's saved in its own answer. So does the next one after a stop:
+                // Lamp may stop reading for this answer once it has stopped, and what's saved would be said to no one.
+                if LampSaves.batch == id || LampSaves.batch == nil {
+                    LampSaves.batch = nil
+                    if !stopped { report += LampSaves.news(for: id) }
+                }
                 var answer = ["id": id, "report": report.joined(separator: "\n")]
                 if stopped { answer["stopped"] = "person" }
                 // Once the pictures are written, which Lamp reads with the answer.
@@ -6140,18 +6265,34 @@
             }
             /// `shown` is where Lamp's cursor was sent for this action during the pause before it, if anywhere;
             /// the spot is found again now that it's due, since the app may have moved it meanwhile.
+            /// A click whose answer the page hasn't given yet (its report line), and the step waiting for it: nothing goes on,
+            /// and the report isn't written, until the page has said what the click landed on, or `unanswered` has passed.
+            var awaiting: (line: Int, resume: (() -> Void)?)?
             func step(_ index: Int, shown: Aim?) {
                 guard batch.carriesOn else { return }
+                if awaiting != nil {
+                    awaiting?.resume = { step(index, shown: shown) }
+                    return
+                }
                 keepBarPanel()
                 note()
                 guard index < actions.count else {
-                    batch.end()
-                    // Let the app react, then show the result.
-                    after(0.6) {
-                        keepBarPanel()
-                        report.append(outcome(since: front, before, wasDialog: dialog))
-                        answer(stopped: false)
+                    // Let the app react, then show the result: once a file the actions are saving is written, or up to
+                    // `LampSaves.wait` seconds, after which it's said to be still saving. The batch is still running till
+                    // then, so Lamp's Stop or the person's own click ends the wait and answers at once (`Handover`).
+                    func finish(waited: Double) {
+                        // Stopped (it has answered) or replaced by a newer batch.
+                        guard batch.carriesOn else { return }
+                        guard LampSaves.writing, waited < LampSaves.wait else {
+                            batch.end()
+                            keepBarPanel()
+                            report.append(outcome(since: front, before, wasDialog: dialog))
+                            answer(stopped: false)
+                            return
+                        }
+                        after(0.25) { finish(waited: waited + 0.25) }
                     }
+                    after(0.6) { finish(waited: 0) }
                     return
                 }
                 let action = actions[index]
@@ -6228,7 +6369,45 @@
                             goOn(after: Self.settle)
                         }
                     } else {
-                        report[line] = run(action)
+                        // A click on a page is answered by the page (`LampPageItems.act`), in its own time: the batch
+                        // waits for that answer only once `run` has said the click went to a page. Any other click (one
+                        // that opens a modal alert or panel, and doesn't return until it closes) never waits, so the
+                        // steps that answer the modal still run.
+                        var waits = false
+                        var early: (said: String, clicked: Bool)?
+                        func take(_ said: String, _ clicked: Bool) {
+                            // The page's answer in place of "sent"; a click that didn't happen isn't one that should
+                            // have changed the screen.
+                            report[line] = said
+                            if !clicked, last?.line == line { last = nil }
+                        }
+                        func goOn() {
+                            let resume = awaiting?.resume
+                            awaiting = nil
+                            resume?()
+                        }
+                        let did = run(action) { said, clicked in
+                            guard waits else {
+                                if early == nil { early = (said, clicked) }
+                                return
+                            }
+                            guard awaiting?.line == line else { return }
+                            take(said, clicked)
+                            goOn()
+                        }
+                        report[line] = did
+                        if let early {
+                            take(early.said, early.clicked)
+                        } else if did.hasSuffix(LampPageItems.sent) {
+                            waits = true
+                            awaiting = (line, nil)
+                            after(Self.unanswered) {
+                                guard awaiting?.line == line else { return }
+                                report[line] = report[line].replacingOccurrences(of: LampPageItems.sent, with:
+                                    "the page didn't answer within \(LampScreen.number(Self.unanswered)) s, so whether it was clicked isn't known")
+                                goOn()
+                            }
+                        }
                     }
                     // A page reads its things again, for the next action's target: ready well within the pause.
                     LampPageItems.refresh? {}
@@ -6248,7 +6427,7 @@
         /// How long after an action the next one's spot is looked for: a press is taken up on the run loop's
         /// next turn, so what it opened or changed is on screen by then.
         static let settle = 0.1
-        /// How long a game's page has to answer a hold of its controller before the batch goes on without it.
+        /// How long a game's page has to answer a hold of its controller, or a page a click, before the batch goes on without it.
         static let unanswered = 3.0
 
         /// Where an action happens on screen, what it's doing in a few words, which window that's in, and
@@ -6344,7 +6523,9 @@
                 "clicked or typed in from here: press return to save there, or escape to cancel."
         }
 
-        private static func run(_ action: Action) -> String {
+        /// What `action` did. A click on a page says so later, from the page (`late`, with whether it clicked), once
+        /// the page has said what the click landed on; what's returned then is only that it was sent.
+        private static func run(_ action: Action, late: @escaping @MainActor (String, Bool) -> Void = { _, _ in }) -> String {
             if action.action == "menu" { return menuBar(action.item) }
             if action.action == "bar_icon" { return barIcon(action.item) }
             // A game's controller is held in the game's page (`step`): an app with none has nothing to hold.
@@ -6382,7 +6563,8 @@
                     // The panel's own Save button answers to the real keyboard only; end it as that would.
                     if let parent = panel.sheetParent { parent.endSheet(panel, returnCode: .OK) } else { NSApp.stopModal(withCode: .OK) }
                     panel.orderOut(nil)
-                    return "pressed return: saved as \(panel.url?.path ?? panel.nameFieldStringValue)"
+                    return "pressed return: the save panel accepted \(panel.url?.path ?? panel.nameFieldStringValue) as where to save. " +
+                        "That alone doesn't mean the file was written there"
                 case ("key", "escape"):
                     panel.cancel(nil)
                     return "pressed escape: canceled the panel"
@@ -6391,9 +6573,14 @@
                 }
             }
             // On a page (LampPage.swift's), the page carries the action out itself.
-            if let act = LampPageItems.act, !(window is NSSavePanel), ["click", "double_click", "type", "key"].contains(action.action),
-               let did = act(action, action.x != nil && action.y != nil ? point : nil, window) {
-                return (what.map { "\(action.action) \($0): " } ?? "\(action.action): ") + did
+            if let act = LampPageItems.act, !(window is NSSavePanel), ["click", "double_click", "type", "key"].contains(action.action) {
+                let label = what.map { "\(action.action) \($0): " }
+                    ?? (action.x != nil && action.y != nil && action.action.hasSuffix("click") ? "\(action.action) at \(Int(action.x ?? 0)), \(Int(action.y ?? 0)): " : "\(action.action): ")
+                // A page's own thing (what the accessibility tree has no element for) is the one the click is for.
+                let meant = named.flatMap { $0.element == nil ? $0.item : nil }
+                if let did = act(action, action.x != nil && action.y != nil ? point : nil, meant, window, { late(label + $0, $1) }) {
+                    return label + did
+                }
             }
             // A game's own: what isn't on its page (the window's edge, a dialog in front) is left alone. Lamp looks for
             // these words in the app (`Store.gamePageMarker`) before it sends a game's page any click.

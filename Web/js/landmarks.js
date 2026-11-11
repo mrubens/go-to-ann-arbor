@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { stadiumGround, groundHeight } from './terrain.js';
 import { GEO } from './city-geodata.js';
-import { buildCampusLandmarks } from './campus-landmarks.js';
+import { buildCampusLandmarks, builder, landmarkGlass } from './campus-landmarks.js';
 import { buildMoreLandmarks } from './more-landmarks.js';
 import { buildDiagM } from './diag-m.js';
 import { buildGraffitiAlley } from './graffiti-alley.js';
@@ -233,46 +233,97 @@ function buildBigHouse(group, colliders) {
   }
   group.add(field);
 
-  // The press box and suites along the west side, the suites along the east: brick boxes over the top rows, glass
-  // toward the field in three bands, a maize stripe along the top
-  const brickMat = new THREE.MeshStandardNodeMaterial({ color: 0x7e4733, roughness: 0.85 });
-  const glassMat = new THREE.MeshStandardNodeMaterial({ color: 0x1d2c3c, roughness: 0.12, metalness: 0.6 });
-  const bandMat = new THREE.MeshStandardNodeMaterial({ color: 0xd9d4c8, roughness: 0.7 });
-  const maizeMat = new THREE.MeshStandardNodeMaterial({ color: 0xffcb05, roughness: 0.6 });
-  const towers = [{ side: -1, top: 36, half: 66, depth: 22 }, { side: 1, top: 27, half: 60, depth: 18 }];
+  // The press box and suites (2010) along the west side, the suites along the east, over the top rows. Toward the
+  // field, tiers of glass in slim mullions (suites, club and, on the west, the press box at the top) each standing out
+  // over the one below, a blue panelled fascia under each with a maize line, a maize stripe under the precast cap.
+  // Toward the street, brick in tall bays between proud piers, two storeys of glass and a precast spandrel in each
+  // bay, a precast cap; stair and lift cores at both ends rising past the roof, its camera booths and units on top.
+  // Brick down to the ground on the outside. Two meshes (masonry, glass: lit at night) of vertex colours.
+  const SB = builder();
+  const lin = (hex) => { const c = new THREE.Color(hex); return [c.r ** (1 / 2.2), c.g ** (1 / 2.2), c.b ** (1 / 2.2)]; };
+  const BRICK = lin(0x7e4733), BRICK_DARK = lin(0x6a3b2b), PRECAST = lin(0xd9d4c8), BLUE = lin(0x00274c), BLUE_SEAM = lin(0x0b3460),
+    MAIZE = lin(0xffcb05), MULL = lin(0x2a2f35), SGLASS = lin(0x1d2c3c), ROOFC = lin(0x55595e);
+  const towers = [
+    { side: -1, top: 36, half: 66, depth: 22, tiers: [[3, 9.5, 0], [11.2, 17.6, 1.6], [19.4, 25.6, 3.2]] },
+    { side: 1, top: 27, half: 60, depth: 18, tiers: [[3, 9.2, 0], [10.9, 16.7, 1.8]] }
+  ];
   for (const t of towers) {
     const rOut = radiiAt(t.side < 0 ? Math.PI : 0)[1];
-    const outerX = cx + t.side * rOut, innerX = outerX - t.side * t.depth, midX = (outerX + innerX) / 2;
-    const y0 = RIM_Y + 1.5, h = t.top - y0;
+    const f = -t.side; // toward the field
+    const outerX = cx + t.side * rOut, innerX = outerX - t.side * t.depth;
+    const X = (d) => outerX + f * d; // d metres in from the street face toward the field
+    const y0 = RIM_Y + 1.5, z0 = cz - t.half, z1 = cz + t.half;
+    const xb = (d0, d1, ya, yb, za, zb, col, m = SB.stone) => SB.box(X(d0), X(d1), G + ya, G + yb, za, zb, col, m);
+    // the body, and its flat roof
+    xb(0, t.depth, y0, t.top, z0, z1, BRICK);
     // solid to a car driving round the top of the stands (one passing under its overhang clears it)
-    colliders.push({ minX: Math.min(innerX, outerX), maxX: Math.max(innerX, outerX), minZ: cz - t.half, maxZ: cz + t.half,
-      minY: G + y0, maxY: G + t.top, solid: true });
-    const box = new THREE.Mesh(new THREE.BoxGeometry(t.depth, h, t.half * 2), brickMat);
-    box.position.set(midX, G + y0 + h / 2, cz);
-    box.castShadow = box.receiveShadow = true;
-    group.add(box);
-    // the brick down to the ground on the outside
-    const base = new THREE.Mesh(new THREE.BoxGeometry(3, y0 + 3, t.half * 2), brickMat);
-    base.position.set(outerX - t.side * 1.5, G + (y0 - 3) / 2, cz);
-    colliders.push({ minX: Math.min(outerX, outerX - t.side * 3), maxX: Math.max(outerX, outerX - t.side * 3),
-      minZ: cz - t.half, maxZ: cz + t.half, minY: G - 3, maxY: G + y0, solid: true });
-    group.add(base);
-    for (let b = 0; b < 3; b++) {
-      const gy = y0 + 3 + b * (h - 6) / 3, gh = (h - 6) / 3 - 1.4;
-      const glass = new THREE.Mesh(new THREE.BoxGeometry(0.3, gh, t.half * 2 - 4), glassMat);
-      glass.position.set(innerX - t.side * 0.12, G + gy + gh / 2, cz);
-      group.add(glass);
-      const outerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.3, gh * 0.6, t.half * 2 - 20), glassMat);
-      outerGlass.position.set(outerX + t.side * 0.12, G + gy + gh / 2, cz);
-      group.add(outerGlass);
+    colliders.push({ minX: Math.min(innerX, outerX), maxX: Math.max(innerX, outerX), minZ: z0, maxZ: z1, minY: G + y0, maxY: G + t.top, solid: true });
+    // the field side's tiers
+    let prevTop = y0;
+    for (const [ga, gb, proj] of t.tiers) {
+      const fa = y0 + ga - 1.6, face = t.depth + proj;
+      // the tier's floor standing out, its fascia panels and maize line, the glass and its mullions
+      if (proj > 0) {
+        xb(t.depth, face, fa, y0 + gb + 1.0, z0 + 3, z1 - 3, BRICK_DARK);
+        colliders.push({ minX: Math.min(X(t.depth), X(face)), maxX: Math.max(X(t.depth), X(face)), minZ: z0 + 3, maxZ: z1 - 3,
+          minY: G + fa, maxY: G + y0 + gb + 1.0, solid: true });
+      }
+      xb(face, face + 0.12, fa, y0 + ga - 0.1, z0 + 3, z1 - 3, BLUE);
+      for (let z = z0 + 3 + 2.4; z < z1 - 3; z += 2.4) xb(face + 0.12, face + 0.16, fa + 0.05, y0 + ga - 0.15, z - 0.03, z + 0.03, BLUE_SEAM);
+      xb(face, face + 0.2, fa - 0.25, fa, z0 + 3, z1 - 3, MAIZE);
+      xb(face - 0.1, face + 0.02, y0 + ga, y0 + gb, z0 + 3, z1 - 3, SGLASS, SB.glass);
+      for (let z = z0 + 3; z <= z1 - 2.99; z += 1.6) xb(face, face + 0.12, y0 + ga, y0 + gb, z - 0.05, z + 0.05, MULL);
+      xb(face, face + 0.14, y0 + gb, y0 + gb + 0.12, z0 + 3, z1 - 3, MULL);
+      prevTop = y0 + gb;
     }
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(t.depth + 0.4, 1.2, t.half * 2 + 0.4), maizeMat);
-    stripe.position.set(midX, G + t.top - 1.4, cz);
-    group.add(stripe);
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(t.depth + 0.6, 0.5, t.half * 2 + 0.6), bandMat);
-    cap.position.set(midX, G + t.top + 0.25, cz);
-    group.add(cap);
+    // the top: a maize stripe and the precast cap round it
+    const topFace = t.depth + t.tiers[t.tiers.length - 1][2];
+    xb(topFace, topFace + 0.25, t.top - 2.4, t.top - 1.2, z0 + 3, z1 - 3, MAIZE);
+    xb(t.depth, topFace + 0.3, prevTop + 0.12, t.top - 2.4, z0 + 3, z1 - 3, BLUE);
+    xb(-0.4, topFace + 0.4, t.top - 0.1, t.top + 0.5, z0 - 0.3, z1 + 0.3, PRECAST);
+    // the street side: piers, two storeys of glass a bay, a precast spandrel, the cap
+    const bays = Math.round((t.half * 2 - 16) / 4.4), bw = (t.half * 2 - 16) / bays;
+    for (let k = 0; k <= bays; k++) {
+      const z = z0 + 8 + k * bw;
+      xb(-0.45, 0, y0 - 3, t.top - 0.1, z - 0.45, z + 0.45, BRICK);
+      if (k === bays) break;
+      for (let fl = 0; fl + 6.5 <= t.top - y0 - 2; fl += 7.2) {
+        xb(-0.05, 0.02, y0 + fl + 0.8, y0 + fl + 5.6, z + 0.6, z + bw - 0.6, SGLASS, SB.glass);
+        xb(-0.12, 0, y0 + fl + 3.1, y0 + fl + 3.25, z + 0.6, z + bw - 0.6, MULL);
+        xb(-0.12, 0, y0 + fl + 0.8, y0 + fl + 5.6, z + bw / 2 - 0.05, z + bw / 2 + 0.05, MULL);
+        xb(-0.2, 0, y0 + fl + 5.6, y0 + fl + 7.2, z + 0.5, z + bw - 0.5, PRECAST);
+      }
+    }
+    // the cores at both ends, a little proud, past the roof
+    for (const [za, zb] of [[z0, z0 + 8], [z1 - 8, z1]]) {
+      xb(-0.6, t.depth + 0.4, y0 - 3, t.top + 3.2, za, zb, BRICK);
+      xb(-0.7, t.depth + 0.5, t.top + 3.2, t.top + 3.7, za - 0.1, zb + 0.1, PRECAST);
+      for (let y = y0 + 2; y < t.top; y += 3.6) xb(-0.65, -0.6, y, y + 2.2, (za + zb) / 2 - 0.5, (za + zb) / 2 + 0.5, SGLASS, SB.glass);
+    }
+    // on the roof: camera booths along the field edge and plant set back
+    for (let z = z0 + 14; z < z1 - 12; z += 18) {
+      xb(topFace - 3.5, topFace - 0.5, t.top + 0.5, t.top + 3.0, z, z + 5, PRECAST);
+      xb(topFace - 0.52, topFace - 0.48, t.top + 1.0, t.top + 2.6, z + 0.4, z + 4.6, SGLASS, SB.glass);
+    }
+    xb(3, t.depth - 6, t.top + 0.5, t.top + 2.4, cz - 14, cz + 14, ROOFC);
+    // the brick down to the ground on the outside
+    xb(0, 3, -3, y0, z0, z1, BRICK);
+    colliders.push({ minX: Math.min(outerX, outerX - t.side * 3), maxX: Math.max(outerX, outerX - t.side * 3),
+      minZ: z0, maxZ: z1, minY: G - 3, maxY: G + y0, solid: true });
   }
+  const towerMesh = (m, mat, name) => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(m.pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(m.col, 3));
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const out = new THREE.Mesh(geo, mat);
+    out.name = name;
+    out.castShadow = out.receiveShadow = true;
+    group.add(out);
+  };
+  towerMesh(SB.stone, new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.85, flatShading: true }), 'StadiumTowers');
+  towerMesh(SB.glass, landmarkGlass(), 'StadiumTowerGlass');
 
   // The video boards behind each end zone, on the outer wall
   const boxMat = new THREE.MeshStandardNodeMaterial({ color: 0x3f474f, roughness: 0.5, metalness: 0.3 });

@@ -493,7 +493,8 @@ function deckLayer(r, x, z, h) {
   const list = r.buckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET)));
   if (!list) return h;
   let dug = null, beside = false;
-  const inRiver = () => (dug ??= !!(r.digBlocks || r.dig) && digAt(r, x, z) > 0.01);
+  // (in the river itself, not on its banks: a dry bank, a trail or a road under a high deck keeps its natural level)
+  const inRiver = () => (dug ??= !!(r.digBlocks || r.dig) && digAt(r, x, z) > 0.5);
   for (const { deck, a, b } of list) {
     if (a[5] || b[5]) continue;
     const ex = b[0] - a[0], ez = b[1] - a[1], l2 = ex * ex + ez * ez;

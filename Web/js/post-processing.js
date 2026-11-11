@@ -14,9 +14,11 @@ import {
   smoothstep,
   length,
   screenUV,
-  screenSize
+  screenSize,
+  int
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { boxBlur } from 'three/addons/tsl/display/boxBlur.js';
 
 // Scene-linear color grading and lens bloom, composed in the existing final render pass.
 
@@ -25,7 +27,7 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 // Lamp: brighter than the original (the person found the game too dark), most of all after dark
 const LOOKS = {
   golden:   { exposure: 1.42, contrast: 1.05, saturation: 1.08, balance: [1.045, 1.00, 0.955], bloom: 0.24, threshold: 1.30 },
-  midday:   { exposure: 1.15, contrast: 1.04, saturation: 1.06, balance: [1.015, 1.00, 0.985], bloom: 0.18, threshold: 1.45 },
+  midday:   { exposure: 1.15, contrast: 1.08, saturation: 1.06, balance: [1.015, 1.00, 0.985], bloom: 0.18, threshold: 1.45 },
   twilight: { exposure: 1.85, contrast: 1.03, saturation: 1.08, balance: [1.025, 0.995, 1.015], bloom: 0.28, threshold: 1.20 },
   midnight: { exposure: 2.1, contrast: 1.02, saturation: 1.06, balance: [0.985, 1.00, 1.035], bloom: 0.30, threshold: 1.15 }
 };
@@ -40,7 +42,16 @@ function createPostProcessing(renderer, sceneColor, reflections, options = {}) {
   const contrast = uniform(1.0);
   const saturation = uniform(1.0);
   const balance = uniform(new THREE.Vector3(1, 1, 1));
-  const exposed = max(sceneColor.rgb.add(reflections.rgb), vec3(0)).mul(exposure).mul(balance);
+  const lit = max(sceneColor.rgb.add(reflections.rgb), vec3(0)).mul(exposure).mul(balance);
+  // Lamp: ambient occlusion (main.js, `options.ao`: GTAO at half size): its 5x5 noise averaged out over 5x5 of its
+  // texels, then laid on at three quarters, less on what's brightly lit (the sun's light isn't the sky's, which is
+  // what the occlusion takes away), before the glow so the glow follows it
+  let exposed = lit;
+  if (options.ao) {
+    const occlusion = boxBlur(options.ao, { size: int(2) }).r;
+    const litLuma = dot(lit, vec3(0.2126, 0.7152, 0.0722));
+    exposed = lit.mul(mix(float(1), occlusion, float(0.75).mul(float(1).sub(smoothstep(0.5, 2.5, litLuma).mul(0.6)))));
+  }
 
   // Limit only bloom's peak radiance, scaling RGB together to retain neon and lamp colors.
   // The original HDR image keeps its full range for the tone mapper's highlight shoulder.
@@ -59,7 +70,7 @@ function createPostProcessing(renderer, sceneColor, reflections, options = {}) {
     const luma = dot(color, vec3(0.2126, 0.7152, 0.0722)).toVar();
 
     // Gentle cool shadow / warm highlight separation; multiply rather than lifting the black level.
-    const shadows = mix(vec3(0.965, 1.005, 1.045), vec3(1), smoothstep(0.02, 0.60, luma));
+    const shadows = mix(vec3(0.985, 1.0, 1.015), vec3(1), smoothstep(0.02, 0.60, luma));
     const highlights = mix(vec3(1), vec3(1.035, 1.005, 0.965), smoothstep(0.60, 3.0, luma));
     color.mulAssign(shadows.mul(highlights));
 

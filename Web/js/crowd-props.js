@@ -72,16 +72,65 @@ function createUmbrellas(max) {
 // Dogs: a low-poly body (barrel chest, neck, head and muzzle, ears, tail) facing +z, its shoulder 0.5 m up, and one
 // leg shape hung from its hip; four leg instances per dog, swung in a trot (diagonal pairs together). Sizes and coats
 // of the dogs one sees about town: a small terrier, a beagle, a lab or golden, a shepherd, a husky's grey.
+// Lamp: the town's dogs, weighted as Ann Arbor walks them: labs (yellow, black, chocolate) and doodles most of all,
+// poodles (standard and miniature) and the rest. `curly`: the fluffy body (poodles and doodles), `legW` how thick the
+// legs are (a doodle's are woolly), `clip`: a poodle's pompoms
 const BREEDS = [
-  { scale: 0.55, coat: 0xe9e4da, long: 1.0 }, // a little white terrier
-  { scale: 0.62, coat: 0x2a2420, long: 1.1 }, // a dachshund-ish dark one, long and low
-  { scale: 0.72, coat: 0x9a6a3c, long: 1.0 }, // a beagle-brown
-  { scale: 0.95, coat: 0xd9a75e, long: 1.0 }, // a golden
-  { scale: 0.95, coat: 0x1d1b1a, long: 1.0 }, // a black lab
-  { scale: 1.0, coat: 0x6e5236, long: 1.05 }, // a shepherd
-  { scale: 0.9, coat: 0x8b8a88, long: 1.0 }, // a husky's grey
-  { scale: 0.85, coat: 0xc8b89a, long: 1.0 } // a yellow mutt
+  { scale: 0.55, coat: 0xe9e4da, long: 1.0, w: 1 }, // a little white terrier
+  { scale: 0.62, coat: 0x2a2420, long: 1.1, w: 1 }, // a dachshund-ish dark one, long and low
+  { scale: 0.72, coat: 0x9a6a3c, long: 1.0, w: 1 }, // a beagle-brown
+  { scale: 0.95, coat: 0xd9a75e, long: 1.0, w: 1.5 }, // a golden
+  { scale: 0.95, coat: 0xe2c48e, long: 1.0, w: 2.5 }, // a yellow lab
+  { scale: 0.95, coat: 0x1d1b1a, long: 1.0, w: 2.5 }, // a black lab
+  { scale: 0.95, coat: 0x4a2e1c, long: 1.0, w: 1.5 }, // a chocolate lab
+  { scale: 1.0, coat: 0x6e5236, long: 1.05, w: 0.8 }, // a shepherd
+  { scale: 0.9, coat: 0x8b8a88, long: 1.0, w: 0.6 }, // a husky's grey
+  { scale: 0.85, coat: 0xc8b89a, long: 1.0, w: 0.8 }, // a yellow mutt
+  { scale: 0.95, coat: 0xd7b27a, long: 1.0, w: 2.2, curly: true, legW: 1.6 }, // a labradoodle, apricot
+  { scale: 0.92, coat: 0xe8dcc4, long: 1.0, w: 1.6, curly: true, legW: 1.6 }, // a labradoodle, cream
+  { scale: 0.9, coat: 0x7a5232, long: 1.0, w: 1.2, curly: true, legW: 1.6 }, // a labradoodle, chocolate
+  { scale: 0.75, coat: 0xc79a62, long: 0.95, w: 1.2, curly: true, legW: 1.5 }, // a mini goldendoodle
+  { scale: 1.0, coat: 0xf2efe9, long: 0.95, w: 0.8, curly: true, legW: 0.9, clip: true }, // a standard poodle, white
+  { scale: 1.0, coat: 0x1b1a1a, long: 0.95, w: 0.7, curly: true, legW: 0.9, clip: true }, // a standard poodle, black
+  { scale: 0.6, coat: 0xd2a06a, long: 0.95, w: 0.7, curly: true, legW: 1.2 } // a miniature poodle, apricot
 ];
+const BREED_TOTAL = BREEDS.reduce((a, b) => a + b.w, 0);
+const pickBreed = (pick) => {
+  let t = (pick % 1) * BREED_TOTAL;
+  for (const b of BREEDS) if ((t -= b.w) < 0) return b;
+  return BREEDS[0];
+};
+// a lumpy round puff (a curly coat's), its vertices pushed in and out a little, the same each time
+function puff(rx, ry, rz, x, y, z, seed) {
+  const g = new THREE.IcosahedronGeometry(1, 1);
+  const P = g.attributes.position;
+  for (let i = 0; i < P.count; i++) {
+    const vx = P.getX(i), vy = P.getY(i), vz = P.getZ(i);
+    const h = Math.sin(vx * 12.9898 + vy * 78.233 + vz * 37.719 + seed) * 43758.5453;
+    const k = 1 + ((h - Math.floor(h)) - 0.5) * 0.22;
+    P.setXYZ(i, vx * rx * k + x, vy * ry * k + y, vz * rz * k + z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+// The curly body (poodles and doodles): a woolly round torso, a full chest, a round head with a topknot and long
+// hanging ears, a stubby muzzle and a pompom of a tail; the same proportions and hips as the plain one
+function curlyBody() {
+  const parts = [
+    puff(0.13, 0.13, 0.3, 0, 0.5, -0.02, 1),
+    puff(0.12, 0.13, 0.12, 0, 0.56, 0.22, 2),
+    puff(0.1, 0.1, 0.1, 0, 0.72, 0.4, 3),
+    puff(0.07, 0.06, 0.06, 0, 0.82, 0.38, 4),
+    puff(0.045, 0.11, 0.06, 0.1, 0.67, 0.38, 5),
+    puff(0.045, 0.11, 0.06, -0.1, 0.67, 0.38, 6),
+    puff(0.055, 0.05, 0.08, 0, 0.69, 0.5, 7),
+    new THREE.BoxGeometry(0.035, 0.035, 0.2).rotateX(-0.9).translate(0, 0.6, -0.33),
+    puff(0.06, 0.06, 0.06, 0, 0.7, -0.42, 8)
+  ];
+  const nose = tint(new THREE.BoxGeometry(0.045, 0.035, 0.03).translate(0, 0.7, 0.575), 0.12, 0.12, 0.12);
+  const collar = tint(new THREE.BoxGeometry(0.2, 0.04, 0.07).rotateX(-0.6).translate(0, 0.64, 0.32), 0.2, 0.35, 0.65);
+  return mergeGeometries([...parts.map((g) => tint(g, 1, 1, 1)), nose, collar]);
+}
 const HIP = [[0.085, 0.44, 0.2], [-0.085, 0.44, 0.2], [0.08, 0.44, -0.2], [-0.08, 0.44, -0.2]]; // front L/R, back L/R
 const TROT = [0, Math.PI, Math.PI, 0]; // diagonal pairs in step
 function dogBody() {
@@ -101,6 +150,7 @@ function dogBody() {
 function createDogs(max) {
   const mat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.95 });
   const body = instanced(dogBody(), mat, max, 'DogBodies');
+  const fluffy = instanced(curlyBody(), mat, max, 'DogBodiesCurly');
   const legs = instanced(tint(new THREE.BoxGeometry(0.055, 0.44, 0.06).translate(0, -0.22, 0), 1, 1, 1), mat, max * 4, 'DogLegs');
   // leashes: three segments each, sagging between the hand and the collar
   const linePos = new Float32Array(max * 6 * 3);
@@ -114,25 +164,25 @@ function createDogs(max) {
   leash.visible = false;
   const free = [];
   for (let i = max - 1; i >= 0; i--) free.push({ id: i, x: 0, z: 0, y: 0, vx: 0, vz: 0, yaw: 0, phase: 0, breed: BREEDS[0], placed: false });
-  let nb = 0, nl = 0, nLeash = 0;
+  let nb = 0, nf = 0, nl = 0, nLeash = 0;
   const collar = new THREE.Vector3();
   return {
-    meshes: [body, legs, leash],
+    meshes: [body, fluffy, legs, leash],
     get available() { return free.length; },
     take(pick) {
       const d = free.pop();
       if (!d) return null;
-      d.breed = BREEDS[Math.floor(pick * BREEDS.length) % BREEDS.length];
+      d.breed = pickBreed(pick);
       d.placed = false;
       return d;
     },
     release(d) { if (d) free.push(d); },
-    begin() { nb = nl = nLeash = 0; },
+    begin() { nb = nf = nl = nLeash = 0; },
     // `d` trots at heel on the owner's left, half a metre out and a little ahead, on the ground `y` there gives;
-    // drawn (with its leash from `hand`) when `draw`
-    step(d, dt, ox, oz, fx, fz, ground, draw, hand) {
-      const s = d.breed.scale;
-      const tx = ox + fz * 0.62 * Math.max(0.8, s) + fx * 0.45, tz = oz - fx * 0.62 * Math.max(0.8, s) + fz * 0.45;
+    // drawn (with its leash from `hand`) when `draw`. (Lamp) `side` -1: on their right, on a shorter leash (the trail)
+    step(d, dt, ox, oz, fx, fz, ground, draw, hand, side = 1) {
+      const s = d.breed.scale, out = (side < 0 ? 0.5 : 0.62) * Math.max(0.8, s) * side;
+      const tx = ox + fz * out + fx * 0.45, tz = oz - fx * out + fz * 0.45;
       if (!d.placed || (d.x - tx) ** 2 + (d.z - tz) ** 2 > 36) {
         d.x = tx; d.z = tz; d.vx = d.vz = 0; d.yaw = Math.atan2(fx, fz); d.placed = true;
       }
@@ -149,22 +199,22 @@ function createDogs(max) {
         d.yaw += dy * Math.min(1, dt * 8);
       }
       d.phase += (speed / (0.55 * s)) * Math.PI * 2 * dt * 0.5;
-      if (!draw || nb >= max) return;
+      if (!draw || nb + nf >= max) return;
       d.y = ground(d.x, d.z);
       const amp = Math.min(1, speed / 1.2) * 0.55, bob = Math.abs(Math.sin(d.phase)) * 0.015 * Math.min(1, speed);
       const L = d.breed.long;
       _q.setFromAxisAngle(_up, d.yaw);
       _s.set(s, s, s * L);
       _m.compose(_p.set(d.x, d.y + bob, d.z), _q, _s);
-      body.setMatrixAt(nb, _m);
-      body.setColorAt(nb, _c.setHex(d.breed.coat));
-      nb++;
+      if (d.breed.curly) { fluffy.setMatrixAt(nf, _m); fluffy.setColorAt(nf, _c.setHex(d.breed.coat)); nf++; }
+      else { body.setMatrixAt(nb, _m); body.setColorAt(nb, _c.setHex(d.breed.coat)); nb++; }
       const sy = Math.sin(d.yaw), cy = Math.cos(d.yaw);
       for (let i = 0; i < 4; i++) {
         const [hx, hy, hz] = HIP[i];
         const lx = hx * s, lz = hz * s * L;
         _q.setFromAxisAngle(_up, d.yaw).multiply(_q2.setFromAxisAngle(_x, Math.sin(d.phase + TROT[i]) * amp));
-        _s.set(s, s, s);
+        const lw = d.breed.legW || 1;
+        _s.set(s * lw, s, s * lw);
         _m.compose(_p.set(d.x + cy * lx + sy * lz, d.y + hy * s + bob, d.z - sy * lx + cy * lz), _q, _s);
         legs.setMatrixAt(nl, _m);
         legs.setColorAt(nl, _c.setHex(d.breed.coat));
@@ -188,11 +238,12 @@ function createDogs(max) {
     },
     end() {
       body.count = nb; body.visible = nb > 0;
+      fluffy.count = nf; fluffy.visible = nf > 0;
       legs.count = nl; legs.visible = nl > 0;
       leash.visible = nLeash > 0;
       lineGeo.setDrawRange(0, nLeash * 6);
-      if (nb) {
-        for (const m of [body, legs]) {
+      if (nb || nf) {
+        for (const m of [body, fluffy, legs]) {
           m.instanceMatrix.needsUpdate = true;
           m.instanceColor.needsUpdate = true;
         }
