@@ -1631,7 +1631,11 @@ async function initApp() {
       const at = choice.moving ? taken : choice.parked;
       cm.restyleCar(look);
       cm.stopCar(car);
-      car.position.set(at.x, cm.getGroundHeight(at.x, at.z, 'car', choice.parked ? -Infinity : undefined) + (choice.parked?.y || 0), at.z);
+      // (a parked car up on a parking structure's deck or roof: at the deck under it within a step of where the player
+      // stood to get in, as well as the height it was parked at, so it stays up there with them)
+      const parkedY = cm.getGroundHeight(at.x, at.z, 'car', choice.parked ? -Infinity : undefined) + (choice.parked?.y || 0);
+      const stoodY = choice.parked ? cm.getGroundHeight(at.x, at.z, 'car', cm.entities.person.position.y) : -Infinity;
+      car.position.set(at.x, Math.max(parkedY, stoodY), at.z);
       car.heading = choice.moving ? taken.yaw : choice.parked.yaw;
       car.prevX = car.position.x;
       car.prevZ = car.position.z;
