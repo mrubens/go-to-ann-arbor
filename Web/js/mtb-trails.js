@@ -172,7 +172,9 @@ function createMtbTrails(group, data) {
     list.forEach((it, k) => {
       set(it);
       m.setMatrixAt(k, m4.compose(v, q, sc));
-      if (it.color !== undefined) m.setColorAt(k, typeof it.color === 'number' && it.color < 1 ? col.setRGB(it.color, it.color * 0.98, it.color * 0.94) : col.setHex(it.color));
+      // (Lamp: a grey given as a plain 0-1 shade is an sRGB one, as a colour picker's: read as linear it came out
+      // nearly white, the trail rocks looking like patches of snow on the leaves)
+      if (it.color !== undefined) m.setColorAt(k, typeof it.color === 'number' && it.color < 1 ? col.setRGB(it.color, it.color * 0.98, it.color * 0.94, THREE.SRGBColorSpace) : col.setHex(it.color));
     });
     m.castShadow = m.receiveShadow = true;
     m.userData.cullDistance = cull;

@@ -1,3 +1,4 @@
+import { ROUNDABOUTS } from './roundabout-data.js';
 import {
   ALL_AVENUES,
   ALL_STREETS,
@@ -8,6 +9,7 @@ import {
 import { GEO } from './city-geodata.js';
 import { polygonBoxOverlaps } from './building-collision.js';
 import { curbParking, linkOf } from './curb-parking.js';
+import { TURN_LANES } from './turn-lanes-data.js';
 
 // Drivable road graph derived from the ground layout that city-grid.js actually builds: avenue corridors
 // between the raised curbs, cross-street gaps between curb rows, lanes that keep clear of medians, plazas
@@ -23,6 +25,8 @@ const Z_MAX = Math.ceil(TOWN_BOUNDS.maxZ) + 20;
 const LANE_CLEAR = 1.2; // half width each lane keeps free of obstacles
 const CROSSWALK = 2.5; // depth between an intersection box and its stop lines
 const SHORE_MARGIN = 6;
+
+const ALL_WAY_STOPS = [[-118, -98], [-216, -102]];
 
 function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
   // 1. Spatial hash of ground footprints: curbs bound the roads, everything else also blocks pedestrians
@@ -428,8 +432,16 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
       let nf = l.lf || Math.max(1, Math.floor((l.lanes || 2) / 2));
       let nb = l.lb || Math.max(1, (l.lanes || 2) - nf);
       const turn = (l.lanes || 0) - nf - nb >= 1 ? 1.6 : 0; // a shared centre turn lane
-      const fwd = fill(nf, turn ? turn : 0.15, half - bR);
-      const back = fill(nb, turn ? turn : 0.15, half - bL);
+      // (Lamp: where one way has more lanes than the other and its half of the road is too narrow for them, the line
+      // between them is off the middle, each way's room as its share of the lanes: N Main south of Beakes, one lane
+      // north and three south, the left-turn lane among them, had them in 7.4 m and lost one)
+      let c = 0;
+      if (!turn && nf !== nb && Math.min((half - bR - 0.15) / nf, (half - bL - 0.15) / nb) < 3) {
+        const room = (half - bR) + (half - bL) - 0.3;
+        c = (half - bR - 0.15) - room * nf / (nf + nb);
+      }
+      const fwd = fill(nf, turn ? turn : 0.15 + c, half - bR);
+      const back = fill(nb, turn ? turn : 0.15 - c, half - bL);
       // as before: a lane each way sits 1.8 m off the centre line
       if (nf === 1 && !turn && fwd[0] < 1.8 && half - bR >= 3.6) fwd[0] = 1.8;
       if (nb === 1 && !turn && back[0] < 1.8 && half - bL >= 3.6) back[0] = 1.8;
@@ -450,6 +462,11 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
     };
     const CHORD_TOLERANCE = 0.75; // m the drawn street may stray from the straight edge standing in for it
     const CHORD_MIN = 10; // m, the shortest edge a gentle curve is cut into (addEdgeGeneral drops those under 8 m)
+    // (Lamp: and on a short one-way link no closer than this to the junctions at its ends, so an approach keeps the room
+    // to set its stop line back clear of the turns across its mouth: Beakes St's last 32 m into N Main, bowed 1 m, was
+    // cut 18 m out, and with its stop line held to those 18 m its waiting cars stood in the way of N Main's turns into
+    // E Kingsley, so the whole approach, and the rest of Beakes with it, was dropped)
+    const CHORD_END = 20;
     for (const l of links) {
       const A = junction(find(l.a));
       const B = junction(find(l.b));
@@ -477,14 +494,15 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
       // edge, its double yellow line heading off across a lane toward the curb, and 17 m off the next one north, whose
       // lanes ran into the curbs and were left unpainted and without traffic)
       const refined = [0];
+      const endMin = l.len < 45 && l.dir !== 0 ? CHORD_END : CHORD_MIN;
       const refine = (i, j) => {
         let best = -1;
         let far = CHORD_TOLERANCE;
         for (let k = i + 1; k < j; k++) {
           const d = offChord(pts[k], pts[i], pts[j]);
           if (d <= far) continue;
-          if (Math.hypot(pts[k].x - pts[i].x, pts[k].z - pts[i].z) < CHORD_MIN) continue;
-          if (Math.hypot(pts[k].x - pts[j].x, pts[k].z - pts[j].z) < CHORD_MIN) continue;
+          if (Math.hypot(pts[k].x - pts[i].x, pts[k].z - pts[i].z) < (i === 0 ? endMin : CHORD_MIN)) continue;
+          if (Math.hypot(pts[k].x - pts[j].x, pts[k].z - pts[j].z) < (j === pts.length - 1 ? endMin : CHORD_MIN)) continue;
           far = d;
           best = k;
         }
@@ -929,8 +947,33 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
     e.moves = e.moves.filter((m) => m.out.some((j) => j >= 0));
   }
   for (const e of edges) e.from.out.push(e);
+  // Lamp: an approach's lanes' use as the map tags it (OpenStreetMap turn:lanes, turn-lanes-data.js, the arrows
+  // road-paint.js paints): matched as the paint matches them, by where the approach ends and its way, and only where
+  // the map has as many lanes as the approach; each lane's bits from the left (1 left, 2 through, 4 right)
+  const laneCells = new Map();
+  for (const a of TURN_LANES) {
+    const k = Math.floor(a[0] / 40) + ',' + Math.floor(a[1] / 40);
+    if (!laneCells.has(k)) laneCells.set(k, []);
+    laneCells.get(k).push(a);
+  }
+  const taggedUse = (e) => {
+    const ex = e.to.x, ez = e.to.z;
+    let best = null, bestD = 30;
+    for (let i = Math.floor((ex - 30) / 40); i <= Math.floor((ex + 30) / 40); i++) {
+      for (let j = Math.floor((ez - 30) / 40); j <= Math.floor((ez + 30) / 40); j++) {
+        for (const a of laneCells.get(i + ',' + j) || []) {
+          const d = Math.hypot(a[0] - ex, a[1] - ez);
+          if (d < bestD && a[2] * e.dx + a[3] * e.dz > 0.9) { best = a; bestD = d; }
+        }
+      }
+    }
+    return best && best.length - 4 === e.lanes.length ? best.slice(4) : null;
+  };
+  let taggedLanes = 0;
   for (const e of edges) {
     const n = e.lanes.length;
+    const use = taggedUse(e);
+    if (use) taggedLanes++;
     for (const f of e.to.out) {
       if (f.to === e.from || e.dx * f.dx + e.dz * f.dz < -0.5) continue;
       const cross = e.dx * f.dz - e.dz * f.dx;
@@ -959,7 +1002,9 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
             best = k;
           }
         }
-        for (let i = 0; i < n; i++) link(e, m, i, i + best);
+        // (a lane the map has turning only, not going straight on, isn't given the way ahead, as long as another is)
+        const ahead = use && use.some((u) => u & 2) ? (i) => use[i] & 2 : () => true;
+        for (let i = 0; i < n; i++) if (ahead(i)) link(e, m, i, i + best);
       }
     }
     serveEveryLane(e);
@@ -1077,9 +1122,11 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
   }
   const inTheWayOut = new Set();
   for (const e of edges) {
-    if (!e.squeezed || !e.from.shape || !inTheWay(e)) continue;
+    // (Lamp: and one off a junction rather than a bend sets its stop line back as far as that takes too, kept even so:
+    // Beakes St into N Main, the left turns from N Main into E Kingsley passing across its mouth)
+    if (!e.squeezed || !inTheWay(e)) continue;
     while (e.len > 6 && inTheWay(e)) e.len = Math.max(5.5, e.len - 1);
-    if (inTheWay(e)) inTheWayOut.add(e); // even so
+    if (e.from.shape && inTheWay(e)) inTheWayOut.add(e); // even so
   }
   if (inTheWayOut.size) {
     edges = edges.filter((e) => !inTheWayOut.has(e));
@@ -1178,6 +1225,11 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
     const near = junctionsNear(sig[i], sig[i + 1], 28);
     near.forEach(([d, n], k) => { if (k === 0 || d < 14) n.signal = true; });
   }
+  // Lamp: junctions the map still tags as lights whose photos (April 2024) show an all-way stop and no heads: W
+  // Washington at S Ashley and at S First
+  for (const [x, z] of ALL_WAY_STOPS) {
+    for (const [, n] of junctionsNear(x, z, 15)) { n.signal = false; n.allStop = true; }
+  }
   const st = controls.stops || [];
   let mapped = 0;
   for (let i = 0; i + 2 < st.length; i += 3) {
@@ -1234,6 +1286,7 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
       if ((e.cls ?? 4) >= 4 && mainCls <= 3) { e.control = 'stop'; inferred++; }
     }
   }
+  console.info(`[roads] ${taggedLanes} approaches with their lanes' use from the map's turn lanes`);
   console.info(`[roads] ${nodes.filter((n) => n.signal).length} signalised intersections, ${mapped} mapped stop & yield signs, ${inferred} more at side streets`);
 
   for (const e of edges) {
@@ -1241,6 +1294,56 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
     // the same block the other way (opposite is the oncoming approach at e's far end, the next block on)
     e.reverse = e.to.out.find((o) => o.to === e.from) || null;
   }
+  // Lamp: an approach to a light with a lane that only turns left (`leftOnly`, its index, the leftmost such; -1 for
+  // none) has a left-turn head of its own over that lane; where the avenue has one, the junction runs lead lefts
+  // (`leftPhase`: city-config.js's SIGNAL_TIMING)
+  for (const e of edges) {
+    e.leftOnly = -1;
+    e.leftMask = 0; // every lane that only turns left, one bit each
+    if (!e.to.signal || e.lanes.length < 2) continue;
+    for (let i = 0; i < e.lanes.length; i++) {
+      if (!e.moves.some((m) => m.turn === 'L' && m.out[i] >= 0) || e.moves.some((m) => m.turn !== 'L' && m.out[i] >= 0)) continue;
+      e.leftMask |= 1 << i;
+      if (e.leftOnly < 0 || e.lanes[i] < e.lanes[e.leftOnly]) e.leftOnly = i;
+    }
+  }
+  // Lamp: but only the main road's, and only a big one's (two through lanes or more, or a trunk or primary road), has a
+  // left-turn head with a green arrow and its protected turn (`leftArrow`); most of the town's left-turn lanes turn on
+  // the round green, giving way, under the junction's ordinary heads and a LEFT ONLY sign
+  for (const e of edges) {
+    const through = e.lanes.length - [...e.lanes.keys()].filter((i) => (e.leftMask >> i) & 1).length;
+    e.leftArrow = e.leftOnly >= 0 && e.axisIndex === 0 && (through >= 2 || (e.cls ?? 4) <= 1);
+  }
+  for (const n of nodes) n.leftPhase = !!n.signal && (n.in || []).some((e) => e.leftArrow);
+  // Lamp: each light's point in the shared cycle (`offset`, seconds: city-config.js SIGNAL_TIMING), set so the greens
+  // along its main road follow one another at PROGRESSION m/s, the way that road runs east or south. Lights within
+  // 45 m of each other (the two halves of a divided road's crossing, a junction and its slip road) are one junction
+  // and share it, so nobody gets a green into a red in the middle.
+  {
+    const PROGRESSION = 12, cycle = 72;
+    const lights = nodes.filter((n) => n.signal && n.in && n.in.length);
+    const root = new Map(lights.map((n) => [n, n]));
+    const find = (n) => { while (root.get(n) !== n) n = root.get(n); return n; };
+    for (let i = 0; i < lights.length; i++) {
+      for (let j = i + 1; j < lights.length; j++) {
+        const a = lights[i], b = lights[j];
+        if (Math.abs(a.x - b.x) < 45 && Math.abs(a.z - b.z) < 45 && Math.hypot(a.x - b.x, a.z - b.z) < 45) root.set(find(a), find(b));
+      }
+    }
+    const groups = new Map();
+    for (const n of lights) { const r = find(n); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(n); }
+    for (const group of groups.values()) {
+      const cx = group.reduce((a, n) => a + n.x, 0) / group.length, cz = group.reduce((a, n) => a + n.z, 0) / group.length;
+      const main = group.flatMap((n) => n.in).filter((e) => e.axisIndex === 0).sort((a, b) => b.half - a.half)[0];
+      let dx = main ? main.dx : 1, dz = main ? main.dz : 0;
+      if (dx + dz < 0) { dx = -dx; dz = -dz; } // (east or south: x and z grow that way)
+      const offset = ((((cx * dx + cz * dz) / PROGRESSION) % cycle) + cycle) % cycle;
+      for (const n of group) n.offset = offset;
+    }
+    for (const n of nodes) if (n.offset === undefined) n.offset = 0;
+    console.info(`[roads] ${lights.length} lights run as ${groups.size} junctions, each from its own point in the cycle`);
+  }
+  console.info(`[roads] ${edges.filter((e) => e.leftOnly >= 0).length} signalised approaches with a left-turn lane, ${nodes.filter((n) => n.leftPhase).length} junctions with lead left turns (${nodes.filter((n) => n.leftPhase).map((n) => [...new Set(n.in.map((e) => e.street).filter(Boolean))].join(' at ') + ` (${Math.round(n.x)}, ${Math.round(n.z)})`).join(', ')})`);
 
   // Lane-to-lane curves are built on first use and cached
   const curves = new Map();
@@ -1252,7 +1355,7 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
   }
 
   const isRoadClear = (x, z, clear = 0.15) => !blockedOnStreet(x, z, clear);
-  return { nodes, edges, paintEdges, connector, curvePoint, walkable, onSidewalk, isRoadClear };
+  return { nodes, edges, paintEdges, connector, curvePoint, walkable, onSidewalk, isRoadClear, get roundaboutMoves() { return roundaboutMoves; } };
 }
 
 // The largest strongly connected set of `list` (a Set), going on from item e to the items next(e)
@@ -1354,11 +1457,63 @@ function makeCurve(e, i, f, j) {
     const ddz = 6 * u * (c.z2 - 2 * c.z1 + z0) + 6 * t * (z3 - 2 * c.z2 + c.z1);
     c.curv = Math.max(c.curv, Math.abs(dx * ddz - dz * ddx) / Math.max(1e-6, Math.hypot(dx, dz) ** 3));
   }
-  return c;
+  return roundabout(c) || c;
+}
+
+// Lamp: a move through a roundabout (roundabout-data.js) whose curve would cut across its central island
+// (roundabouts.js) goes round it instead, counterclockwise as traffic keeps right: in to the ring at its centre line,
+// round it, out to the exit lane; a polyline with its own arc lengths (curvePoint reads `pts`)
+let roundaboutMoves = 0;
+function roundabout(c) {
+  const mx = (c.x0 + c.x3) / 2, mz = (c.z0 + c.z3) / 2;
+  for (let i = 0; i < ROUNDABOUTS.length; i += 3) {
+    const cx = ROUNDABOUTS[i], cz = ROUNDABOUTS[i + 1], r = ROUNDABOUTS[i + 2];
+    if (Math.hypot(mx - cx, mz - cz) > r + 14) continue;
+    const apron = Math.max(2.2, r - 2.6), curb = Math.max(1.2, apron - 1.6);
+    // does the plain curve come within a car's half width of the curb?
+    let near = Infinity;
+    for (let k = 0; k <= 16; k++) {
+      const t = k / 16, u = 1 - t;
+      const x = u * u * u * c.x0 + 3 * u * u * t * c.x1 + 3 * u * t * t * c.x2 + t * t * t * c.x3;
+      const z = u * u * u * c.z0 + 3 * u * u * t * c.z1 + 3 * u * t * t * c.z2 + t * t * t * c.z3;
+      near = Math.min(near, Math.hypot(x - cx, z - cz));
+    }
+    if (near > curb + 1.3) return null;
+    const rc = Math.max(apron + 1.4, r);
+    const ang = (x, z) => Math.atan2(-(z - cz), x - cx);
+    const a0 = ang(c.x0, c.z0);
+    let d = ang(c.x3, c.z3) - a0;
+    while (d < 0.3) d += Math.PI * 2;
+    while (d > Math.PI * 2 + 0.3) d -= Math.PI * 2;
+    const pts = [c.x0, c.z0];
+    const from = 0.32, to = d - 0.32, steps = Math.max(2, Math.ceil((to - from) / 0.18));
+    for (let k = 0; k <= steps; k++) {
+      const a = a0 + from + ((to - from) * k) / steps;
+      pts.push(cx + Math.cos(a) * rc, cz - Math.sin(a) * rc);
+    }
+    pts.push(c.x3, c.z3);
+    const lens = new Float32Array(pts.length / 2);
+    for (let k = 1; k < lens.length; k++) lens[k] = lens[k - 1] + Math.hypot(pts[k * 2] - pts[k * 2 - 2], pts[k * 2 + 1] - pts[k * 2 - 1]);
+    roundaboutMoves++;
+    return { ...c, pts, lens, len: lens[lens.length - 1], curv: 1 / rc };
+  }
+  return null;
 }
 
 // Position and unit tangent at arc length s along a curve
 function curvePoint(c, s, out) {
+  if (c.pts) {
+    const L = c.lens, P = c.pts;
+    let k = 1;
+    while (k < L.length - 1 && L[k] < s) k++;
+    const f = Math.min(1, Math.max(0, (s - L[k - 1]) / (L[k] - L[k - 1] || 1)));
+    const dx = P[k * 2] - P[k * 2 - 2], dz = P[k * 2 + 1] - P[k * 2 - 1], l = Math.hypot(dx, dz) || 1;
+    out.x = P[k * 2 - 2] + dx * f;
+    out.z = P[k * 2 - 1] + dz * f;
+    out.dx = dx / l;
+    out.dz = dz / l;
+    return out;
+  }
   let k = 1;
   while (k < 16 && c.lut[k] < s) k++;
   const s0 = c.lut[k - 1];

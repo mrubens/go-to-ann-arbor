@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { attribute, positionWorld, normalWorld, cameraPosition, vertexColor, mx_noise_float, smoothstep, step, mix, max,
-  abs, floor, fract, float, vec3, normalize } from 'three/tsl';
+  abs, floor, fract, float, vec3, normalize, sin } from 'three/tsl';
 import { polygonContains } from './building-collision.js';
 import { cityUniforms } from './tsl-materials.js';
 import { XBOX, TOUCH_DEVICE, TIER } from './device-tier.js';
@@ -24,7 +24,10 @@ import { splitByCell } from './merge-static.js';
 // buttresses, louvres, door planks or quarries' lead (about 1,200 triangles a church against 4,000), and on the Xbox
 // and a phone the two meshes are cut into 600 m squares, each hidden past the landmarks' reach.
 
-const STONE = [[0.66, 0.62, 0.55], [0.58, 0.56, 0.52], [0.72, 0.68, 0.6], [0.62, 0.57, 0.5]];
+// (Lamp: Ann Arbor's stone churches are brown and gray fieldstone and rubble, St Andrew's, First Methodist, Zion)
+const STONE = [[0.6, 0.53, 0.45], [0.52, 0.48, 0.43], [0.66, 0.6, 0.52], [0.56, 0.5, 0.44]];
+// a postwar church's brick: tan, buff and brown
+const POSTWAR_BRICK = [[0.62, 0.45, 0.32], [0.55, 0.36, 0.26], [0.68, 0.55, 0.4], [0.5, 0.32, 0.24]];
 const BRICK = [[0.5, 0.25, 0.19], [0.56, 0.3, 0.22], [0.45, 0.26, 0.2], [0.6, 0.38, 0.27]];
 const CLAP = [[0.92, 0.91, 0.87], [0.9, 0.88, 0.82]];
 const TRIM_STONE = [0.78, 0.74, 0.66];
@@ -75,12 +78,15 @@ export function churchLayout(ch) {
   const rect = plan.fill > 0.78 && ch.polygons.length === 1;
   const hl = plan.L / 2, hw = plan.W / 2;
   // the roof: a steep gable (about 50°) whose ridge is the surveyed height; irregular plans keep a flat top
-  const roofH = rect ? Math.min(plan.W * 0.6, height * 0.5, 14) : 0;
+  // (Lamp: out past the town that stood by 1950 a church is a postwar one: a low gable over brick walls with plain tall
+  // windows, no Gothic tower or spire)
+  const postwar = Math.hypot(ch.cx, ch.cz) > 2300;
+  const roofH = rect ? Math.min(plan.W * (postwar ? 0.32 : 0.6), height * (postwar ? 0.4 : 0.5), 14) : 0;
   const eave = ground + Math.max(4.5, height - roofH);
   const ridge = ground + height + 0.22;
   const tw = Math.max(3.6, Math.min(plan.W * 0.38, 7));
   let towerEnd = hash(ch, 2) < 0.5 ? -1 : 1;
-  let hasTower = plan.L > 12 && height > 6;
+  let hasTower = !postwar && plan.L > 12 && height > 6;
   // (over an outline, the tower stands inside it: at the other end if not the first, or not at all)
   const at = (end) => end * (hl - tw / 2 + 0.8);
   if (hasTower && !rect) {
@@ -96,7 +102,10 @@ export function churchLayout(ch) {
   }
   // its material: clapboard only on a small one, else brick or stone
   const m = hash(ch, 5);
-  const material = m < 0.22 && height < 14 && plan.L < 40 ? 'clap' : m < 0.6 ? 'brick' : 'stone';
+  // (a church its street photo shows: red or tan brick, stone, or painted, which on a church is white clapboard;
+  // data/building-looks.json, buildings.js passes it as `facade`)
+  const seen = [null, 'brick', 'brick', 'stone', 'clap', null][ch.facade || 0];
+  const material = seen || (postwar ? 'brick' : m < 0.22 && height < 14 && plan.L < 40 ? 'clap' : m < 0.6 ? 'brick' : 'stone');
   const k = hash(ch, 6);
   const top = !hasTower ? 'none'
     : material === 'clap' ? 'steeple'
@@ -108,7 +117,7 @@ export function churchLayout(ch) {
     : top === 'battlement' ? 1.6
     : top === 'cupola' ? tw * 1.25
     : top === 'steeple' ? tw * 1.0 + Math.min(18, tw * 2.4) : 0;
-  return { rect, hl, hw, roofH, eave, ridge, tw, towerEnd, towerU, hasTower, towerTop, spireH, material, top };
+  return { rect, hl, hw, roofH, eave, ridge, tw, towerEnd, towerU, hasTower, towerTop, spireH, material, top, postwar };
 }
 
 export function buildChurches(items) {
@@ -274,13 +283,13 @@ export function buildChurches(items) {
     const base = Math.min(minGround, ground) - 0.5;
     const r = (k) => hash(ch, k);
     const lay = churchLayout(ch);
-    const { rect, hl, hw, eave, ridge, tw, towerEnd, towerU, hasTower, towerTop, spireH, material, top } = lay;
-    const wall = material === 'brick' ? BRICK[Math.floor(r(7) * BRICK.length)] : material === 'stone' ? STONE[Math.floor(r(7) * STONE.length)] : CLAP[Math.floor(r(7) * CLAP.length)];
+    const { rect, hl, hw, eave, ridge, tw, towerEnd, towerU, hasTower, towerTop, spireH, material, top, postwar } = lay;
+    const wall = postwar ? POSTWAR_BRICK[Math.floor(r(7) * POSTWAR_BRICK.length)] : material === 'brick' ? BRICK[Math.floor(r(7) * BRICK.length)] : material === 'stone' ? STONE[Math.floor(r(7) * STONE.length)] : CLAP[Math.floor(r(7) * CLAP.length)];
     const pat = material === 'brick' ? PAT.brick : material === 'stone' ? PAT.ashlar : PAT.clap;
     const wood = material === 'clap';
     const trim = wood ? TRIM_WOOD : TRIM_STONE;
     const roofCol = wood ? SHINGLE : SLATE;
-    const kind = material === 'stone' ? 'lancet' : 'round';
+    const kind = postwar ? 'rect' : material === 'stone' ? 'lancet' : 'round';
     const pane = GLASS[Math.floor(r(1) * GLASS.length)];
     const pane2 = GLASS[(GLASS.indexOf(pane) + 2) % GLASS.length];
     const door = DOOR[Math.floor(r(8) * DOOR.length)];
@@ -600,10 +609,16 @@ function masonryMaterial(lean) {
   const cy = fract(positionWorld.y.div(0.18));
   const clap = float(1).sub(smoothstep(0.78, 1.0, cy).mul(0.22).mul(float(1).sub(smoothstep(30, 70, dist))).mul(wallish));
   // ashlar
-  const ay = positionWorld.y.div(0.45), arow = floor(ay), au = along.div(0.9).add(arow.mul(0.5));
+  // (Lamp: random-coursed fieldstone, as Ann Arbor's stone churches are, not even 0.45 by 0.9 m blocks, which read as
+  // concrete block: 0.3 m courses stepped every 0.6 m along the wall, stones 0.35 to 0.75 m long, each its own
+  // shade, in dark mortar)
+  const acol = floor(along.div(0.6));
+  const ay = positionWorld.y.add(fract(sin(acol.mul(31.7)).mul(4375.85)).sub(0.5).mul(0.11)).div(0.3), arow = floor(ay);
+  const arh = fract(sin(arow.mul(17.13)).mul(4375.85));
+  const au = along.div(arh.mul(0.4).add(0.35)).add(arh.mul(7.0));
   const anear = float(1).sub(smoothstep(25, 60, dist)).mul(wallish);
-  const ashlar = float(1).sub(max(step(fract(ay), 0.05), step(fract(au), 0.025)).mul(0.25).mul(anear))
-    .mul(mx_noise_float(vec3(floor(au), arow, 2.5)).mul(0.12).mul(anear).add(1));
+  const ashlar = float(1).sub(max(smoothstep(0.1, 0.04, fract(ay)), smoothstep(0.08, 0.03, fract(au))).mul(0.5).mul(anear))
+    .mul(mx_noise_float(vec3(floor(au), arow, 2.5)).mul(0.3).mul(anear).add(1));
   // slates on a slope (the courses follow the height), a spire's or a roof's
   const sy = positionWorld.y.div(0.16), srow = floor(sy);
   const snear = float(1).sub(smoothstep(30, 80, dist));

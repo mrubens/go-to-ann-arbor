@@ -2687,7 +2687,7 @@ class ThirdPersonControllerManager {
         // never pulled (or too late): a splat, flat out for a few seconds before getting up
         log(`[parachute] ${ch.pulled ? 'came down hard' : 'splat'} at ${Math.round(fall)} m/s`);
         this.knockDown(ch.vx * 0.3, 0.6, ch.vz * 0.3, 0, 1.4);
-        p.fallen.wait = Math.min(4, 1 + fall * 0.08);
+        p.fallen.wait = Math.min(1.5, 0.3 + fall * 0.03);
       } else {
         log('[parachute] landed');
         p.verticalVel = 0;
@@ -2846,7 +2846,7 @@ class ThirdPersonControllerManager {
     const root = new THREE.Object3D();
     root.rotation.order = 'YXZ';
     p.swing = { seat, side, from: { x: p.position.x, y: p.position.y, z: p.position.z }, extend: 0, root, at: null,
-      pose: { hip: [0, 0, -0.02], shoulder: [0, 0.55, -0.06], hand: [0.21, 0.4, 0.05], foot: [0.1, -0.36, 0.28], standing: false } };
+      pose: { hip: [0, 0, -0.02], shoulder: [0, 0.55, -0.06], hand: [0.21, 0.4, 0.05], foot: [0.1, -0.36, 0.28], standing: false, seatKnees: true } };
     p.heading = Math.atan2(st.along.x * side, st.along.z * side);
     p.speed = p.verticalVel = 0;
     p.jumping = false;
@@ -2982,8 +2982,9 @@ class ThirdPersonControllerManager {
     }
     if (p.fallen) {
       if (p.fallen.getUp < 0) {
-        // a splat lies still a few seconds (`wait`) before getting up
-        if (p.rig.stepRagdoll(dt, personGround, this, true) && !((p.fallen.wait -= dt) > 0)) {
+        // Lamp: up again soon once the body comes to rest (0.4 s still), a splat a moment longer (`wait`), so the player
+        // isn't left lying there waiting
+        if (p.rig.stepRagdoll(dt, personGround, this, true, 0.4) && !((p.fallen.wait -= dt) > 0)) {
           p.heading = p.rig.yaw = p.rig.ragdollHeading();
           p.rig.ragdolling = false;
           p.fallen.getUp = 0;

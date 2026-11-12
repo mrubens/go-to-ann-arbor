@@ -140,14 +140,35 @@ def read_buildings():
 
 
 B = read_buildings()
+# the city's religious parcels (Web/data/districts.json land use 9), for the churches
+_rel = [Polygon([(r[i], r[i + 1]) for i in range(1, len(r) - 1, 2)]) for r in
+        json.load(open(os.path.join(ROOT, 'Web/data/districts.json')))['landuse'] if r[0] == 9 and len(r) >= 7]
+_rel_tree = STRtree(_rel)
+
+
+def religious(x, z):
+    return any(_rel[i].contains(Point(x, z)) for i in _rel_tree.query(Point(x, z)))
+
+
 for b in B:
     ring = b['polys'][0][0]
     b['area'] = abs(Polygon(ring).area) if len(ring) >= 3 else 0
     # as buildings.js sorts them: houses (and small sheds) for houses.js, the rest by the facade shaders
     small_shed = b['span'] < 70 and b['height'] < 6
-    b['house'] = ((b['kind'] or 1) == 1 and b['height'] < 14 and b['span'] < 900) or small_shed
+    # (as buildings.js: under 900 m², or out past the town that stood by 1950 a townhouse row or garden apartments up to
+    # 3,000 m², drawn as houses are)
+    b['house'] = ((b['kind'] or 1) == 1 and b['height'] < 14 and (b['span'] < 900 or b['area'] < 900 or (
+        b['area'] < 3000 and math.hypot(b['cx'], b['cz']) > 2300))) or small_shed
+    # an apartment block or townhouse row (houses.js APARTMENT_AREA)
+    b['apartments'] = b['house'] and b['area'] >= 400
     b['garage'] = b['house'] and ((small_shed and (b['kind'] or 1) != 1) or b['area'] < 45)
     b['shop'] = not b['house'] and b['height'] >= 6 and b['kind'] != 5
+    # the University's own: only their walls are asked about (no shopfronts)
+    b['campus'] = not b['house'] and b['height'] >= 6 and b['kind'] == 5
+    # a church (as buildings.js: over 150 m², 7 to 40 m, on a religious parcel, not the University's): its walls too
+    b['church'] = (b['kind'] or 1) != 5 and b['area'] > 150 and 7 <= b['height'] < 40 and religious(b['cx'], b['cz'])
+    if b['church']:
+        b['house'], b['shop'], b['campus'] = False, False, True
     # a point inside the footprint: the game finds a building's look by which footprint holds it (as roof-shapes.json)
     p = Polygon(ring).representative_point() if len(ring) >= 3 else Point(b['cx'], b['cz'])
     b['px'], b['pz'] = round(p.x, 1), round(p.y, 1)
@@ -206,7 +227,13 @@ AREAS = {
 
 def area_buildings(name):
     if name == 'all':
-        return [b for b in B if (b['house'] and not b['garage']) or b['shop']]
+        return [b for b in B if (b['house'] and not b['garage']) or b['shop'] or b['campus']]
+    if name == 'campus':
+        return [b for b in B if b['campus'] and not b['church']]
+    if name == 'churches':
+        return [b for b in B if b['church']]
+    if name == 'apartments':
+        return [b for b in B if b['apartments'] and not b['garage']]
     poly, what = AREAS[name]()
     out = []
     for b in B:
@@ -290,9 +317,11 @@ def mly_tile(i, j):
 def photos_near(bs, reach=55):
     tiles = set()
     for b in bs:
-        for dx in (-reach, reach):
-            for dz in (-reach, reach):
-                lon, lat = lonlat(b['px'] + dx, b['pz'] + dz)
+        # (a University building: round its whole footprint, which can be 150 m across and set back from the street)
+        x0, z0, x1, z1 = b['geom'].bounds if b['campus'] and b['geom'] is not None else (b['px'], b['pz'], b['px'], b['pz'])
+        for x in (x0 - reach, x1 + reach):
+            for z in (z0 - reach, z1 + reach):
+                lon, lat = lonlat(x, z)
                 tiles.add((math.floor(lon / TILE), math.floor(lat / TILE)))
     seen, out = set(), []
     with concurrent.futures.ThreadPoolExecutor(8) as pool:
@@ -346,7 +375,8 @@ def view(b, im):
     if abs(mid) > half * 0.9:
         return None
     inside = max(0, min(hi, half) - max(lo, -half)) / max(hi - lo, 1e-6)
-    if inside < 0.5:
+    # (a University building may be too big to fit half of it in the frame from across its street)
+    if inside < (0.25 if b['campus'] else 0.5):
         return None
     # the wall the camera looks at: the first footprint edge on the ray toward the building's middle
     a = math.radians(im['heading'] + mid)
@@ -389,7 +419,8 @@ def view(b, im):
 
 def best_photos(b, photos, ptree, n=3):
     # the best few, each from a different spot (photos a metre apart show the same thing)
-    near = ptree.query(Point(b['px'], b['pz']).buffer(55)) if ptree is not None else []
+    around = b['geom'].buffer(50) if b['campus'] and b['geom'] is not None else Point(b['px'], b['pz']).buffer(55)
+    near = ptree.query(around) if ptree is not None else []
     views = sorted((v for v in (view(b, photos[i]) for i in near) if v), key=lambda v: -v['score'])
     out = []
     for v in views:
@@ -588,6 +619,22 @@ def shop_questions(b):
     }
 
 
+def campus_questions(b):
+    target = 'the building at the middle of `photo`'
+    return {
+        'visible': {'type': 'noul', 'instructions':
+                    f'Does `photo` clearly show the walls of {target}, mostly unobstructed by trees, vehicles or '
+                    'other buildings?'},
+        'facade': {'type': 'choice', 'instructions': f'What are the walls of {target} mostly made of?',
+                   'criteria': {
+                       'red_brick': 'Red or brown brick.', 'tan_brick': 'Tan, buff, cream or yellow brick.',
+                       'stone': 'Stone or limestone, or cast stone or precast concrete.',
+                       'painted': 'Painted brick, stucco or painted panels.',
+                       'glass_metal': 'Mostly glass and metal: curtain wall, metal panels or fins.',
+                       'cant_tell': 'The walls cannot be made out clearly enough to tell.'}},
+    }
+
+
 def ask_jev(state, questions, jpeg):
     ref = 'img-' + uuid.uuid4().hex
     body = {'model': 'jev-latest', 'state': {**state, 'photo': ref}, 'questions': questions,
@@ -637,7 +684,7 @@ def classify(b, views, area, tries=()):
         qs = house_questions(b, not has_roof_tag(b))
     else:
         state = {'assessor': {k: a.get(k) for k in ('year_built', 'land_use') if a.get(k)}}
-        qs = shop_questions(b)
+        qs = campus_questions(b) if b['campus'] else shop_questions(b)
     state['about'] = 'A street-level photo of one building in Ann Arbor, Michigan, cut to that building.'
     # the best photo first; the next only if Jev says this one doesn't clearly show the building (after any tried
     # in an earlier run)
@@ -648,7 +695,7 @@ def classify(b, views, area, tries=()):
         if args.box:
             # first find the building in a wider cut, then ask about the cut to its box
             wide, _, src, rect, across = crop(b, v, photos_by_id[v['id']], wide=True)
-            what = 'house' if b['house'] else 'building with a shopfront'
+            what = 'house' if b['house'] else 'building' if b['campus'] else 'building with a shopfront'
             d0 = ask_jev({'about': 'A street-level photo in Ann Arbor, Michigan.', 'photo_hint':
                           f"The {what} we want is about {across:.0%} of the way across `photo` from the left, its "
                           f"nearest wall about {v['dist']:.0f} m from the camera."}, {
@@ -680,7 +727,7 @@ def classify(b, views, area, tries=()):
                       'answers': d['answers'] if seen or last else {'visible': d['answers']['visible']}})
         if seen:
             break
-    e = {'key': b['key'], 'kind': 'house' if b['house'] else 'shop', 'area': area, 'model': d.get('model'),
+    e = {'key': b['key'], 'kind': 'house' if b['house'] else 'campus' if b['campus'] else 'shop', 'area': area, 'model': d.get('model'),
          'tries': tries}
     with _answers_lock:
         with open(ANSWERS, 'a') as f:
@@ -784,7 +831,7 @@ def pack():
     houses, shops = [], []
     n = collections.Counter()
     for b in B:
-        if not ((b['house'] and not b['garage']) or b['shop']):
+        if not ((b['house'] and not b['garage']) or b['shop'] or b['campus']):
             continue
         a = b.get('assessor')
         e = answers.get(b['key'])

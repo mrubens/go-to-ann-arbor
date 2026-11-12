@@ -143,8 +143,10 @@ the city's inventory, traffic and people; Michigan Stadium ("the Big House") mod
   View goes to the search field (B there comes back, Menu closes the map); it shows from the start when the map is
   opened with a controller, and a mouse move hides it. Lamp's pad arrives with its sticks' dead zone already taken off,
   so gamepad-controls.js adds its own only to the raw Gamepad API's. A right-click on the full map sets a route without teleporting. Its prompt is drawn with glyph().
-- **Churches**: a sizeable building on a religious parcel is drawn by churches.js, 61 of them: brick, ashlar stone or
-  white clapboard per building (courses drawn by the walls' shader from a `pat` attribute, slates on the roofs), a
+- **Churches**: a sizeable building on a religious parcel is drawn by churches.js, 61 of them: brick, stone (random-
+  coursed fieldstone in browns and grays, not even blocks) or white clapboard per building; out past 2.3 km a postwar
+  church (`postwar`): tan, buff or brown brick, a low gable, plain tall windows, no tower or spire; and any church its street
+  photo shows (data/building-looks.json, the tool's `--area churches`: brick, stone, or painted for white clapboard) in that (courses drawn by the walls' shader from a `pat` attribute, slates on the roofs), a
   gable with real eaves, openings cut through the walls (the face triangulated round them, a reveal, glass set back:
   no decal on a wall to flicker) for lancets (stone) or round arches (brick, clapboard) with hood moulds, sills and
   Y-tracery, buttresses on masonry, a deep arched portal with doors and steps, a rose window where the front gable has
@@ -383,13 +385,20 @@ age (a gable to the street on narrow lots, hipped foursquares, side gables with 
 lower cross gables or lean-tos. Storeys come from the survey height (LiDAR average, reads low: under 4.6 m 1, under
 6.6 m 1.5, under 10 m 2, else 3). Roofs overhang with fascia, soffits and rake boards. Walls are one shader (`wallInfo`,
 `houseInfo`, `houseStyle`: material, trim and door/shutter colors from a small palette texture, foundation height):
-clapboard in an Ann Arbor palette, about one in five brick, some stone, stucco or shakes; tall one-over-one sash
+clapboard in an Ann Arbor palette, about one in five brick, some stone (random-coursed fieldstone: 0.23 m courses
+stepped every half metre, 0.3-0.6 m stones in tan, gray and rust shades, dark mortar; and the stone foundations), stucco
+or shakes; tall one-over-one sash
 windows (about 1.6 by 0.85 m, a meeting rail across, an upright only between a pair, panes a sky-catching blue-grey);
-a house the assessor dates 1955 or later (or, undated, one over 2.3 km from Main & Liberty: `modernHouse`) wears the
+a house the assessor dates 1955 or later (or, undated, one over 2.3 km from Main & Liberty: `modernHouse`) with no
+storey count from the assessor is a ranch under a 5.5 m survey height and two storeys from there (`postwarStoreys`:
+how the assessor's own rated ones read; never a guessed storey and a half), and wears the
 subdivisions' vinyl siding in beiges, greiges, taupes and grays (MODERN_SIDING) or buff, tan and brown brick veneer
 (MODERN_BRICKS, 28% of them), and shutters one time in eight unless its photo says, and a garage door from the city's
 driveways (GEO.garageDoors) on its front wall too, beside the door, and a 5/12 or 6/12 roof (pitch 0.5, hipped 0.45) and
-no gambrel unless the map says; shutters on
+no gambrel unless the map says; a front over 12 m wide never faces the street with one gable end across it (a
+side gable, or a hip on a house as deep as it is wide, unless mapped or photographed); a footprint of 400 m² or more (garden apartments and townhouse rows, `APARTMENT_AREA`;
+not in a historic district or dated before 1940) is two storeys from a 4 to 9.5 m survey height, under a 4/12 roof
+no more than 2.6 m high, with no dormers or gambrel and brick half the time; shutters on
 some, a colored door on the front wall, gable and dormer windows, a visible foundation. Porches (posts or craftsman
 brick piers, railings, a lean-to roof), steps (run out from the porch to the first spot the lawn can be reached at a comfortable pitch, ~19 cm risers; on a yard too steep for that, as short a flight as 30 cm risers allow; never out past the sidewalk), porch lights, shrubs and front walks that stop at the back of the sidewalk; railings, steps,
 shrubs and lights are instanced and culled by distance. Everything is seeded by the house's position.
@@ -500,8 +509,12 @@ More from the generator, each in `GEO`:
   out and 12 m on; else on the near right corner before the stop line; else, where nothing past the roadway's edge is
   a block (the open land at the outer arterials' junctions), 1.5 m off its edge if that's off every street; its arm
   reaches up to 16 m. 850 heads (346 before the wider search: Plymouth at Huron Pkwy, Platt at Ellsworth, Liberty at
-  Stadium, Maple at Pauline had none); the log names the approaches still left without one (44, mostly where a divided
-  road's two junctions are a few metres apart).
+  Stadium, Maple at Pauline had none); then on the approach's left, in a divided road's median or past a one-way
+  street's left curb (the arm reaching right over the lanes), far side then near; and at last anywhere off the roadway
+  or off every street's pavement round the far corners, out to 18 m on and 12 m beyond the lanes, right then left (a
+  light placed by those last two stands on a mast arm even on a span-wire route). No signalised approach is left
+  without a light (928 heads; there were 44 such approaches, mostly where a divided road's two junctions are a few
+  metres apart).
   On the state's routes outside the downtown core and central campus (the business loops I-94 BL and US-23 BUS, M-17,
   US-12: `Assets/Tools/build-span-wires.py` → `Web/js/span-wire-data.js` `SPAN_WIRES`, the 37 lights within 12 m of a
   way with a ref) the lights hang from span wires as MDOT hangs them: a steel pole on each far corner, a wire sagging
@@ -509,6 +522,13 @@ More from the generator, each in `GEO`:
   (Huron at Fifth and First, N Main at Ann and Kingsley, Washtenaw at Hill, Geddes and by Arborland). The map's
   signals say nothing of how they're hung; the routes' rule matched every junction checked against the photos but
   Packard at Division (the city's, on a wire).
+- Roundabouts (`Assets/Tools/build-roundabouts.py` → `Web/js/roundabout-data.js` `ROUNDABOUTS`, flat [x, z, r]: the 22
+  rings OpenStreetMap tags junction=roundabout, service roads' left out, an oval one (Earhart at Glazier) kept, r the
+  ring's nearest centre-line radius): `roundabouts.js` builds each one's central island, a curbed lawn mounded to the
+  middle inside a truck apron of red pavers 10 cm over the road, following the ground round it (one draw for all, the
+  curbed island solid); `road-network.js` sends any move whose junction curve would cross an island round it instead,
+  counterclockwise at the ring's radius, as a polyline `curvePoint` reads (`pts`, `lens`; 192 moves), and
+  city-config.js drops the little block the ring enclosed (it drew as a pale raised octagon cars ran over).
 - Street trees by species and height (the city's inventory; `trees.js` SPECIES) and streetlights
   (`GEO.streetlights`, the city's Streetlights layer, no license stated). "Now" works out the real sun (`sunTimes`).
   A streetlight's kind (GEO.streetlights' third value): 0 DTE's cobra head on its arm, 1 a post-top lantern (campus,
@@ -552,6 +572,15 @@ More from the generator, each in `GEO`:
   any shop building (survey kind 2 or a shop parcel) over 1,500 m² and under 17 m outside the downtown core and central
   campus (`inCore`), Maple Village, Arborland, Westgate and the Plymouth and Packard strips; the far city's palette
   (far-city.js FACADE_LOOK) now has 11 to 15 too.
+  A small shop, office or public building (60-250 m², under 10 m) on a single-family, two-family or apartment parcel
+  outside `inCore` is a house turned to business and drawn by houses.js (`convertedHouse`, about 56).
+  A smaller shop or office building (kind 2 or 3, under 14 m) more than 2 km out and outside `inCore` never takes
+  downtown's lot-front finishes (0, 1, 11-13): it is tan-orange brick with wide windows (10) or gray panel (14), as
+  the postwar strips and office parks are (Packard, Plymouth); a photo's facade still wins.
+  And a building the assessor dates from 1950 on (the shops' look code carries the year) whose photo says nothing
+  never takes those 1900s lot fronts outside the historic districts: 1950-1989 tan-orange brick with wide windows (10),
+  1990 on finish 16, red-brown face brick with wide modern windows and no lots (the newer apartments and hotels
+  downtown: W Madison, S Main, N Ashley), or gray panel (14); far-city.js FACADE_LOOK has 16 too.
 - Big blocks with no lawn out past downtown and campus (city-grid.js `lotBlock`, over 2,500 m²) are a sidewalk ring
   round a blacktop lot; a solid paved yard over 800 m², one wide round planted islands, or (out past downtown, the
   central campus and North Campus) any holed paving over 3,000 m² is blacktop. A change to how yards are sorted into
@@ -730,7 +759,11 @@ More from the generator, each in `GEO`:
   its threshold (Choice confidence 0.5, color 0.4, roof 0.55; Noul yes at 0.7, no at 0.3) keeps the generated look.
   [x, z, code] per building, (x, z) inside its footprint; the codes' bits are described in `houses.js`. A shop code's
   facade (red brick, buff brick, stone, glass and metal) is any photographed building's (buildings.js), storefront or
-  not, but the University's own keep their collegiate brick and stone. Shops'
+  not; a University building 6 m or taller (`campus`, walls only: no shopfront questions) is photographed too,
+  searched for within 50 m of its whole footprint and seen if a quarter of it is in frame, and drawn in its own
+  materials (red brick 8, tan brick 10, stone 9, glass and metal 2): 110 of the 559 had a photo, 62 an answer. The
+  tool's houses are the game's (under 900 m², or garden apartments up to 3,000 m² past 2.3 km), and `--area apartments`
+  asks about the 1,624 apartment blocks and townhouse rows (145 had a usable photo: most stand on private drives). Shops'
   windows and frame color ride on their walls' WALL_KINDS value (building-footprints.js), so nothing is added to draw.
   Keys (TYPESAFE_API_KEY, MAPILLARY_TOKEN) come from the environment or ~/.lamp/reference/keys.env; downloads and
   Jev's raw answers are cached in .lamp/reference/aa/ (parcels, mapillary, looks/answers.jsonl).
@@ -739,7 +772,9 @@ More from the generator, each in `GEO`:
   colored band (no brands), pump islands with a column and two pumps each, and a lit underside at night. The canopy
   is OSM's roof outline, else the survey's canopy-shaped outline on the station (which `buildings.js` then leaves
   out), else set in the open part of its Auto Sales or Service parcel.
-- Building owner (`Owned_By`): kind 5 University (collegiate red-brown brick or limestone, facades 8/9), kind 6 the
+- Building owner (`Owned_By`): kind 5 University (within 600 m of the Diag, `collegiateCore`, collegiate red-brown brick or limestone, facades 8/9;
+  elsewhere, North Campus, the medical campus, athletics, mostly postwar: tan brick 10, gray panel 14, some red brick 8,
+  and glass 2 only over 25 m; its photo's material where it has one), kind 6 the
   city, county, schools and federal (tan civic brick or limestone, 10/9), in `buildings.js`.
 
 What's Ann Arbor's by hand: `city-config.js` (`LANDMARK_SITES`, `TELEPORT_LOCATIONS`), `landmarks.js` (the Big House,
@@ -867,7 +902,7 @@ Rivian R1S (from the SUV) and R1T (from the pickup) join them: oval corner headl
 - SPEED LIMIT signs (R2-1, traffic-controls.js `limitPost`): each street's real limit (`postedMph`, as traffic drives it), on the right past an intersection where the limit changes or a main street begins (about half the side streets turned into off a bigger road), and repeated about every 800 m on main roads and 550 m on collectors; one per limit and direction nearby. About 210 in town.
 - Traffic riders (bikes, e-bikes, scooters, hoverboards, motorcycles) hit by the player's car or motorbike above ~10 mph are thrown limp (`throwRider` in traffic.js, PersonRig's ragdoll), lie a few seconds, get up (the dive's push-up), and walk back to their ride, which coasts to a stop on its side (`lieDown`), then get back on (`remount`); a ride more than 40 m away is left, and the rider is put back on once both are out of sight.
 
-More landmarks (js/more-landmarks.js): the Michigan League, Rackham, the Museum of Art, Hatcher Library (front and stacks), Crisler Center, Yost Ice Arena, Kerrytown (three buildings), the Farmers Market sheds, the District Library, Tower Plaza, Atomic Object and Nickels Arcade, each modeled on its survey outline (found by a point inside it). Their colliders are strips with `keepsSurvey` so neighbors stay (a model with a way through it returns its own `colliders` instead); the first carries `replaces` (the survey building it stands in for), which the block filter drops.
+More landmarks (js/more-landmarks.js): the Michigan League, Rackham, the Museum of Art, Hatcher Library (front and stacks), Crisler Center (as renovated: red brick base, a dark glass band, the cream concrete crown overhanging it, a low dome; its street 4.5 m over the survey's lowest ground), Yost Ice Arena, Kerrytown (three buildings; the corner one's brick whitewashed), the Farmers Market sheds (on red brick pavers out to their eaves, just over the lawn, `brickMaterial`'s flat faces laid in running bond), the District Library, Tower Plaza (re-clad: a teal glass curtain wall in a grid of slim mullions over the cream concrete base and its entrance canopy), Atomic Object and Nickels Arcade, each modeled on its survey outline (found by a point inside it). Their colliders are strips with `keepsSurvey` so neighbors stay (a model with a way through it returns its own `colliders` instead); the first carries `replaces` (the survey building it stands in for), which the block filter drops.
 
 Rule for every landmark: each named landmark is custom modeled by hand (its real shape, materials and signature details), never left as a survey box or a generic building. A new landmark gets its own model before it goes on the map or the teleport list.
 
@@ -898,7 +933,7 @@ Landmark fixes from the viewpoint check: arch steps scale by the arch's width; t
 Car radio (js/radio.js, Sources/Native.swift `radioPlay`/`radioStop`/`radioNow`/`radioState`, the `Radio` enum on AVPlayer): while driving a car (not a motorbike) with sound on, a live Ann Arbor station plays: WCBN 88.3, WEMU 89.1, Michigan Public 91.7, W4 Country 102.9, 107one 107.1, WTKA 1050 AM (StreamTheWorld's redirect and WCBN's Icecast; only those hosts). Each car comes tuned to a station of its own; the player's own car keeps their choice (`save('radio')`). R (Shift+R back) or the d-pad left/right tunes, Off is one stop on the dial; the dial under the camera row shows the station and the stream's song title. Where `LampNative` isn't (a browser, Lamp's preview) the page streams the station itself in one audio element (`webPlay`, kept on `window.__radioAudio` across code changes, retried every 5 s if it drops), with no song title. In the app, `radioState` (playing, waiting or failed) is asked every 5 s and a failed or ended stream is started again, the dial saying there's no signal meanwhile. WCBN uses its 32 kbps stream; the others are 64-80 kbps.
 
 Bike racks and e-bike docks (bike-racks.js, data/bike-racks.json from Assets/Tools/build-bike-racks.py, OpenStreetMap's bicycle_parking): rows of inverted-U stands where OSM has them (the city's park racks left to street-details.js), bicycles locked to about a third of the sides, and three hand-placed e-bike docks by the Diag (dock posts, a blue fleet, a kiosk under a solar panel). On foot, F beside a bike or a docked e-bike borrows it (controllers.js enterOrExit `rack`, main.js getInOrOut: the old ride is left parked); it's gone from its stand for the visit. The player's car or bicycle running into a parked bike (`strike`, from main.js's update with the active entity and a sound cue) sends it flying ahead, tumbling and bouncing, to lie on its side where it stops; it can still be borrowed there.
-Swimming pools (pools.js, data/pools.json from Assets/Tools/build-pools.py, OpenStreetMap's leisure=swimming_pool, outdoor only): 127 pools, filled only from the Saturday of Memorial Day weekend through Labor Day by Ann Arbor's date (`setSeason`, again when the date changes; out of season they stand drained: no water, swimming or splashes, a dry basin, lane ropes put away; the floor still walked and driven into), each a tiled basin (a pale aqua floor sloping shallow to deep with caustics, white tile walls with a dark blue waterline band) under see-through turquoise water just over the highest ground and lawn round it, in a pale concrete coping that steps down to the lawn, with ladders. The big ones (32) also have a concrete deck, dark lane lines ending in T's on the floor, red-ended blue and white lane ropes, starting blocks at the deep end and a lifeguard chair at each long wall; lanes run along the longest wall. The ground isn't holed: the basin draws first (renderOrder -2), then the water's outline just under the surface writes depth without colour (renderOrder GROUND_ORDER - 5: after everything else opaque, so a swimmer, a sunk car and the ladders under the water still show), hiding the ground and lawn, which draw last (terrain.js `GROUND_ORDER`: every opaque layer set on the ground, and the outskirts' land, are drawn after the rest). Each layer is one mesh for all pools, the fittings instanced. The water is real: terrain.js `setPools` makes waterLevel and riverDepth answer for it, so the player swims, the camera goes murky under it and things splash in; getGroundHeight takes its sloping floor; a car or bike driven in sinks to the floor and can't climb out (pools.js `trap`), the player can.
+Swimming pools (pools.js, data/pools.json from Assets/Tools/build-pools.py, OpenStreetMap's leisure=swimming_pool, outdoor only): 127 pools, each big one (32, with lanes) fenced 1.5 m out from its deck in chain link hung with a blue windscreen on galvanized posts (2 draws), solid as thin boxes (`colliders`, as the freeway barriers) but for its longest run, left open as the gate, filled only from the Saturday of Memorial Day weekend through Labor Day by Ann Arbor's date (`setSeason`, again when the date changes; out of season they stand drained: no water, swimming or splashes, a dry basin, lane ropes put away; the floor still walked and driven into), each a tiled basin (a pale aqua floor sloping shallow to deep with caustics, white tile walls with a dark blue waterline band) under see-through turquoise water just over the highest ground and lawn round it, in a pale concrete coping that steps down to the lawn, with ladders. The big ones (32) also have a concrete deck, dark lane lines ending in T's on the floor, red-ended blue and white lane ropes, starting blocks at the deep end and a lifeguard chair at each long wall; lanes run along the longest wall. The ground isn't holed: the basin draws first (renderOrder -2), then the water's outline just under the surface writes depth without colour (renderOrder GROUND_ORDER - 5: after everything else opaque, so a swimmer, a sunk car and the ladders under the water still show), hiding the ground and lawn, which draw last (terrain.js `GROUND_ORDER`: every opaque layer set on the ground, and the outskirts' land, are drawn after the rest). Each layer is one mesh for all pools, the fittings instanced. The water is real: terrain.js `setPools` makes waterLevel and riverDepth answer for it, so the player swims, the camera goes murky under it and things splash in; getGroundHeight takes its sloping floor; a car or bike driven in sinks to the floor and can't climb out (pools.js `trap`), the player can.
 
 Outdoor seating (js/outdoor-seating.js, data/outdoor-seating.json from Assets/Tools/build-outdoor-seating.py, OpenStreetMap): the 63 patios mapped as leisure=outdoor_seating, set with tables in rows along their long side, and a row of tables on the sidewalk in front of each cafe, restaurant and bar tagged outdoor_seating=yes that has no patio mapped, along its storefront (its sign in GEO.signs). Styles: 0 a cafe's round bistro tables with two chairs and a few umbrellas; 1 a restaurant's square tables for four, most under umbrellas, behind a low black railing; 2 a bar's picnic tables; 3 a patio of no food or drink place's, a few picnic tables. One instanced mesh per kind, culled in chunks past 160-320 m. Each table and chair is a knockdown (kinds chair, table, picnic thrown; parasol, a table with its umbrella, tips over); `seats` lists each chair and picnic bench place, for sitting. Set out only in season and opening hours (street-life.js `patiosOpen`: April through October, 7 a.m. to 11 p.m.): otherwise the materials aren't drawn and each one's collider (main.js hands them over with `bindColliders`) is lifted out of reach and its knock marked down, so nothing's in the way, sat on or shaded. Main Street between Huron and William still has almost none: its places aren't tagged outdoor_seating in OpenStreetMap, and want adding from a walk or photos, not guessing.
 

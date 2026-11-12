@@ -1,8 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundHeight } from './terrain.js';
-import { attribute, color, float, floor, mix, step, abs, texture, uniform, uv, vec2 } from 'three/tsl';
-import { signalPhase, nearestRoads } from './city-config.js';
+import { attribute, color, float, floor, fract, mix, mod, step, abs, texture, uniform, uv, vec2 } from 'three/tsl';
+import { SIGNAL_TIMING, nearestRoads } from './city-config.js';
 import { log } from '../lamp-game.js';
 import { corridorsOf } from './safety-corridors.js';
 import { SPAN_WIRES } from './span-wire-data.js';
@@ -20,6 +20,8 @@ const postedMph = (e) => e.mph || CLASS_MPH[e.cls ?? 4] || 25;
 
 const HEAD_Y = 5.42;
 const ARM_Y = 6.05;
+// a three-lamp head's height, and a four-section left-turn head's
+const HEAD_H = 1.12, HEAD_H4 = 1.5;
 
 const octagon = (ctx, r) => {
   ctx.beginPath();
@@ -74,6 +76,35 @@ function plaqueFace(ctx) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('ALL WAY', 128, 130);
+}
+// Lamp: LEFT ONLY beside a left-turn head (MUTCD R3-5L): a black arrow up and round to the left over ONLY, black on
+// white with a black border, 30 x 36 in, on the 256 x 320 cell
+function leftOnlyFace(ctx) {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, 256, 320);
+  ctx.strokeStyle = '#111111';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(9, 9, 238, 302);
+  ctx.fillStyle = '#111111';
+  ctx.strokeStyle = '#111111';
+  ctx.lineCap = 'butt';
+  ctx.lineWidth = 30;
+  ctx.beginPath();
+  ctx.moveTo(160, 220);
+  ctx.lineTo(160, 140);
+  ctx.arc(110, 140, 50, 0, -Math.PI / 2, true);
+  ctx.lineTo(100, 90);
+  ctx.stroke();
+  ctx.beginPath(); // the head, pointing left
+  ctx.moveTo(52, 90);
+  ctx.lineTo(104, 46);
+  ctx.lineTo(104, 134);
+  ctx.closePath();
+  ctx.fill();
+  ctx.font = '800 64px Inter, Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('ONLY', 128, 270);
 }
 // ONE WAY (MUTCD R6-1): a white arrow on black with the words in black on its shaft, on a 256 x 86 canvas (36 x 12 in);
 // `back` draws it pointing the other way, for the sign's far side seen from behind (so it points the same way there)
@@ -144,15 +175,52 @@ function corridorFace(ctx) {
 // (instance attribute `road`, 0 main, 1 cross), read against two uniforms of which lamp is lit on each road.
 const LAMP_COLORS = { red: 0xff2a1e, amber: 0xffa20e, green: 0x1cff7a };
 function lampMaterial() {
-  const onMain = uniform(new THREE.Vector3()), onCross = uniform(new THREE.Vector3());
-  const k = attribute('lamp', 'float'), road = attribute('road', 'float');
+  const time = uniform(0);
+  // (instance attribute `sig`: the head's road, and its junction's offset into the cycle, so every junction's lamps
+  // run on its own clock, worked out here from city-config.js's SIGNAL_TIMING. Road 2: the main road where it holds
+  // its through traffic for lead left turns; a side facing the cross street's drivers (attribute `cross`) shows the
+  // other road's phase: the cross street's for either main road, the main's for the cross street)
+  const sig = attribute('sig', 'vec2'), r = sig.x;
+  const across = float(1).sub(step(0.5, r).mul(float(1).sub(step(1.5, r))));
+  const road = mix(r, across, attribute('cross', 'float'));
+  const { cycle, leftAmber, avenueAmber, avenueRed, streetGreen, streetAmber, streetRed } = SIGNAL_TIMING;
+  const t = mod(time.add(sig.y), cycle);
+  const band = (a, b) => step(a, t).mul(float(1).sub(step(b, t)));
+  const isCross = step(0.5, road).mul(float(1).sub(step(1.5, road))), isLead = step(1.5, road);
+  const G = mix(band(isLead.mul(leftAmber), avenueAmber), band(streetGreen, streetAmber), isCross);
+  const A = mix(band(avenueAmber, avenueRed), band(streetAmber, streetRed), isCross);
+  const R = float(1).sub(G).sub(A);
+  const k = attribute('lamp', 'float');
   const amber = step(0.5, k), green = step(1.5, k);
   const lit = mix(mix(color(LAMP_COLORS.red), color(LAMP_COLORS.amber), amber), color(LAMP_COLORS.green), green);
-  const ons = mix(onMain, onCross, road);
-  const on = mix(mix(ons.x, ons.y, amber), ons.z, green);
+  const on = mix(mix(R, A, amber), G, green);
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.colorNode = mix(lit.mul(0.08), lit.mul(2.2), on); // a dark, tinted lens when off; bright enough to bloom when on
-  mat.userData.on = [onMain, onCross];
+  mat.userData.time = time;
+  return mat;
+}
+
+// Lamp: a left-turn head as the town's are: a red, a yellow and a green ball over a green arrow at the bottom
+// (attribute `lamp`, 0-3), on the main road's lead-left timing (instance attribute `asig`: 0, its junction's offset
+// into the cycle): the arrow over a red ball while the lefts lead, a yellow ball as it ends, then the ordinary green
+// ball (turn when clear), yellow and red with the main road's through traffic
+function arrowMaterial() {
+  const time = uniform(0);
+  const sig = attribute('asig', 'vec2');
+  const { cycle, leftGreen, leftAmber, avenueAmber, avenueRed } = SIGNAL_TIMING;
+  const t = mod(time.add(sig.y), cycle);
+  const band = (p, q) => step(p, t).mul(float(1).sub(step(q, t)));
+  const ARROW = band(0, leftGreen);
+  const A = band(leftGreen, leftAmber).add(band(avenueAmber, avenueRed));
+  const G = band(leftAmber, avenueAmber);
+  const R = float(1).sub(A).sub(G);
+  const k = attribute('lamp', 'float');
+  const s1 = step(0.5, k), s2 = step(1.5, k), s3 = step(2.5, k);
+  const lit = mix(mix(color(LAMP_COLORS.red), color(LAMP_COLORS.amber), s1), color(LAMP_COLORS.green), s2);
+  const lamp = mix(mix(mix(R, A, s1), G, s2), ARROW, s3);
+  const mat = new THREE.MeshBasicNodeMaterial();
+  mat.colorNode = mix(lit.mul(0.08), lit.mul(2.2), lamp);
+  mat.userData.time = time;
   return mat;
 }
 
@@ -206,6 +274,14 @@ function buildTrafficControls(group, network) {
     for (let k = 0; k < tries; k++, o += 0.6) {
       const [x, z] = at(e, s, o);
       if (!onRoad(x, z)) return [x, z, o];
+    }
+    return null;
+  };
+  // (Lamp: and out along its left, into a divided road's median or past a one-way street's left curb: o negative)
+  const curbsideLeft = (e, s, o, tries = 10) => {
+    for (let k = 0; k < tries; k++, o -= 0.6) {
+      const [x, z] = at(e, s, o);
+      if (!onRoad(x, z) && !onPavement(x, z)) return [x, z, o];
     }
     return null;
   };
@@ -352,6 +428,47 @@ function buildTrafficControls(group, network) {
   }
   standing = null;
 
+  // Lamp: over a lane that only turns left (road-network.js `leftMask`), a four-section left-turn head of its own, its
+  // back to the junction: red arrow, yellow arrow, flashing yellow arrow, green arrow (city-config.js leftArrow), on
+  // the avenue's lead-left timing where the junction has it (`leftPhase`)
+  const isLeft = (e, o) => e.lanes.some((x, i) => x === o && ((e.leftMask || 0) >> i) & 1);
+  // (Lamp: only an approach with a protected turn (road-network.js `leftArrow`) has an arrow head; any other left-only
+  // lane is under the ordinary heads, with its LEFT ONLY sign)
+  const isArrow = (e, o) => e.leftArrow && isLeft(e, o);
+  const lefts = (e) => e.lanes.filter((o) => isArrow(e, o));
+  const signOnly = (e) => e.lanes.filter((o) => isLeft(e, o) && !isArrow(e, o));
+  let arrows = 0;
+  // the LEFT ONLY sign hung beside a left-turn head at (x, y, z), a little to its left as its drivers see it
+  const leftOnly = (e, x, y, z) => {
+    dummy.rotation.set(0, faceYaw(e), 0);
+    dummy.position.set(x - e.rx * 0.78, y + 0.05, z - e.rz * 0.78);
+    dummy.scale.set(0.62, 0.75, 1);
+    sign('leftOnly', 'limitBack');
+    dummy.scale.set(1, 1, 1);
+  };
+  const arrowHead = (e, s, o, lift) => {
+    const [hx, hz] = at(e, s, o);
+    leftOnly(e, hx, groundHeight(hx, hz) + HEAD_Y - (HEAD_H4 - HEAD_H) / 2 + lift, hz);
+    dummy.rotation.set(0, faceYaw(e), 0);
+    dummy.position.set(hx, groundHeight(hx, hz) + HEAD_Y - (HEAD_H4 - HEAD_H) / 2 + lift, hz);
+    dummy.scale.set(1, 1, 1);
+    put('lhead');
+    put('larrows', [0, e.to.offset || 0]);
+    arrows++;
+    lights++;
+  };
+  // the downtown core (as build-span-wires.py and utility-poles.js have it), x east and z south, m
+  const DOWNTOWN = (x, z) => x > -300 && x < 700 && z > -170 && z < 300;
+  // but the junctions in it whose photos (April 2024) show mast arms, not a wire: State St's at N University, William,
+  // Liberty, Washington and Huron, Washington at Division, Liberty at Ashley and at First, William at Fourth
+  const MAST_ARMS = [[626, 119], [628, 198], [624, 34], [621, -69], [360, -79], [-120, 3], [-224, 16], [78, 195], [617, -172]];
+  // and on Huron's wide stretch, Division's, Ashley's and First's: wires across the street, one across each way's far
+  // side, a head over each lane (the photos), not clusters in the middle
+  const BOX_SPANS = [[360, -190], [-113, -202], [-214, -205]];
+  const nearAny = (list, x, z, r) => list.some(([a, b]) => Math.hypot(x - a, z - b) < r);
+  const boxAt = (x, z) => nearAny(BOX_SPANS, x, z, 25);
+  const onWire = (x, z) => (DOWNTOWN(x, z) || spanAt(x, z)) && !nearAny(MAST_ARMS, x, z, 15) && !boxAt(x, z);
+  const diagonal = []; // its junctions, each with its approaches' corners
   for (const e of network.edges) {
     const n = e.to;
     if (n.shape || !e.lanes.length) continue;
@@ -371,12 +488,44 @@ function buildTrafficControls(group, network) {
         const o = e.half + 1.5, [x, z] = at(e, s, o);
         if (!nearestRoads(x, z, 30).some((r) => r.dist < (r.road.w || 0) / 2 + 0.6)) spot = [x, z, o];
       }
+      // Lamp: and else on its left, in a divided road's median or on a one-way street's left corner, far side then
+      // near, as on Geddes Rd, Hubbard and Medical Center Dr (the arm reaches right over the lanes from it)
+      let armOnly = false;
+      if (!spot) {
+        armOnly = true;
+        const s0 = e.len + Math.max(4, 2 * k + 1.5);
+        for (const at2 of [s0, s0 + 4, s0 + 8, e.len - 2, e.len - 5]) if (!spot && (spot = curbsideLeft(e, at2, -(e.half + 0.6), 20))) s = at2;
+      }
+      // and at last anywhere off the roadway round the far corners (a wide or skewed junction's, all paved between its
+      // streets, or one in open land with no town block, where only the streets' own widths tell road from verge): out
+      // to 18 m on and 12 m beyond the lanes, right then left
+      if (!spot) {
+        armOnly = true;
+        const s0 = e.len + Math.max(4, 2 * k + 1.5);
+        search: for (let on = 0; on <= 18; on += 3) {
+          for (let out = 0.6; out <= 12; out += 1.2) {
+            for (const side of [1, -1]) {
+              const o = side * (e.half + out), [x, z] = at(e, s0 + on, o);
+              if (!onRoad(x, z) || !onPavement(x, z)) { spot = [x, z, o]; s = s0 + on; break search; }
+            }
+          }
+        }
+      }
       if (!spot) { if (noSpot++ < 12) log(`[traffic controls] no pole for the light at (${Math.round(n.x)}, ${Math.round(n.z)}) coming ${e.street || ''} ${Math.round(e.dx * 100) / 100},${Math.round(e.dz * 100) / 100}, half ${e.half}`); continue; }
       const [px, pz, po] = spot;
+      // Lamp: downtown and on the state's routes (span-wire-data.js), the lights hang from one wire strung corner to
+      // corner across the junction with four-way clusters on it, as Main's do at Liberty, William and Ann (put up below,
+      // once every approach has found its corner)
+      if (onWire(n.x, n.z) && !armOnly) {
+        if (!n.corners) { n.corners = []; diagonal.push(n); }
+        n.corners.push({ e, x: px, z: pz });
+        continue;
+      }
       const g = groundHeight(px, pz);
       // Lamp: on the state's routes outside downtown (span-wire-data.js) the lights hang from a wire strung across the
       // far side between a steel pole on each corner, a box of wires over the junction, as MDOT hangs them
-      if (spanAt(n.x, n.z)) {
+      // (a light found its pole only by the fallbacks above stands on a mast arm, even on a span-wire route)
+      if (boxAt(n.x, n.z) && !armOnly) {
         let left = null;
         for (let o = -(e.half + 0.9), k = 0; k < 20 && !left; k++, o -= 0.6) {
           const [x, z] = at(e, s, o);
@@ -403,13 +552,14 @@ function buildTrafficControls(group, network) {
           put('arm');
         }
         standing.arm = { x: mx, z: mz, y: WIRE_Y - SAG + 0.04 };
-        for (const o of e.lanes.slice().sort((a, b) => a - b).slice(-4)) {
+        for (const o of lefts(e)) arrowHead(e, s, o, 0.35);
+        for (const o of e.lanes.filter((o) => !isArrow(e, o)).sort((a, b) => a - b).slice(-4)) {
           const [hx, hz] = at(e, s, o);
           dummy.rotation.set(0, faceYaw(e), 0); // (Lamp: its lamps toward the drivers coming along e, not away from them)
           dummy.position.set(hx, groundHeight(hx, hz) + HEAD_Y + 0.35, hz);
           dummy.scale.set(1, 1, 1);
-          put('head');
-          put('lamps', e.axisIndex === 0 ? 0 : 1);
+          put('head1');
+          put('lamps1', [e.axisIndex !== 0 ? 1 : n.leftPhase ? 2 : 0, n.offset || 0]);
           lights++;
         }
         spans++;
@@ -420,25 +570,42 @@ function buildTrafficControls(group, network) {
       dummy.scale.set(0.15, ARM_Y + 0.3, 0.15);
       obstacles.push(standing = { x: px, z: pz, r: 0.16, kind: 'signal', height: ARM_Y, parts: [] });
       put('pole');
-      // the arm out over the lanes coming up to it
-      const reach = Math.min(16, Math.max(3, po - Math.min(...e.lanes) + 1.2));
-      const [ax, az] = at(e, s, po - reach / 2);
+      // the arm out over the lanes coming up to it (to the left from a pole on their right, to the right from one on
+      // their left)
+      const dir = po >= 0 ? -1 : 1;
+      // (out over the centre turn lane too, where its arrow hangs)
+      const lft = lefts(e), over = [...e.lanes, ...lft];
+      const reach = Math.min(16, Math.max(3, dir < 0 ? po - Math.min(...over) + 1.2 : Math.max(...over) - po + 1.2));
+      const [ax, az] = at(e, s, po + dir * reach / 2);
       dummy.position.set(ax, g + ARM_Y, az);
       dummy.scale.set(0.12, 0.12, reach);
       dummy.rotation.set(0, Math.atan2(e.rx, e.rz), 0);
       put('arm');
       // its arm's far end and its top over the ground, what birds perch along (city-birds.js)
-      const [ex, ez] = at(e, s, po - reach);
+      const [ex, ez] = at(e, s, po + dir * reach);
       standing.arm = { x: ex, z: ez, y: ARM_Y + 0.06 };
-      const lanes = e.lanes.slice().sort((a, b) => a - b).slice(-4);
-      for (const o of lanes) {
-        if (po - o > reach) continue;
+      for (const o of lft) if (Math.abs(po - o) <= reach) arrowHead(e, s, o, 0);
+      const sorted = e.lanes.filter((o) => !isArrow(e, o)).sort((a, b) => a - b), lanes = dir < 0 ? sorted.slice(-4) : sorted.slice(0, 4);
+      // (Lamp: one-faced, toward its own drivers, as the town's mast arms are (Main at Jefferson): two-faced, the far
+      // arm's heads showed the oncoming approach's lights over the wrong lanes; and at least two over the through
+      // lanes, the second 3.2 m along the arm towards its end where there's only the one lane)
+      const offs = lanes.filter((o) => Math.abs(po - o) <= reach);
+      const through = offs.filter((o) => !isLeft(e, o));
+      // (never where a head already hangs, the left-turn arrow's over its lane above all, nor at the pole)
+      if (through.length === 1) {
+        const taken = [...offs, ...lft];
+        const free = (o) => Math.abs(po - o) <= reach && Math.abs(po - o) > 1.5 && taken.every((q) => Math.abs(q - o) > 2.2);
+        const extra = [through[0] + dir * 3.2, through[0] - dir * 3.2].find(free);
+        if (extra != null) offs.push(extra);
+      }
+      for (const o of offs) {
         const [hx, hz] = at(e, s, o);
+        if (isLeft(e, o)) leftOnly(e, hx, groundHeight(hx, hz) + HEAD_Y, hz);
         dummy.rotation.set(0, faceYaw(e), 0); // (Lamp: its lamps toward the drivers coming along e, not away from them)
         dummy.position.set(hx, groundHeight(hx, hz) + HEAD_Y, hz);
         dummy.scale.set(1, 1, 1);
-        put('head');
-        put('lamps', e.axisIndex === 0 ? 0 : 1);
+        put('head1');
+        put('lamps1', [e.axisIndex !== 0 ? 1 : n.leftPhase ? 2 : 0, n.offset || 0]);
         lights++;
       }
     } else if (e.control) {
@@ -464,6 +631,97 @@ function buildTrafficControls(group, network) {
     }
   }
 
+  // Lamp: a downtown junction's wire, as Main St's are (Main at Liberty, at Washington): from a steel pole on one
+  // corner to one on the corner across from it, sagging a little to the middle, its lights hung from it over the
+  // middle of the junction
+  let diagonals = 0;
+  for (const n of diagonal) {
+    const c = n.corners;
+    let a = null, b = null, far = 0;
+    for (let i = 0; i < c.length; i++) for (let j = i + 1; j < c.length; j++) {
+      const d = Math.hypot(c[i].x - c[j].x, c[i].z - c[j].z);
+      if (d > far) { far = d; a = c[i]; b = c[j]; }
+    }
+    if (!a || far < 8) { a = c[0]; b = { x: 2 * n.x - a.x, z: 2 * n.z - a.z }; }
+    const WIRE_Y = ARM_Y + 0.9, SAG = 0.45;
+    const ga = groundHeight(a.x, a.z), gb = groundHeight(b.x, b.z);
+    for (const [x, z, gg] of [[a.x, a.z, ga], [b.x, b.z, gb]]) {
+      dummy.rotation.set(0, 0, 0);
+      dummy.position.set(x, gg + WIRE_Y / 2 + 0.1, z);
+      dummy.scale.set(0.2, WIRE_Y + 0.3, 0.2);
+      obstacles.push(standing = { x, z, r: 0.2, kind: 'signal', height: WIRE_Y, parts: [] });
+      put('pole');
+    }
+    // the wire's height t of the way from a to b
+    const wireY = (t) => ga + WIRE_Y + (gb - ga) * t - 4 * SAG * t * (1 - t);
+    const mid = [(a.x + b.x) / 2, wireY(0.5), (a.z + b.z) / 2];
+    for (const [x, y, z] of [[a.x, ga + WIRE_Y, a.z], [b.x, gb + WIRE_Y, b.z]]) {
+      dummy.position.set((x + mid[0]) / 2, (y + mid[1]) / 2, (z + mid[2]) / 2);
+      dummy.rotation.set(0, 0, 0);
+      dummy.lookAt(mid[0], mid[1], mid[2]);
+      dummy.scale.set(0.035, 0.035, Math.hypot(mid[0] - x, mid[1] - y, mid[2] - z));
+      put('arm');
+    }
+    standing.arm = { x: mid[0], z: mid[2], y: mid[1] + 0.04 };
+    // where lane o of approach e, carried on across the junction, passes under the wire (t along it), if it does
+    const wx = b.x - a.x, wz = b.z - a.z;
+    const under = (e, o) => {
+      const [qx, qz] = at(e, e.len, o), den = e.dx * wz - e.dz * wx;
+      if (Math.abs(den) < 1e-3) return -1;
+      const t = ((qx - a.x) * e.dz - (qz - a.z) * e.dx) / -den;
+      const k = ((a.x - qx) * wz - (a.z - qz) * wx) / den; // metres on from the stop line
+      return k > 0 && t > 0.08 && t < 0.92 ? t : -1;
+    };
+    const hung = [];
+    const hang = (e, o, arrow) => {
+      const t = under(e, o);
+      if (t < 0) return;
+      const x = a.x + wx * t, z = a.z + wz * t;
+      if (hung.some(([hx, hz, he]) => he === e && Math.hypot(hx - x, hz - z) < 0.7)) return;
+      hung.push([x, z, e]);
+      dummy.rotation.set(0, faceYaw(e), 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.position.set(x, wireY(t) - (ARM_Y - HEAD_Y) - (arrow ? (HEAD_H4 - HEAD_H) / 2 : 0), z);
+      if (arrow) {
+        leftOnly(e, x, wireY(t) - (ARM_Y - HEAD_Y) - (HEAD_H4 - HEAD_H) / 2, z);
+        dummy.rotation.set(0, faceYaw(e), 0);
+        dummy.position.set(x, wireY(t) - (ARM_Y - HEAD_Y) - (HEAD_H4 - HEAD_H) / 2, z);
+        put('lhead');
+        put('larrows', [0, n.offset || 0]);
+        arrows++;
+      } else {
+        put('head1');
+        put('lamps1', [e.axisIndex !== 0 ? 1 : n.leftPhase ? 2 : 0, n.offset || 0]);
+      }
+      lights++;
+    };
+    // Lamp: as Main St's are (Main at William, at Liberty): two four-way clusters on the wire, a third of the way in
+    // from each corner, each with a head facing every way in, squared to the main road; the left-turn arrows hang
+    // beside them over their lanes
+    const main = n.in.find((e) => e.axisIndex === 0 && e.lanes.length) || n.in.find((e) => e.lanes.length);
+    if (main) {
+      for (const t of [0.36, 0.64]) {
+        const x = a.x + wx * t, z = a.z + wz * t;
+        dummy.rotation.set(0, faceYaw(main), 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.position.set(x, wireY(t) - (ARM_Y - HEAD_Y), z);
+        put('head4');
+        put('lamps4', [n.leftPhase ? 2 : 0, n.offset || 0]);
+        lights++;
+      }
+    }
+    for (const e of n.in) {
+      if (!e.lanes.length || n.shape) continue;
+      for (const o of lefts(e)) hang(e, o, true);
+      for (const o of signOnly(e)) {
+        const t = under(e, o);
+        if (t >= 0) leftOnly(e, a.x + wx * t, wireY(t) - (ARM_Y - HEAD_Y), a.z + wz * t);
+      }
+    }
+    diagonals++;
+  }
+  if (diagonals) log(`[traffic controls] ${diagonals} downtown junctions with their lights on a wire corner to corner`);
+
   // Meshes
   const metal = new THREE.MeshStandardNodeMaterial({ color: 0x8c9196, roughness: 0.5, metalness: 0.7 });
   // Ann Arbor's signal heads are traffic yellow, their visors too, on a black backplate (vertex colours)
@@ -474,21 +732,51 @@ function buildTrafficControls(group, network) {
     g.setAttribute('color', new THREE.Float32BufferAttribute(a, 3));
     return g;
   };
-  const YELLOW = 0xd9a91f, BLACKPLATE = 0x1b1d1f;
+  const YELLOW = 0xd9a91f, BLACK = 0x1b1d1f;
   const W = 0.4, H = 1.12, D = 0.28, R = 0.145, LY = [0.36, 0, -0.36];
-  const headGeo = mergeGeometries([
-    tinted(new THREE.BoxGeometry(W, H, D), YELLOW),
-    tinted(new THREE.BoxGeometry(0.07, ARM_Y - HEAD_Y - H / 2, 0.07).translate(0, (ARM_Y - HEAD_Y + H / 2) / 2, 0), YELLOW),
-    tinted(new THREE.BoxGeometry(W + 0.24, H + 0.2, 0.02).translate(0, 0, -D / 2 - 0.01), BLACKPLATE), // backplate
-    ...LY.map((ly) => tinted(new THREE.CylinderGeometry(R + 0.03, R + 0.03, 0.24, 14, 1, true, Math.PI / 2, Math.PI)
+  // Lamp: a head shows its lamps on every side traffic comes from, as the town's do: back to back on a mast arm (its
+  // back to the oncoming approach, which runs on the same phase), and on all four sides hung from a span wire (the
+  // two sides across it on the cross street's phase). A face's yaw from the head's front, and whether it's the cross's
+  const FACES = { 1: [[0, 0]], 2: [[0, 0], [Math.PI, 0]], 4: [[0, 0], [Math.PI, 0], [Math.PI / 2, 1], [-Math.PI / 2, 1]] };
+  const headGeoOf = (n) => {
+    const depth = n === 4 ? W : D;
+    return mergeGeometries([
+      tinted(new THREE.BoxGeometry(W, H, depth), YELLOW),
+      tinted(new THREE.BoxGeometry(0.07, ARM_Y - HEAD_Y - H / 2, 0.07).translate(0, (ARM_Y - HEAD_Y + H / 2) / 2, 0), YELLOW),
+      ...FACES[n].flatMap(([yaw]) => LY.map((ly) => tinted(new THREE.CylinderGeometry(R + 0.03, R + 0.03, 0.24, 14, 1, true, Math.PI / 2, Math.PI)
+        .rotateX(Math.PI / 2).translate(0, ly, depth / 2 + 0.12).rotateY(yaw), YELLOW)))
+    ]);
+  };
+  // the left-turn head: four sections on a backplate, the stem up to the arm, a dark lens in each with its arrow
+  const H4 = HEAD_H4, LY4 = [0.54, 0.18, -0.18, -0.54], up4 = ARM_Y - (HEAD_Y - (HEAD_H4 - HEAD_H) / 2) - H4 / 2;
+  const lheadGeo = mergeGeometries([
+    tinted(new THREE.BoxGeometry(W, H4, D), YELLOW),
+    tinted(new THREE.BoxGeometry(0.07, up4, 0.07).translate(0, H4 / 2 + up4 / 2, 0), YELLOW),
+    tinted(new THREE.BoxGeometry(W + 0.24, H4 + 0.2, 0.02).translate(0, 0, -D / 2 - 0.01), BLACK),
+    ...LY4.map((ly) => tinted(new THREE.CircleGeometry(R, 20).translate(0, ly, D / 2 + 0.002), BLACK)),
+    ...LY4.map((ly) => tinted(new THREE.CylinderGeometry(R + 0.03, R + 0.03, 0.24, 14, 1, true, Math.PI / 2, Math.PI)
       .rotateX(Math.PI / 2).translate(0, ly, D / 2 + 0.12), YELLOW))
   ]);
-  // one lamp each: red on top, amber, green at the bottom, facing the drivers coming up to the head
-  const lampGeo = mergeGeometries(LY.map((ly, i) => {
-    const g = new THREE.CircleGeometry(R, 20).translate(0, ly, D / 2 + 0.004);
+  // an arrow pointing left as the driver facing it sees it (the head's -x)
+  const arrowShape = new THREE.Shape();
+  [[-0.115, 0], [-0.02, 0.085], [-0.02, 0.03], [0.105, 0.03], [0.105, -0.03], [-0.02, -0.03], [-0.02, -0.085]]
+    .forEach(([x, y], i) => (i ? arrowShape.lineTo(x, y) : arrowShape.moveTo(x, y)));
+  const larrowGeo = mergeGeometries(LY4.map((ly, i) => {
+    const g = (i < 3 ? new THREE.CircleGeometry(R, 20) : new THREE.ShapeGeometry(arrowShape)).translate(0, ly, D / 2 + 0.006);
     g.setAttribute('lamp', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(i), 1));
     return g;
   }));
+  // one lamp each: red on top, amber, green at the bottom, facing the drivers coming up to that side of the head
+  const lampGeoOf = (n) => {
+    const depth = n === 4 ? W : D;
+    return mergeGeometries(FACES[n].flatMap(([yaw, cross]) => LY.map((ly, i) => {
+      const g = new THREE.CircleGeometry(R, 20).translate(0, ly, depth / 2 + 0.004).rotateY(yaw);
+      const count = g.attributes.position.count;
+      g.setAttribute('lamp', new THREE.Float32BufferAttribute(new Float32Array(count).fill(i), 1));
+      g.setAttribute('cross', new THREE.Float32BufferAttribute(new Float32Array(count).fill(cross), 1));
+      return g;
+    })));
+  };
   // a sign's face stands just in front of its post (5 cm round), bolted to it from behind, so the post shows only
   // behind the sign and above and below it; its back (attribute `side` 1) just behind the face
   const sided = (g, side) => g.setAttribute('side', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(side), 1));
@@ -506,7 +794,7 @@ function buildTrafficControls(group, network) {
     plaqueBack: [fill(plaqueShape), 256],
     oneWay: [oneWayFace(false), 86, true], oneWayBack: [oneWayFace(true), 86, true],
     limitBack: [(ctx) => { ctx.fillStyle = BACK; ctx.fillRect(0, 0, 256, 320); }, 320, true],
-    corridor: [corridorFace, 320, true],
+    corridor: [corridorFace, 320, true], leftOnly: [leftOnlyFace, 320, true],
     ...Object.fromEntries([...limits.keys()].map((mph) => ['limit' + mph, [limitFace(mph), 320, true]]))
   };
   const rows = Math.max(1, Math.ceil(tiles.size / COLS));
@@ -543,10 +831,17 @@ function buildTrafficControls(group, network) {
     signMat.metalnessNode = side.mul(float(1).sub(printed)).mul(0.5);
     signMat.roughnessNode = mix(float(0.5), float(0.6), side);
   }
+  const lampMat = lampMaterial(), arrowMat = arrowMaterial();
   const kinds = {
     metal: [new THREE.CylinderGeometry(1, 1, 1, 8), metal, true],
-    head: [headGeo, housing, false],
-    lamps: [lampGeo, lampMaterial(), false, 'road', 1],
+    head1: [headGeoOf(1), housing, false],
+    lamps1: [lampGeoOf(1), lampMat, false, 'sig', 2],
+    head2: [headGeoOf(2), housing, false],
+    head4: [headGeoOf(4), housing, false],
+    lamps2: [lampGeoOf(2), lampMat, false, 'sig', 2],
+    lamps4: [lampGeoOf(4), lampMat, false, 'sig', 2],
+    lhead: [lheadGeo, housing, false],
+    larrows: [larrowGeo, arrowMat, false, 'asig', 2],
     // (no shadows from the plates: the shadow pass doesn't read the atlas's cut-outs)
     sign: [signGeo, signMat, false, 'tile', 2]
   };
@@ -571,13 +866,11 @@ function buildTrafficControls(group, network) {
     o.parts = parts;
   }
   group.userData.terrain = 'set'; // each was stood on the ground as it was placed
-  log(`[traffic controls] ${lights} signal heads (${spans} approaches on span wires, ${noSpot} signalised approaches with no curb for a pole), ${signs} stop & yield signs, ${oneWaySigns} one-way signs, `
+  log(`[traffic controls] ${lights} signal heads (${arrows} left-turn arrow heads, ${spans} approaches on span wires, ${noSpot} signalised approaches with no curb for a pole), ${signs} stop & yield signs, ${oneWaySigns} one-way signs, `
     + `${[...limits.values()].reduce((a, b) => a + b, 0)} speed limit signs, ${corridorSigns} safety corridor signs (${[...limits].sort((a, b) => a[0] - b[0]).map(([m, n]) => `${n} at ${m}`).join(', ')})`);
-  const [onMain, onCross] = kinds.lamps[1].userData.on;
-  const lit = (u, phase) => u.value.set(phase === 'red' ? 1 : 0, phase === 'amber' ? 1 : 0, phase === 'green' ? 1 : 0);
   const update = (time) => {
-    lit(onMain, signalPhase(time, true));
-    lit(onCross, signalPhase(time, false));
+    lampMat.userData.time.value = time;
+    arrowMat.userData.time.value = time;
   };
   return { lights, signs, update, obstacles };
 }

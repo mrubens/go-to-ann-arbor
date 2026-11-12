@@ -38,7 +38,8 @@ function createRoadPaintChunkBuilder(name, { cellSize = PAINT_CELL_SIZE, cullDis
     return cell;
   }
 
-  function strip3D(ax, ay, az, bx, by, bz, w, col, period = 1, duty = 1, phase = 0, flow = 1) {
+  // (Lamp: wEnd, the width at b where it tapers: an arrowhead's sides)
+  function strip3D(ax, ay, az, bx, by, bz, w, col, period = 1, duty = 1, phase = 0, flow = 1, wEnd = w) {
     const len = Math.hypot(bx - ax, bz - az);
     if (len < 0.05) return;
     const sx = ((az - bz) / len) * w * 0.5;
@@ -53,9 +54,10 @@ function createRoadPaintChunkBuilder(name, { cellSize = PAINT_CELL_SIZE, cullDis
     for (let k = 0; k <= pieces; k++) {
       const t = k / pieces;
       const x = ax + (bx - ax) * t, y = ay + (by - ay) * t, z = az + (bz - az) * t, u = phase + (end - phase) * t;
+      const f = w > 0 ? (w + (wEnd - w) * t) / w : 1;
       for (const s of [-1, 1]) {
-        position.push(x + sx * s, y, z + sz * s);
-        side.push(sx * s, sz * s);
+        position.push(x + sx * f * s, y, z + sz * f * s);
+        side.push(sx * f * s, sz * f * s);
         paint.push(u, period, duty);
         colors.push(col.r, col.g, col.b);
       }
@@ -444,10 +446,48 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
       if (!arrowCells.has(k)) arrowCells.set(k, []);
       arrowCells.get(k).push(a);
     }
-    const SHAFT = [[-2.6, 0, 0.1, 0, 0.16]];
-    const AHEAD = [[-0.4, -0.42, 0.75, 0, 0.16], [-0.4, 0.42, 0.75, 0, 0.16], [-0.2, 0, 0.6, 0, 0.36]];
-    const turn = (v) => [[-0.4, 0, 0.35, v * 0.75, 0.16], [0.35, v * 0.75, 0.35, v * 1.05, 0.16],
-      [-0.05, v * 0.68, 0.35, v * 1.25, 0.16], [0.75, v * 0.68, 0.35, v * 1.25, 0.16]];
+    // (Lamp: as the MUTCD draws them, elongated along the lane as a driver sees them, 5.5 m long: a 25 cm shaft;
+    // ahead, on to a head 90 cm across and 1.6 m long; a turn, bending off the shaft in a smooth quarter curve into a
+    // head pointing across the lane; ahead and a turn both, the turn leaving the shaft lower down. [u ahead, v right,
+    // u, v, width at the first end, at the second] in metres, from the arrow's middle)
+    const W = 0.25, TAIL = -3.6;
+    const head = (u0, v0, u1, v1, base) => [[u0, v0, u1, v1, base, 0.001]];
+    const AHEAD = [[TAIL, 0, 0.3, 0, W, W], ...head(0.3, 0, 1.9, 0, 0.9)];
+    const bend = (sgn, u0, u1, rv = 0.5, n = 10) => {
+      const out = [], ru = u1 - u0;
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI / 2, b = ((k + 1) / n) * Math.PI / 2;
+        out.push([u0 + ru * Math.sin(a), sgn * rv * (1 - Math.cos(a)), u0 + ru * Math.sin(b), sgn * rv * (1 - Math.cos(b)), W, W]);
+      }
+      return [...out, ...head(u1, sgn * (rv - 0.03), u1, sgn * (rv + 0.85), 0.8)];
+    };
+    const arrowParts = (c) => {
+      const both = c & 2, out = both ? [...AHEAD] : [[TAIL, 0, -0.8, 0, W, W]];
+      if (c & 1) out.push(...bend(-1, both ? -2.0 : -0.8, both ? -0.8 : 0.6));
+      if (c & 4) out.push(...bend(1, both ? -2.0 : -0.8, both ? -0.8 : 0.6));
+      return out;
+    };
+    // the word ONLY ahead of a lane's arrow where the lane only turns: block letters 2.4 m tall along the lane and
+    // 0.6 m across, [u, v] strokes in each letter's own 0..1 square
+    const LETTERS = {
+      O: Array.from({ length: 12 }, (_, k) => {
+        const a = (k / 12) * Math.PI * 2, b = ((k + 1) / 12) * Math.PI * 2;
+        return [0.5 + 0.5 * Math.sin(a), 0.5 + 0.5 * Math.cos(a), 0.5 + 0.5 * Math.sin(b), 0.5 + 0.5 * Math.cos(b)];
+      }),
+      N: [[0, 0, 1, 0], [1, 0, 0, 1], [0, 1, 1, 1]],
+      L: [[0, 0, 1, 0], [0, 0, 0, 1]],
+      Y: [[1, 0, 0.5, 0.5], [1, 1, 0.5, 0.5], [0.5, 0.5, 0, 0.5]]
+    };
+    const onlyParts = (u0) => {
+      const out = [], LW = 0.6, LH = 2.4, GAP = 0.15, v0 = -(4 * LW + 3 * GAP) / 2;
+      [...'ONLY'].forEach((ch, i) => {
+        for (const [a0, b0, a1, b1] of LETTERS[ch]) {
+          // (a: up the letter, along the lane; b: across it, to the right)
+          out.push([u0 + a0 * LH, v0 + i * (LW + GAP) + b0 * LW, u0 + a1 * LH, v0 + i * (LW + GAP) + b1 * LW, 0.2, 0.2]);
+        }
+      });
+      return out;
+    };
     let painted = 0, unmatched = 0;
     for (const f of network.paintEdges || network.edges) {
       if (f.to.shape || f.cls === 0 || f.len < 14 || !f.lanes.length) continue;
@@ -472,12 +512,18 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
         if (f.turn) { lanes.unshift(0); codes.unshift(1); }
       } else if (codes.length === lanes.length + 1 && codes[codes.length - 1] === 4) codes = codes.slice(0, -1);
       if (codes.length !== lanes.length) { unmatched++; continue; }
-      for (const s of f.len > 60 ? [f.len - 8, f.len - 38] : [f.len - 8]) {
+      for (const s of f.len > 60 ? [f.len - 12, f.len - 42] : [f.len - 12]) {
         lanes.forEach((o, k) => {
           const c = codes[k];
-          const parts = [...SHAFT, ...(c & 2 ? AHEAD : []), ...(c & 1 ? turn(-1) : []), ...(c & 4 ? turn(1) : [])];
-          // (drawn about 2.2 m long and scaled up to a real arrow's 4.5 m: long, as a driver sees it foreshortened)
-          for (const [u0, v0, u1, v1, w] of parts) strip(...at(f, s + u0 * 1.6, o + v0 * 1.15), ...at(f, s + u1 * 1.6, o + v1 * 1.15), w * 1.3, WHITE);
+          if (!c) return;
+          const parts = arrowParts(c);
+          // a lane that only turns has ONLY ahead of its arrow, nearer the stop line (where there's room for it)
+          if (!(c & 2) && s + 5.4 < f.len - 1) parts.push(...onlyParts(2.8));
+          for (const [u0, v0, u1, v1, w0, w1] of parts) {
+            const [ax, az] = at(f, s + u0, o + v0), [bx, bz] = at(f, s + u1, o + v1);
+            if (w0 === w1) strip(ax, az, bx, bz, w0, WHITE);
+            else builder.strip3D(ax, HEIGHT, az, bx, HEIGHT, bz, w0, WHITE, 1, 1, 0, 1, w1);
+          }
         });
       }
       painted++;

@@ -2489,14 +2489,15 @@ function createRoadSurfaceMaterial() {
     const tarSeam = float(1.0).sub(smoothstep(0.0, 0.012, abs(patchNoise.sub(0.52)))).mul(0.18).mul(detail);
     // Binder-rich (dark) & ravelled, aggregate-exposed (pale) mottling a stride or so across (its mean, 0.5, once a
     // pixel spans 40 cm, the patches then only a few pixels across)
-    const mottle = fadedDetail(px.lessThan(0.4), 0.5, () => mix(float(0.5), smoothstep(0.3, 0.7,
+    // (Lamp: soft-edged and faint: a hard-edged pale patch read as grey stuff poking up through the road)
+    const mottle = fadedDetail(px.lessThan(0.4), 0.5, () => mix(float(0.5), smoothstep(0.15, 0.85,
       noise2D(vec2(wx.mul(0.9), wz.mul(0.9)).add(41.0)).mul(0.65).add(noise2D(vec2(wx.mul(2.3), wz.mul(2.3)).add(7.0)).mul(0.35))),
     smoothstep(0.4, 0.2, px)));
 
     const baseAsphalt = mix(
       cAsphaltDark,
       cAsphaltLight,
-      fineGrain.mul(0.3).add(microAggregate.mul(0.22)).add(patchNoise.mul(0.22)).add(mottle.mul(0.26)).sub(0.04)
+      fineGrain.mul(0.3).add(microAggregate.mul(0.22)).add(patchNoise.mul(0.22)).add(mottle.mul(0.12)).add(0.03)
     )
       .mul(float(1.0).sub(oilyStain.mul(0.32)))
       .mul(float(1.0).sub(tarSeam));

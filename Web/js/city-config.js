@@ -1,3 +1,4 @@
+import { ROUNDABOUTS } from './roundabout-data.js';
 import { historicDistrictAt, neighborhoodAt } from './districts.js';
 import { GEO } from './city-geodata.js';
 import { CHAMPION_TREES } from './champion-trees.js';
@@ -319,6 +320,14 @@ const BLOCKS = GEO.blocks.map(([flat, rects, park, parkName, isRect, frames, law
     // (Ingalls Mall, with Burton Tower, Hill Auditorium and the League), not a planted median
     median: Math.min(maxX - minX, maxZ - minZ) < 9
   };
+// Lamp: but not the little island a roundabout's ring encloses: roundabouts.js draws its central island there, and
+// traffic circles it (road-network.js)
+}).filter((b) => {
+  for (let i = 0; i < ROUNDABOUTS.length; i += 3) {
+    const cx = ROUNDABOUTS[i], cz = ROUNDABOUTS[i + 1], r = ROUNDABOUTS[i + 2];
+    if (b.poly.every((p) => Math.hypot(p.x - cx, p.z - cz) < r + 4)) return false;
+  }
+  return true;
 });
 // Spatial index of the blocks (64 m cells)
 const BLOCK_CELL = 64;
@@ -617,20 +626,39 @@ function isTypingInField(e) {
 // amber until the end of the cycle. Pedestrians cross with the traffic that runs parallel to them, stepping off
 // only on the WALK, the first `walk` seconds of its green: long enough before the cross traffic's green for the
 // slowest walker to get across the widest avenue.
-const SIGNAL_TIMING = { cycle: 60, avenueAmber: 26, avenueRed: 30, streetAmber: 56, walk: 7 };
+// Lamp: where the avenue has a left-turn lane (a junction's `leftPhase`), its lefts lead, both ways at once, on a
+// green arrow until leftGreen and a yellow arrow until leftAmber, its through traffic held on red meanwhile; then the
+// lefts flash a yellow arrow (turn when clear) through the avenue's green, a steady yellow arrow with its amber and a
+// red arrow after, as the town's four-section left-turn heads do. The avenue's WALK waits for the lead lefts to finish.
+// Lamp: an all-red moment between the roads' turns (avenueRed to streetGreen, streetRed to the end), so the last car
+// through on the amber clears the junction before the other road goes. Each junction keeps the one cycle but runs it
+// from its own point (road-network.js `offset`, seconds added to the clock there): along a corridor the greens follow
+// one another at about the speed limit, as the city's coordinated signals do.
+const SIGNAL_TIMING = { cycle: 72, leftGreen: 7, leftAmber: 10, avenueAmber: 36, avenueRed: 40, streetGreen: 42, streetAmber: 66, streetRed: 70, walk: 7 };
 
-// 'green', 'amber' or 'red' for avenue or cross street traffic at a given time
-function signalPhase(time, isAvenue) {
-  const { cycle, avenueAmber, avenueRed, streetAmber } = SIGNAL_TIMING;
+// 'green', 'amber' or 'red' for avenue or cross street traffic at a given time (the junction's own: the clock plus its
+// offset; the avenue's through traffic held for the lead lefts at a junction with `leftPhase`)
+function signalPhase(time, isAvenue, leftPhase = false) {
+  const { cycle, leftAmber, avenueAmber, avenueRed, streetGreen, streetAmber, streetRed } = SIGNAL_TIMING;
   const t = ((time % cycle) + cycle) % cycle;
-  if (isAvenue) return t < avenueAmber ? 'green' : t < avenueRed ? 'amber' : 'red';
-  return t < avenueRed ? 'red' : t < streetAmber ? 'green' : 'amber';
+  if (isAvenue) return leftPhase && t < leftAmber ? 'red' : t < avenueAmber ? 'green' : t < avenueRed ? 'amber' : 'red';
+  return t < streetGreen ? 'red' : t < streetAmber ? 'green' : t < streetRed ? 'amber' : 'red';
+}
+
+// A left-turn head's arrow: 'green' (protected), 'amber', 'flash' (flashing yellow: turn when clear) or 'red'. The
+// avenue's lead lefts where `leftPhase`; elsewhere a left-turn lane's arrow flashes through its road's green.
+function leftArrow(time, isAvenue, leftPhase = false) {
+  const { cycle, leftGreen, leftAmber } = SIGNAL_TIMING;
+  const t = ((time % cycle) + cycle) % cycle;
+  if (isAvenue && leftPhase && t < leftAmber) return t < leftGreen ? 'green' : 'amber';
+  const p = signalPhase(time, isAvenue, leftPhase);
+  return p === 'green' ? 'flash' : p;
 }
 
 // Do pedestrians walking alongside avenue (or cross street) traffic have the WALK at a given time?
 function walkSignal(time, isAvenue) {
-  const { cycle, avenueRed, walk } = SIGNAL_TIMING;
-  const t = (((time - (isAvenue ? 0 : avenueRed)) % cycle) + cycle) % cycle;
+  const { cycle, leftAmber, streetGreen, walk } = SIGNAL_TIMING;
+  const t = (((time - (isAvenue ? leftAmber : streetGreen)) % cycle) + cycle) % cycle;
   return t < walk;
 }
 
@@ -671,5 +699,6 @@ export {
   fromOldFrame,
   isTypingInField,
   signalPhase,
+  leftArrow,
   walkSignal
 };

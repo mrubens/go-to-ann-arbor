@@ -33,6 +33,13 @@ import {
 } from './tsl-materials.js';
 import { GEO } from './city-geodata.js';
 import { REAL_BUILDINGS } from './building-geodata.js';
+
+// Lamp: the University's old collegiate core, 600 m round the Diag (State St to Washtenaw, the Law Quad to the Union
+// and Angell), where its own buildings are red-brown collegiate brick and limestone. Its other buildings (North
+// Campus, the medical campus, athletics, Wall St, south campus) are mostly from the 1950s on: tan-orange brick with
+// wide windows, gray metal panel, red brick on some, and curtain-wall glass on the taller ones (a low one is glass
+// only where its photo says: one at random put a blue glass front on a block service building on Hill St)
+const collegiateCore = (x, z) => Math.hypot(x - 848, z - 317) < 600;
 import { createBuildingFootprints } from './building-footprints.js';
 import { beginShopBays, shopBayStats, setShopOutlines, setShopAwnings } from './shop-types.js';
 import { buildHouses, streamHouses, shopLook } from './houses.js';
@@ -294,6 +301,12 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     [createPreWarBuildingMaterial, {
       stoneColor: 0xcfc8b8, trimColor: 0x8a8478, windowGlassColor: 0x1a2630,
       windowWidth: 4.0, floorHeight: 5.0, windowRatioX: 0.0, windowRatioY: 0.0, litProbability: 0.3, warmth: 0.75, seed: 191.3
+    }],
+    // 16: The 1990s-2020s blocks downtown and by campus: red-brown face brick with wide modern windows, no 1900s lots
+    // (W Madison's and N Ashley's apartments and hotels)
+    [createPreWarBuildingMaterial, {
+      stoneColor: 0x8c4c38, trimColor: 0xc9c4ba, windowGlassColor: 0x1a2630,
+      windowWidth: 3.2, floorHeight: 3.3, windowRatioX: 0.6, windowRatioY: 0.62, litProbability: 0.55, warmth: 0.78, seed: 205.9
     }]
   );
   const materials = facades.map(([create, opts]) => create({ ...opts, footprintLocal: true }));
@@ -423,7 +436,7 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       const ground = maxGround + LAWN_Y;
       b.ground = ground;
       b.minGround = minGround;
-      const church = { ...b, tone, ground, minGround, plan };
+      const church = { ...b, tone, ground, minGround, plan, facade: shopLook(b) & 7 };
       churches.push(church);
       const detail = { cx: b.cx, cz: b.cz, minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, cornices: [],
         waterTowers: [], hvacUnits: [], fireEscapes: [], awnings: [], scaffoldSheds: [], footprints: [] };
@@ -462,7 +475,11 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     // (Lamp: and out past the town that stood by 1950, a low residential building up to 3,000 m² is a townhouse row or
     // garden apartments, drawn as houses are, with their pitched roofs, siding and garages, not a downtown block)
     const gardenApts = (b.kind || 1) === 1 && b.height < 14 && polyArea < 3000 && Math.hypot(b.cx, b.cz) > 2300;
-    if (((b.kind || 1) === 1 && b.height < 14 && polyArea < 900) || gardenApts || smallShed) {
+    // (and a small shop or office building on a house lot out of the downtown core and central campus is a house
+    // turned to business, a dentist's or an insurance office: drawn as one, not as a little downtown block)
+    const convertedHouse = ![1, 5].includes(b.kind || 1) && polyArea >= 60 && polyArea < 250 && b.height < 10
+      && !inCore(b.cx, b.cz) && [LAND_USE.SINGLE_FAMILY, LAND_USE.TWO_FAMILY, LAND_USE.APARTMENTS].includes(landUseAt(b.cx, b.cz));
+    if (((b.kind || 1) === 1 && b.height < 14 && polyArea < 900) || gardenApts || smallShed || convertedHouse) {
       const ground = maxGround + LAWN_Y;
       b.ground = ground;
       b.minGround = minGround;
@@ -492,7 +509,9 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       // and Liberty's mid-rises are brick over a limestone base, and the town's blue curtain-wall towers are few)
       : kind === 2 ? (b.height < 16 ? brickOf(tone) : (tone < 0.3 ? 14 : tone < 0.55 ? brickOf(tone * 0.84) : tone < 0.8 ? 0 : 3))
         : kind === 3 ? (b.height < 14 ? (tone < 0.5 ? 1 : 3) : (tone < 0.25 ? 2 : tone < 0.45 ? 14 : tone < 0.6 ? 3 : tone < 0.8 ? 1 : 0))
-          : kind === 5 ? (b.height > 30 && tone < 0.45 ? 2 : tone < 0.62 ? 8 : 9)
+          : kind === 5 ? (collegiateCore(b.cx, b.cz) ? (b.height > 30 && tone < 0.45 ? 2 : tone < 0.62 ? 8 : 9)
+            : b.height > 25 ? (tone < 0.35 ? 2 : tone < 0.6 ? 14 : 10)
+              : (tone < 0.55 ? 10 : tone < 0.8 ? 14 : 8))
             : kind === 6 ? (tone < 0.6 ? 10 : 9)
               : (b.height < 40 ? (tone < 0.55 ? 1 : 0) : (tone < 0.5 ? 0 : 3));
     // Lamp: the city's land use and historic districts: old brick and stone in a historic district (the University's
@@ -501,6 +520,11 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     if (kind !== 5 && historicDistrictAt(b.cx, b.cz) && b.height < 30) mat = brickOf(tone);
     else if (use === LAND_USE.RELIGIOUS && kind !== 5) mat = tone < 0.5 ? 0 : 1;
     else if (use === LAND_USE.INDUSTRY && kind !== 5 && b.height < 20) mat = tone < 0.7 ? 10 : 3;
+    // Lamp: a smaller shop or office building out past the town that stood by 1950 (Packard, Plymouth, Stadium,
+    // Washtenaw, the office parks) is a postwar one: tan-orange brick with wide windows or gray panel,
+    // not downtown's narrow 1900s lot fronts (materials 0, 1, 11-13)
+    else if ((kind === 2 || kind === 3) && b.height < 14 && !inCore(b.cx, b.cz) && Math.hypot(b.cx, b.cz) > 2000
+      && [0, 1, 11, 12, 13].includes(mat)) mat = tone < 0.72 ? 10 : 14;
     // Lamp: a big low shop building out past downtown and the campus is a shopping centre's or a big box's, not a
     // downtown block: one tall storey of pale block with its glass at the shopfronts (15)
     if ((kind === 2 || use === LAND_USE.SHOPS) && polyArea > 1500 && b.height < 17 && !inCore(b.cx, b.cz)) mat = 15;
@@ -515,10 +539,19 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       && (kind === 2 || use === LAND_USE.SHOPS || use === LAND_USE.MIXED_USE);
     // Lamp: a shop building's facade, display windows and shopfront color as its street photo shows them
     // (data/building-looks.json): red brick, buff brick and stone, painted (kept), glass and metal. The facade is any
-    // photographed building's, shops or not (E Huron's glass and metal by Fifth was tan brick), but the University's
-    // own keep their collegiate brick and stone; the display windows and colors are only a storefront's
-    const look = kind !== 5 ? shopLook(b) : 0;
-    if (look & 7) mat = [mat, 1, 0, 0, mat, 3][look & 7];
+    // photographed building's, shops or not (E Huron's glass and metal by Fifth was tan brick), the
+    // University's in their own materials; the display windows and colors are only a storefront's
+    const look = shopLook(b);
+    // (the University's own as their photos show them too, in its own materials: collegiate red-brown brick, the civic
+    // tan brick, limestone, or curtain-wall glass; data/building-looks.json has 62 of them)
+    if (look & 7) mat = kind === 5 ? [mat, 8, 10, 9, mat, 2][look & 7] : [mat, 1, 0, 0, mat, 3][look & 7];
+    // (Lamp: and where no photo says, the assessor's year: a building from 1950 on is no 1900s front of narrow lots,
+    // outside the historic districts: 1950 to 1989 the postwar tan-orange brick with wide windows, from 1990 red-brown
+    // face brick with wide windows (16) or gray panel; W Madison's 2010s apartments were downtown's old brick lots)
+    const builtIn = (look >> 11 & 127) ? (look >> 11 & 127) * 2 + 1800 : 0;
+    if (!(look & 7) && builtIn >= 1950 && [0, 1, 11, 12, 13].includes(mat) && !historicDistrictAt(b.cx, b.cz)) {
+      mat = builtIn < 1990 ? 10 : tone < 0.7 ? 16 : 14;
+    }
     const record = { ...b, tone, ground, minGround, storefronts, shopLook: storefronts ? look : 0 };
     surveyedBuckets[mat].push(record);
     const detail = {

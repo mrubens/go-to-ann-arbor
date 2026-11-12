@@ -241,7 +241,8 @@
   }
 
   // A page shared on lamp.dev plays from a host of its own under play.lamp.dev, away from Lamp. The person's own
-  // lamp on this computer can answer it (`lamp ai`, at a port of the computer's own), once they've allowed this
+  // Lamp or lamp on this computer can answer it (Lamp's `SharedPagesAI`, or `lamp ai`, at a port of the computer's
+  // own), once they've allowed this
   // page there; the token it's given is kept with the page's saved things. Whether there's an AI is asked first,
   // without one, so the person is asked only when the page uses it.
   var NEARBY = 'http://127.0.0.1:47423';
@@ -266,7 +267,7 @@
       });
     });
     return done.then(null, function (e) {
-      throw e instanceof Failure ? e : new Failure('AI isn\'t available here. Open this in Lamp, or with Lamp\'s command line on this computer, run lamp ai.');
+      throw e instanceof Failure ? e : new Failure('AI isn\'t available here. Open Lamp on this computer, or with Lamp\'s command line, run lamp ai.');
     });
   }
 

@@ -2093,10 +2093,14 @@ class PersonRig {
   }
 
   // Leg from the hip to the ankle target, knee towards the foot's heading, with soft full-extension cushion
-  solveLeg(i, hip, ankleTarget, footYaw) {
+  // (`knee`: the way the knee points, where the body isn't upright: on a swing, tilted back and forth with the seat)
+  solveLeg(i, hip, ankleTarget, footYaw, knee = null) {
     const s = this.s;
-    _pole.set(Math.sin(footYaw) + Math.sin(this.yaw), 0, Math.cos(footYaw) + Math.cos(this.yaw));
-    _front.set(Math.sin(footYaw), 0, Math.cos(footYaw)).addScaledVector(_pole, 0.5);
+    if (knee) { _pole.copy(knee); _front.copy(knee); }
+    else {
+      _pole.set(Math.sin(footYaw) + Math.sin(this.yaw), 0, Math.cos(footYaw) + Math.cos(this.yaw));
+      _front.set(Math.sin(footYaw), 0, Math.cos(footYaw)).addScaledVector(_pole, 0.5);
+    }
     return this.limb(LIMB.thigh[i], LIMB.shin[i], hip, ankleTarget, THIGH * s, SHIN * s, _pole, _front, 0, 0.012);
   }
 
@@ -2173,7 +2177,8 @@ class PersonRig {
 
   // One step of the limp body; `ground(owner, x, z)` is the surface under each joint. Returns true once it has lain
   // still for a while.
-  stepRagdoll(dt, ground, owner, updatePose = true) {
+  // (`settle`: seconds lying still before it counts as done: the player's own body gets up sooner than a passer-by's)
+  stepRagdoll(dt, ground, owner, updatePose = true, settle = 1.2) {
     const P = this.rag;
     const pp = P.p, po = P.o, h = RAG_STEP, g = 9.81 * h * h, fl = P.floor || (P.floor = new Float32Array(RAG_N));
     P.time += dt;
@@ -2231,7 +2236,7 @@ class PersonRig {
     this.z = pp[2];
     this.pelvisY = pp[1];
     if (updatePose) this.solveRagdoll();
-    return P.still > 1.2 || P.time > 12;
+    return P.still > settle || P.time > 12;
   }
 
   // The heading from the limp body's pelvis to its head, along the ground (for getting up where it fell)
@@ -2694,11 +2699,14 @@ class PersonRig {
       // feet on the pegs or the deck, flat, the knees ahead of them
       toWorld(_target.set(side * p.foot[0], ankleY, p.foot[2] - 0.03));
       this.jointFrom(BONE.PELVIS, LIMB.thigh[i], _qPelvis, _pelvis, _hip);
-      const ankle = this.solveLeg(i, _hip, _target, this.yaw);
+      // (Lamp: the knees ahead and up of the seat as the seat itself is turned, not level ahead in the world: tipped
+      // far back on a swing, a level pole bent them backwards)
+      const ankle = this.solveLeg(i, _hip, _target, this.yaw, p.seatKnees ? _seatKnee.set(0, 0.6, 1).applyQuaternion(_qRoot) : null);
       this.writeFoot(i, ankle, _qa.copy(_qRoot), 0);
     }
   }
 }
+const _seatKnee = new THREE.Vector3();
 
 
 export { STYLE as PERSON_STYLE, BONE as PERSON_BONES, buildPersonGeometry, createPersonMaterial, PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION };

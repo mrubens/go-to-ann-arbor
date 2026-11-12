@@ -397,6 +397,67 @@ class CameraSystem {
     return true;
   }
 
+  // Lamp: on a playground swing (controllers.js boardSwing) or sat down anywhere (sitDown: a bench, a cafe chair, a
+  // picnic table, the bleachers), from the chase or action view, the camera eases well back and up behind them, a wide
+  // view out over what they face, and looks slowly about it, side to side and a little up and down, as someone taking
+  // in the scenery would; the follow view glides back when they're up again
+  updateSwingCam(entity, dt) {
+    const cm = this.controllerManager, person = entity.type === 'person';
+    const sw = person && cm.swings ? entity.swing : null, sit = person && !sw ? entity.sitting : null;
+    const followView = this.activePresetId === 'chase' || this.activePresetId === 'action';
+    let sc = this.swingCam;
+    const what = sw ? sw.seat : sit ? sit.seat : null;
+    if (!what || !followView) {
+      if (sc) { this.swingCam = null; this.followEntity = null; this.setCameraPreset(this.activePresetId); }
+      return false;
+    }
+    // where they are and the way they face
+    let ox, oz, fx, fz;
+    if (sw) {
+      const st = cm.swings.state(sw.seat, this._swingSt || (this._swingSt = { pivot: new THREE.Vector3(), along: new THREE.Vector3(), point: new THREE.Vector3(), vel: new THREE.Vector3() }));
+      ox = st.pivot.x; oz = st.pivot.z; fx = st.along.x * sw.side; fz = st.along.z * sw.side;
+    } else {
+      ox = what.x; oz = what.z; fx = Math.sin(what.yaw); fz = Math.cos(what.yaw);
+    }
+    if (!sc || sc.what !== what) {
+      sc = this.swingCam = { what, t: 0 };
+      this.setFov(55);
+    }
+    sc.t += dt;
+    // looking about: two slow swings of the head that never quite repeat, and the eyes rising and falling a little
+    const a = 0.45 * Math.sin(sc.t * 0.16) + 0.2 * Math.sin(sc.t * 0.41 + 1.3);
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const dx = fx * ca - fz * sa, dz = fx * sa + fz * ca;
+    const g0 = groundHeight(ox, oz);
+    // (the camera swings round behind them less than the view turns, so they stay in the lower middle of it)
+    const b2 = a * 0.35, cb = Math.cos(b2), sb = Math.sin(b2);
+    const bx = fx * cb - fz * sb, bz = fx * sb + fz * cb;
+    // (closer in where a building or a wall stands behind them: sat at a cafe table against a shopfront)
+    let back = 12;
+    if (cm.solidAt) {
+      const hy = g0 + 1.6;
+      const blocked = (d) => {
+        for (let i = 1; i <= 8; i++) {
+          const t = (d * i) / 8;
+          if (cm.solidAt(ox - bx * t, hy + (1.3 * t) / 12, oz - bz * t)) return true;
+        }
+        return false;
+      };
+      while (back > 3 && blocked(back)) back -= 1.5;
+    }
+    sc.back = sc.back == null ? back : sc.back + (back - sc.back) * Math.min(1, dt * 2);
+    const cx = ox - bx * sc.back, cz = oz - bz * sc.back;
+    // (low enough, under 3 m, to see out under the park's trees rather than from inside their leaves)
+    this._desiredPos.set(cx, Math.max(groundHeight(cx, cz) + 1.7, g0 + 1.6 + 1.3 * sc.back / 12), cz);
+    this._desiredLook.set(ox + dx * 30, g0 + 2.2 + 1.3 * Math.sin(sc.t * 0.11 + 0.7), oz + dz * 30);
+    const k = 1 - Math.exp(-dt * (sc.t < 3 ? 0.8 : 1.8));
+    this.currentPos.lerp(this._desiredPos, k);
+    this.currentLookAt.lerp(this._desiredLook, k);
+    this.camera.position.copy(this.currentPos);
+    this.camera.lookAt(this.currentLookAt);
+    return true;
+  }
+
   endJumpCam() {
     this.jumpCam = null;
     this.followEntity = null; // the follow view re-anchors from the jump camera and glides back
@@ -496,6 +557,7 @@ class CameraSystem {
     if (this.updateOverride(dt)) return;
     if (this.updateJumpCam(entity, dt)) return;
     if (this.updateFlyover(dt)) return;
+    if (this.updateSwingCam(entity, dt)) return;
 
     switch (this.activePresetId) {
       case 'chase': {

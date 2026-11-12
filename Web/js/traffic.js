@@ -5,7 +5,7 @@ import { planClosures } from './road-work.js';
 import { log } from '../lamp-game.js';
 import { createPedestrianSystem } from './pedestrian-system.js';
 import { vehicleContact, resolveVehicleContact, sweptVehicleContact } from './vehicle-physics.js';
-import { signalPhase, walkSignal } from './city-config.js';
+import { SIGNAL_TIMING, signalPhase, leftArrow, walkSignal } from './city-config.js';
 import { cityUniforms, createContactShadowMaterial, createCarFlareMaterial } from './tsl-materials.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
 import {
@@ -171,6 +171,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // 0. ROAD NETWORK
   // =========================================================================
   const network = buildRoadNetwork(sidewalks, obstacles, signalIntersections);
+  log(`[traffic] ${network.roundaboutMoves} moves round the roundabouts' islands`);
   const { nodes, edges, connector, curvePoint } = network;
   // Lamp: blocks shut for road work (road-work.js): nobody turns into one or starts on one
   const closures = planClosures(edges, cityClosures);
@@ -211,7 +212,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       move: null, out: 0, conn: null, cs: 0, trail: null, commit: null, claimed: false, yielding: false, yieldAt: 0,
       wait: 0, laneTimer: Math.random() * 0.5,
       dl: 0, dlv: 0, blink: 0, blinkPhase: Math.random() * 0.8,
-      evade: 0, alarm: 0, panicUntil: 0, panicAcc: 0, reaction: 0.6 + Math.random() * 0.4,
+      evade: 0, alarm: 0, panicUntil: 0, panicAcc: 0, reaction: 0.6 + Math.random() * 0.4, bold: Math.random() < 1 / 7,
       x: 0, z: 0, prevX: 0, prevZ: 0, tx: 0, tz: 1, nose: 0, yaw: 0, yawRate: 0, steer: 0, delta: 0,
       pitch: 0, roll: 0, pitchVel: 0, rollVel: 0, vx: 0, vz: 0, yawOffset: 0, yawVel: 0, impactTime: 0,
       pAhead: Infinity, pRight: 0, pSpeed: 0, wheelSpin: Math.random() * Math.PI * 2
@@ -567,12 +568,18 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // =========================================================================
   // 4. WHO IS WHERE: LANE OCCUPANCY, INTERSECTIONS, VIEW, PLAYER
   // =========================================================================
-  let clock = 0;
-  let avePhase = 'green';
-  let stPhase = 'red';
-  let aveWalk = true;
-  let stWalk = false;
-  const phaseOf = (e) => (e.axisIndex === 0 ? avePhase : stPhase);
+  let clock = 0, lastClock = 0;
+  // Lamp: the light for traffic coming along e (in `lane`, where it matters), on the clock at its junction (its own
+  // `offset` into the cycle: road-network.js): at a junction with lead lefts (`leftPhase`), the avenue's through
+  // traffic waits for them, and a lane that only turns left goes by its arrow (a flashing yellow arrow is a green it
+  // yields on, as any left turn does)
+  const phaseOf = (e, lane = -1) => {
+    const n = e.to, t = clock + (n.offset || 0);
+    if (e.axisIndex !== 0) return signalPhase(t, false);
+    if (!n.leftPhase) return signalPhase(t, true);
+    if (lane >= 0 && e.leftArrow && (e.leftMask >> lane) & 1) { const a = leftArrow(t, true, true); return a === 'flash' ? 'green' : a; }
+    return signalPhase(t, true, true);
+  };
   let focusX = 0;
   let focusZ = 140;
 
@@ -838,12 +845,38 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     return best;
   }
 
+  // Lamp: on a street with a shared centre turn lane (road-network.js `turn`), a car turning left from its leftmost
+  // lane moves over into the centre lane for the last stretch before the junction (CENTRE_RUN, never more than 40% of
+  // the block, so the two ways' turners don't meet in it) and waits there, through traffic passing it on the right;
+  // it eases back onto its turn's path over the first metres across. `v.centre` while it's in the centre lane.
+  const CENTRE_RUN = 45;
+  function centreTarget(v) {
+    const e = v.edge;
+    v.centre = false;
+    if (!e.turn || v.lane !== 0 || v.bus || v.chase || v.move?.turn !== 'L' || e.lanes[0] < 1) return 0;
+    if (v.conn) {
+      // (across the junction: back onto the turn's path over its first 8 m)
+      if (!v.wasCentre) return 0;
+      const k = 1 - v.cs / 8;
+      if (k <= 0) { v.wasCentre = false; return 0; }
+      return -e.lanes[0] * k;
+    }
+    if (e.len - v.s > Math.min(CENTRE_RUN, e.len * 0.4)) { v.wasCentre = false; return 0; }
+    v.centre = v.wasCentre = true;
+    return -e.lanes[0];
+  }
+  // in the centre lane (moved most of the way over), as a following car sees it
+  const inCentre = (o) => o.centre && o.dl < -1;
+
   // First vehicle ahead of position s in a lane list
   function ahead(list, s, v) {
     // (a car passes a bicycle or scooter at the curb rather than queueing behind it)
     // (and, Lamp, a car pulled well over to the curb for a siren, or the corridor's cruiser parked there)
     if (!list) return null;
-    for (const o of list) if (o.s > s && o.v !== v && (v.curb || !o.v.curb) && !(o.v.dl > v.halfWidth + o.v.halfWidth + 0.1 && !v.curb)) return o;
+    // (Lamp: and one waiting in the centre turn lane is passed on its right; one there queues only behind the others
+    // there)
+    for (const o of list) if (o.s > s && o.v !== v && (v.curb || !o.v.curb) && !(o.v.dl > v.halfWidth + o.v.halfWidth + 0.1 && !v.curb)
+      && (v.centre ? o.v.centre || o.s < s + 2 * v.half + 1 : !inCentre(o.v))) return o;
     return null;
   }
 
@@ -895,10 +928,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   const canStopBefore = (v, d) => freeAcc(v) + stopAt(v, d) > -v.driver.b;
 
   // Braking for a red (or an amber with room to stop) at the end of edge f, `d` metres ahead
-  function signalAhead(v, f, d) {
+  function signalAhead(v, f, d, lane = -1) {
     if (v.isPolice || !f.to.signal || d > LOOKAHEAD) return 0;
-    const phase = phaseOf(f);
-    if (phase === 'green' || (phase === 'amber' && !canStopBefore(v, d))) return 0;
+    const phase = phaseOf(f, lane);
+    if (phase === 'green' || (phase === 'amber' && (!canStopBefore(v, d) || (v.bold && v.speed > 6 && d < v.speed * 2.2)))) return 0;
     return stopAt(v, d);
   }
 
@@ -991,6 +1024,34 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   // At unsignalized corners, give way to the main road. Police passing a non-green signal yield to approaching
   // cross traffic as well as vehicles already in the intersection, instead of treating the light as a clear road.
+  // Lamp: a right turn on red, as Michigan allows: after a full stop at the line, once nobody coming into the street
+  // it turns onto (straight across from its left, or turning left into it from across the way) is too close to stop
+  // easily, and nobody is already pulling into that street at the junction; never while the oncoming lefts have their
+  // lead green arrow (they turn into the same street). Pedestrians and room on the street are checked after, as for
+  // any turn.
+  function rightOnRed(v, e, n, m, phase, d) {
+    if (phase !== 'red' || m.turn !== 'R' || !n.signal || v.bus) return false;
+    if (d < 4 && v.speed < 0.6) v.rtorAt = n;
+    if (v.rtorAt !== n || v.wait < 1.2) return false;
+    if (e.axisIndex === 0 && n.leftPhase) {
+      const { cycle, leftAmber } = SIGNAL_TIMING, t = (((clock + (n.offset || 0)) % cycle) + cycle) % cycle;
+      if (t < leftAmber) return false;
+    }
+    const f = m.to;
+    for (const list of f.occ) for (const o of list) if (o.s < 3 && o.v !== v) return false;
+    for (const a of n.in) {
+      if (a === e) continue;
+      for (const list of a.occ) {
+        const lead = leadOf(list);
+        if (lead && lead.v.move && lead.v.move.to === f && (lead.v.commit === n || !canStop(lead, a, false))) return false;
+      }
+    }
+    if (v.rtorLogged !== n && rightOnRed.count++ < 3) log(`[traffic] right on red at (${Math.round(n.x)}, ${Math.round(n.z)}) from ${e.street || 'a street'}`);
+    v.rtorLogged = n;
+    return true;
+  }
+  rightOnRed.count = 0;
+
   function yieldToCrossTraffic(v, n) {
     for (const a of n.in) {
       if (n.signal ? a.axisIndex === v.edge.axisIndex : a.axisIndex !== 0) continue;
@@ -1008,7 +1069,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // Do people on crosswalk p have the WALK? Across the avenue (group 0, the road with the avenue phase) with the cross
   // street's traffic, across any other road with the avenue's.
   function walkOn(p) {
-    return p.group === 0 ? stWalk : aveWalk;
+    return walkSignal(clock + (p.node?.offset || 0), p.group !== 0);
   }
 
   // May p step off the curb onto its crosswalk? On the WALK (early in the parallel traffic's green, so red for the
@@ -1136,7 +1197,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     }
     const e = v.edge;
     const n = e.to;
-    const phase = n.signal ? phaseOf(e) : 'green';
+    const phase = n.signal ? phaseOf(e, v.lane) : 'green';
     // Could it still stop? For a light that isn't green, also by crawling up to it, closer than it stops for lines
     const stoppable = canStopBefore(v, d) || (phase !== 'green' && v.speed * v.speed < 2 * v.driver.b * d);
     if (stoppable) v.commit = null; // could stop after all: decide afresh
@@ -1144,8 +1205,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     // Lamp: a player's siren coming up to the junction: hold at the line rather than pull out in front of it
     if (stoppable && playerSirenCount && !v.isPolice && sirenAhead(n)) return false;
     if (v.move.out[v.lane] < 0) {
-      // missed the lane for the planned move: go wherever this lane goes instead
-      if (d > 12) return false;
+      // missed the lane for the planned move: go wherever this lane goes instead (Lamp: at once if it's come to a stop
+      // short of the last 12 m, behind a queue or its stop line, or it would wait there for ever)
+      if (d > 12 && v.speed > 0.5) return false;
       v.move = chooseMove(v, true);
     }
     const m = v.move;
@@ -1158,7 +1220,10 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
       }
       return false;
     }
-    if (!v.isPolice && (phase === 'red' || (phase === 'amber' && stoppable))) return false;
+    // (Lamp: one driver in seven pushes a fresh amber: still going at a fair speed and within a couple of seconds of
+    // the line, they carry on through rather than brake, as some always do)
+    const pushes = phase === 'amber' && v.bold && v.speed > 6 && d < v.speed * 2.2;
+    if (!v.isPolice && (phase === 'red' || (phase === 'amber' && stoppable && !pushes)) && !rightOnRed(v, e, n, m, phase, d)) return false;
     // Lamp: at a stop sign, a full stop at the line first (once it could still stop for it), then giving way
     if (e.control === 'stop' && !n.signal && !v.isPolice) {
       if (d < 4 && v.speed < 0.6) v.stoppedAt = n;
@@ -1183,6 +1248,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     if (wait < 0 && pedestrianOn(n, f.outSide, laneCoord(f, j), timeTo(v, d + c.len - 3), timeTo(v, d + c.len + 2 * v.half))) return false;
     const vs = v.s - e.len - c.len; // where on f it would be now
     if (!room(f, j, v) || alongside(f, j, v, vs, m.turn !== 'S') || mergingAhead(v, f, j)) return false;
+    // Lamp: standing at the line, a driver takes a moment to see it may go and get moving (its reaction time, 0.6 to
+    // 1 s, counted from the first frame it could, afresh if it couldn't on the frame before), so a queue leaves the line one by one
+    if (v.speed < 0.3 && !v.isPolice && !v.chase) {
+      if (v.readyNode !== n || v.readySeen < lastClock) { v.readyNode = n; v.readyAt = clock + v.reaction; }
+      v.readySeen = clock;
+      if (clock < v.readyAt) return false;
+    }
     v.out = j;
     v.yielding = wait >= 0;
     v.yieldAt = wait;
@@ -1318,7 +1390,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
           worst = Math.min(worst, stopAt(v, d));
         } else {
           worst = Math.min(worst, railAhead(v, f, vs));
-          worst = Math.min(worst, follow(v, f.occ[j], vs), signalAhead(v, f, f.len - vs - v.half));
+          worst = Math.min(worst, follow(v, f.occ[j], vs), signalAhead(v, f, f.len - vs - v.half, j));
           // pulling in to wait inside: slow down for that spot already if it will have to wait there
           if (v.yielding && holdsOn(v, pedsOut(v, d + c.len - 3))) worst = Math.min(worst, stopAt(v, d + v.half + v.yieldAt, 0.5));
         }
@@ -1327,7 +1399,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
         const o = c && !v.claimed && mergingAhead(v, f, j);
         if (o) worst = Math.min(worst, Math.max(-v.driver.b, brake(v, o.s - o.v.half - vs - v.half, o.v.speed)));
         let vt = c ? bendSpeed(v, c) : Infinity;
-        const cautious = e.to.signal ? v.isPolice && phaseOf(e) !== 'green' : e.axisIndex !== 0 || !!e.control;
+        const cautious = e.to.signal ? v.isPolice && phaseOf(e, v.lane) !== 'green' : e.axisIndex !== 0 || !!e.control;
         // (a cruiser chasing the player takes a red at a brisk 30 mph, its siren clearing the way, not at a crawl)
         if (cautious) vt = Math.min(vt, v.chase ? 13 : 5);
         cap = Math.sqrt(vt * vt + 5 * Math.max(0, d));
@@ -1335,7 +1407,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     } else {
       const f = v.move.to;
       const vs = v.cs - v.conn.len;
-      worst = Math.min(follow(v, f.occ[v.out], vs), follow(v, e.occ[v.lane], e.len + v.cs), signalAhead(v, f, f.len - vs - v.half), railAhead(v, f, vs));
+      worst = Math.min(follow(v, f.occ[v.out], vs), follow(v, e.occ[v.lane], e.len + v.cs), signalAhead(v, f, f.len - vs - v.half, v.out), railAhead(v, f, vs));
       // someone crossing the way out: wait for them inside the intersection, short of the 2.5 m crosswalk
       const d = v.conn.len - 3 - v.cs - v.half;
       const peds = v.chase ? null : pedsOut(v, d);
@@ -1557,7 +1629,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
     let bend = Math.atan2(bendB.dx, bendB.dz) - Math.atan2(bendA.dx, bendA.dz);
     bend -= Math.round(bend / (Math.PI * 2)) * Math.PI * 2;
     // ...plus how far right of its path it heads, and how far right of where it should be it is (nose and dl - evade)
-    const off = v.dl - (v.evade || (clock < v.pullUntil ? v.pullOff : 0));
+    const off = v.dl - (v.evade || (clock < v.pullUntil ? v.pullOff : centreTarget(v)));
     const want = Math.atan((wheelbase * bend) / 2) + v.nose + Math.atan(((panic ? 3 : 1.2) * off) / (1 + v.speed));
     const lateral = panic ? v.driver.grip : 1.3 * v.driver.aLat; // the sideways acceleration it steers up to
     const most = Math.min(v.driver.lock, Math.atan((lateral * wheelbase) / Math.max(v.speed * v.speed, 1e-3)));
@@ -1646,6 +1718,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
     const turn = v.move.turn;
     if (v.evade) v.blink = 0; // no time to signal a swerve
+    else if (v.centre) v.blink = -1; // (Lamp: moving over into the centre turn lane, and waiting there, to turn left)
     else if (Math.abs(v.dl) > 0.3 && Math.abs(v.dlv) > 0.05) v.blink = v.dl > 0 ? -1 : 1;
     else if (turn !== 'S' && (v.conn || v.edge.len - v.s < 35)) v.blink = turn === 'R' ? 1 : -1;
     else v.blink = 0;
@@ -3055,11 +3128,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
 
   function update(dt, elapsed, focusPos = null, playerEntity = null, activeMode = 'car', camera = null, camera2 = null,
     playerEntity2 = null, activeMode2 = null) {
+    lastClock = clock; // (the frame before's: what a vehicle checked then was seen then)
     clock = elapsed;
-    avePhase = signalPhase(elapsed, true);
-    stPhase = signalPhase(elapsed, false);
-    aveWalk = walkSignal(elapsed, true);
-    stWalk = walkSignal(elapsed, false);
     focusX = focusPos ? focusPos.x : 0;
     focusZ = focusPos ? focusPos.z : 140;
     // Lamp: from high up (the helicopter, the aerial camera) the town in view is ahead and below, not under the camera:

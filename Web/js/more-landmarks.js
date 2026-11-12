@@ -562,20 +562,27 @@ function dome(B, ring, layers, col) {
   B.prism(scaleRing(ring, last[0]), last[1] - 0.02, last[1], col);
 }
 
+// (Lamp: as it stands since its 2013 renovation: a red brick base with its glass entrances, a dark glass band under the
+// original cream concrete crown ring, which overhangs it, and the low dome over that)
+const CRISLER_CROWN = [0.84, 0.81, 0.72];
 function crisler(B, T) {
   const s = surveyAt(140, 1620);
   if (!s) return null;
   const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y;
-  B.prism(r, g - 2, Y(7.4), CONCRETE);
-  T.band(r, Y(7.4), Y(9.4), BLUE, 0.05);
-  T.band(r, Y(9.4), Y(10), MAIZE, 0.08);
-  T.walls(r, Y(10), Y(11), CONCRETE);
-  // concrete fins around the wall, glass between them at the doors' level
+  // (the bowl is sunk into its site: the street outside stands about 4.5 m over the survey's lowest ground, so the
+  // brick base runs from there 6 m up, the glass band over it, then the crown and the low dome)
+  const st = 4.5;
+  B.prism(r, g - 2, Y(st + 6), BRICK_RED);
+  T.band(r, Y(st + 6), Y(st + 6.4), CONCRETE, 0.08);
+  B.prism(insetRing(r, 1.2), Y(st + 6.4), Y(st + 8.2), GLASS);
+  // the crown: overhanging the glass, its underside a shade darker
+  B.prism(insetRing(r, -1.2), Y(st + 8.2), Y(st + 8.6), [0.62, 0.6, 0.54]);
+  B.prism(insetRing(r, -1.6), Y(st + 8.6), Y(st + 14), CRISLER_CROWN);
+  // glass doors in the brick at the street's level
   for (const e of edgesOf(r)) {
-    for (let u = 1; u < e.L - 0.5; u += 4.5) T.ebox(e, u - 0.3, u + 0.3, Y(0), Y(11.2), 0, 0.7, CONCRETE);
-    for (let u = 3.25; u < e.L - 2; u += 4.5) T.ebox(e, u - 1.7, u + 1.7, Y(0.3), Y(3.4), 0.02, 0.06, GLASS, B.glass);
+    for (let u = 3.25; u < e.L - 2; u += 4.5) T.ebox(e, u - 1.7, u + 1.7, Y(st + 0.3), Y(st + 3.4), 0.02, 0.06, GLASS, B.glass);
   }
-  dome(B, r, [[1.03, Y(11)], [0.86, Y(15)], [0.64, Y(19.5)], [0.38, Y(22.6)], [0.12, Y(24)]], [0.78, 0.78, 0.76]);
+  dome(B, r, [[1.0, Y(st + 14)], [0.8, Y(st + 16.5)], [0.5, Y(st + 18.6)], [0.12, Y(st + 19.5)]], [0.7, 0.7, 0.68]);
   return { s, maxY: Y(24) };
 }
 
@@ -620,7 +627,7 @@ function yost(B, T) {
 // Kerrytown Market & Shops: three old brick commercial buildings on the block between N Fourth and N Fifth Aves south
 // of E Kingsley, joined into one market of shops in 1969, each still its own height and brick, round a small courtyard,
 // with the Farmers Market's sheds against its south side. On the survey's three outlines (found by a point inside each):
-// - the corner building at Kingsley and Fifth: two storeys of red brick under a slate gable that runs along Kingsley,
+// - the corner building at Kingsley and Fifth: two storeys of whitewashed brick under a slate gable that runs along Kingsley,
 //   its gable end to Fifth Ave;
 // - the Fifth Ave building south of the courtyard: three storeys of warm orange-red brick under a corbelled parapet,
 //   the Kerrytown Chime's little open timber belfry on its roof by Fifth;
@@ -629,7 +636,8 @@ function yost(B, T) {
 // shopfronts with their doors along the streets (Fifth, and the sides toward the market and Detroit St; no awnings);
 // back walls plainer, with fewer windows; and wooden loading-dock decks under shed roofs on posts facing each other
 // across the courtyard, with steps down. The brick is brickMaterial's courses; the glass is the landmarks' (lit at night).
-const KT_BRICK = { corner: [0.5, 0.25, 0.19], fifth: [0.6, 0.35, 0.24], fourth: [0.4, 0.26, 0.2] };
+// (the corner building's brick is whitewashed, worn thin: an off-white with the brick's warmth coming through)
+const KT_BRICK = { corner: [0.8, 0.76, 0.7], fifth: [0.6, 0.35, 0.24], fourth: [0.4, 0.26, 0.2] };
 const KT_ARCH = [0.36, 0.17, 0.13];
 const KT_STONE = [0.7, 0.66, 0.58];
 const KT_BASE = [0.46, 0.43, 0.39];
@@ -938,6 +946,7 @@ function kerrytown(B, T) {
 // produce crates on some. The north shed along the Kerrytown side, the long one along Detroit St and two short sheds
 // off it, and the stub by Fifth Ave; laid out by hand on the outline (found by a point inside it). Open: only the posts
 // stop anyone.
+const MARKET_PAVERS = [0.56, 0.3, 0.24];
 function farmersMarket(B, T) {
   const s = surveyAt(168, -470);
   if (!s) return null;
@@ -961,6 +970,10 @@ function farmersMarket(B, T) {
     const gy = Math.min(groundHeight(...[a[0], a[1]]), groundHeight(b[0], b[1]), groundHeight((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)) - 0.15;
     const eave = gy + 3.5, ridge = gy + 5.6, hw = w / 2, o = 0.6;
     maxY = Math.max(maxY, ridge);
+    // the floor: red brick pavers under the roof, out to its eaves, a hair over the ground at each corner (not the lawn
+    // or the planting beds the yards put there, which stand LIFT.lawn up)
+    const fl = (u, v) => { const p = at(u, v, 0); p[1] = groundHeight(p[0], p[2]) + LIFT.lawn + LIFT.over; return p; };
+    B.quad(B.brick, fl(-0.4, -(hw + o)), fl(L + 0.4, -(hw + o)), fl(L + 0.4, hw + o), fl(-0.4, hw + o), MARKET_PAVERS);
     // the roof's two slopes, out past the posts, a seam every 0.6 m and the ridge's cap
     const ey = eave - (o * (ridge - eave)) / hw;
     for (const sg of [-1, 1]) {
@@ -1138,21 +1151,34 @@ function districtLibrary(B, T) {
   return out;
 }
 
+// (Lamp: re-clad since in a teal glass curtain wall, its grid of slim mullions and spandrel lines a floor apart, over the
+// cream concrete base with its lobby glass and the deep cantilevered canopy over the entrance on William)
+const TP_GLASS = [0.3, 0.55, 0.58];
+const TP_MULL = [0.6, 0.64, 0.64];
 function towerPlaza(B, T) {
   const s = surveyAt(496, 182);
   if (!s) return null;
   const r = s.ring, g = groundOf(r) - 0.3, Y = (y) => g + y, h = s.height;
-  B.prism(r, g - 2, Y(4.2), CONCRETE);
-  T.walls(r, Y(4.2), Y(h - 4), BRICK_BROWN);
-  const rows = [];
-  for (let y = 5; y < h - 6; y += 3.05) rows.push([y, y + 1.8]);
-  B.ringWindows(r, rows, 2.7, 1.2, GLASS, 0.03, g);
-  // the lobby's glass under a canopy, the top band and the penthouse
-  for (const e of edgesOf(r)) if (e.L > 8) T.ebox(e, 1.5, e.L - 1.5, Y(0.3), Y(3.8), 0.02, 0.06, GLASS, B.glass);
-  T.band(r, Y(4), Y(4.4), CONCRETE, 0.4);
-  T.walls(r, Y(h - 4), Y(h), CONCRETE);
-  B.prism(scaleRing(r, 0.45), Y(h), Y(h + 4.5), CONCRETE);
-  return { s, maxY: Y(h + 4.5) };
+  B.prism(r, g - 2, Y(5), CONCRETE);
+  // the curtain wall: the glass a hair inside the mullions, a spandrel line each floor
+  B.prism(insetRing(r, 0.3), Y(5), Y(h - 1.2), [0.2, 0.25, 0.27]);
+  for (const e of edgesOf(r)) T.ebox(e, 0, e.L, Y(5), Y(h - 1.2), -0.06, 0, TP_GLASS, B.glass);
+  for (let y = 5 + 3.05; y < h - 1.5; y += 3.05) T.band(r, Y(y - 0.06), Y(y + 0.06), TP_MULL, 0.04);
+  for (const e of edgesOf(r)) {
+    for (let u = 0.75; u < e.L - 0.3; u += 1.5) T.ebox(e, u - 0.04, u + 0.04, Y(5), Y(h - 1.2), 0, 0.08, TP_MULL);
+    // the lobby's glass behind the base's columns
+    if (e.L > 8) T.ebox(e, 1.5, e.L - 1.5, Y(0.3), Y(3.8), 0.02, 0.06, GLASS, B.glass);
+  }
+  T.band(r, Y(4.6), Y(5.1), CONCRETE, 0.4);
+  T.walls(r, Y(h - 1.2), Y(h), CONCRETE);
+  // the entrance canopy on the street (south) side: a deep slab out over the steps on square columns
+  const e = edgeFacing(r, 0, 1);
+  if (e) {
+    const u0 = e.L * 0.2, u1 = e.L * 0.8;
+    T.ebox(e, u0, u1, Y(3.9), Y(4.6), 0, 5.5, CONCRETE);
+    for (const u of [u0 + 0.6, (u0 + u1) / 2, u1 - 0.6]) T.ebox(e, u - 0.3, u + 0.3, Y(0), Y(3.9), 4.6, 5.2, CONCRETE);
+  }
+  return { s, maxY: Y(h) };
 }
 
 // The Gandy Dancer: the 1886 Michigan Central depot, Richardsonian Romanesque in rough fieldstone with red sandstone
@@ -1865,7 +1891,13 @@ function brickMaterial() {
   const near = float(1).sub(smoothstep(9, 24, positionWorld.distance(cameraPosition))).mul(step(abs(n.y), 0.5));
   const joint = max(step(fract(y), 0.15), step(fract(u), 0.045)).mul(near);
   const tone = mx_noise_float(vec3(floor(u), row, 0.5)).mul(0.08).mul(near).add(1);
-  m.colorNode = vertexColor().mul(tone).mul(float(1).sub(joint.mul(0.28)));
+  // (Lamp: and a flat face, the Farmers Market's floor, is brick pavers laid in running bond, 100 by 200 mm, sanded
+  // joints a little lighter)
+  const flat = step(0.5, abs(n.y)).mul(float(1).sub(smoothstep(8, 22, positionWorld.distance(cameraPosition))));
+  const py = positionWorld.z.div(0.1), prow = floor(py), pu = positionWorld.x.div(0.2).add(prow.mul(0.5));
+  const pjoint = max(step(fract(py), 0.1), step(fract(pu), 0.05)).mul(flat);
+  const ptone = mx_noise_float(vec3(floor(pu), prow, 3.5)).mul(0.14).mul(flat).add(1);
+  m.colorNode = vertexColor().mul(tone).mul(ptone).mul(float(1).sub(joint.mul(0.28))).mul(pjoint.mul(0.25).add(1));
   return m;
 }
 

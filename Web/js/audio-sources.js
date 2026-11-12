@@ -168,7 +168,7 @@ class CityAudioSources {
       if (d2 <= MOTOR_RANGE * MOTOR_RANGE) {
         this.snapshot.traffic += (1 - d2 / (MOTOR_RANGE * MOTOR_RANGE)) * (0.2 + 0.8 * unit(v.speed / 12));
       }
-      const green = !v.edge.to.signal || signalPhase(elapsed, v.edge.axisIndex === 0) === 'green';
+      const green = !v.edge.to.signal || signalPhase(elapsed + (v.edge.to.offset || 0), v.edge.axisIndex === 0, !!v.edge.to.leftPhase) === 'green';
       const blocked = v.wait > 2 && v.speed < 0.5 && v.gap < 8 && v.leaderSpeed < 0.5 && green && !v.conn && !v.yielding;
       this.motor(v, v.bus ? 'bus' : carVoice(v.bodyType, v.engine), v.x, (v._gy ?? 0) + 0.7, v.z,
         v.speed, roadLoad(v.speed, v.acc, v.driver.a), v.yaw + v.yawOffset, siren, false, seed, blocked);

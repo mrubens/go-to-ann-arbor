@@ -239,8 +239,8 @@ function buildBigHouse(group, colliders) {
   // The press box and suites (2010) along the west side, the suites along the east, over the top rows. Toward the
   // field, tiers of glass in slim mullions (suites, club and, on the west, the press box at the top) each standing out
   // over the one below, a blue panelled fascia under each with a maize line, a maize stripe under the precast cap.
-  // Toward the street, brick in tall bays between proud piers, two storeys of glass and a precast spandrel in each
-  // bay, a precast cap; stair and lift cores at both ends rising past the roof, its camera booths and units on top.
+  // Toward the street, brick bays between proud piers, two tiers of round arches set from the sidewalk (the gates and
+  // the concourse glass), a precast cap; stair and lift cores at both ends rising past the roof, booths and units on top.
   // Brick down to the ground on the outside. Two meshes (masonry, glass: lit at night) of vertex colours.
   const SB = builder();
   const lin = (hex) => { const c = new THREE.Color(hex); return [c.r ** (1 / 2.2), c.g ** (1 / 2.2), c.b ** (1 / 2.2)]; };
@@ -284,19 +284,39 @@ function buildBigHouse(group, colliders) {
     xb(topFace, topFace + 0.25, t.top - 2.4, t.top - 1.2, z0 + 3, z1 - 3, MAIZE);
     xb(t.depth, topFace + 0.3, prevTop + 0.12, t.top - 2.4, z0 + 3, z1 - 3, BLUE);
     xb(-0.4, topFace + 0.4, t.top - 0.1, t.top + 0.5, z0 - 0.3, z1 + 0.3, PRECAST);
-    // the street side: piers, two storeys of glass a bay, a precast spandrel, the cap
-    const bays = Math.round((t.half * 2 - 16) / 4.4), bw = (t.half * 2 - 16) / bays;
+    // the street side (Lamp: as the 2010 brick wall is, with its photo): brick bays between proud piers, two tiers of
+    // tall round-arched openings, the gates' at the sidewalk on precast panels and the concourse's glass above, a
+    // precast string course between; the arches' heads stepped to their curve
+    const bays = Math.round((t.half * 2 - 16) / 6.4), bw = (t.half * 2 - 16) / bays;
+    const arch = (za, zb, ya, spring, col, m) => {
+      const r = (zb - za) / 2, zc = (za + zb) / 2;
+      xb(-0.05, 0.02, ya, spring, za, zb, col, m);
+      for (let i = 0; i < 5; i++) {
+        const y = (i + 0.5) / 5 * r, hw = Math.sqrt(r * r - y * y);
+        xb(-0.05, 0.02, spring + (i / 5) * r, spring + ((i + 1) / 5) * r, zc - hw, zc + hw, col, m);
+      }
+      // the brick arch round it, a header course
+      for (let i = 0; i < 6; i++) {
+        const a0 = (i / 6) * Math.PI, a1 = ((i + 1) / 6) * Math.PI, R = r + 0.25;
+        const za0 = zc - Math.cos(a0) * R, za1 = zc - Math.cos(a1) * R, ya0 = spring + Math.sin(a0) * R, ya1 = spring + Math.sin(a1) * R;
+        xb(-0.12, 0, Math.min(ya0, ya1) - 0.12, Math.max(ya0, ya1) + 0.12, Math.min(za0, za1), Math.max(za0, za1), BRICK_DARK);
+      }
+    };
+    // (the sidewalk outside stands well over the bowl's ground: both tiers are set from it)
+    const st = Math.max(0, groundHeight(X(-4), cz) - G);
     for (let k = 0; k <= bays; k++) {
       const z = z0 + 8 + k * bw;
-      xb(-0.45, 0, y0 - 3, t.top - 0.1, z - 0.45, z + 0.45, BRICK);
+      xb(-0.45, 0, -3, t.top - 0.1, z - 0.5, z + 0.5, BRICK);
       if (k === bays) break;
-      for (let fl = 0; fl + 6.5 <= t.top - y0 - 2; fl += 7.2) {
-        xb(-0.05, 0.02, y0 + fl + 0.8, y0 + fl + 5.6, z + 0.6, z + bw - 0.6, SGLASS, SB.glass);
-        xb(-0.12, 0, y0 + fl + 3.1, y0 + fl + 3.25, z + 0.6, z + bw - 0.6, MULL);
-        xb(-0.12, 0, y0 + fl + 0.8, y0 + fl + 5.6, z + bw / 2 - 0.05, z + bw / 2 + 0.05, MULL);
-        xb(-0.2, 0, y0 + fl + 5.6, y0 + fl + 7.2, z + 0.5, z + bw - 0.5, PRECAST);
-      }
+      const za = z + 0.95, zb = z + bw - 0.95, r = (zb - za) / 2;
+      // the gates at the sidewalk: an iron-dark opening on a precast panel
+      xb(-0.08, 0.02, st - 1, st + 1.6, za, zb, PRECAST);
+      arch(za, zb, st + 1.6, st + 6.2 - r, MULL);
+      // the concourse's tall arched glass, a transom bar across
+      arch(za, zb, st + 7.4, st + 14.2 - r, SGLASS, SB.glass);
+      xb(-0.12, 0, st + 10.6, st + 10.75, za, zb, MULL);
     }
+    xb(-0.25, 0, st + 6.5, st + 6.9, z0 + 8, z1 - 8, PRECAST);
     // the cores at both ends, a little proud, past the roof
     for (const [za, zb] of [[z0, z0 + 8], [z1 - 8, z1]]) {
       xb(-0.6, t.depth + 0.4, y0 - 3, t.top + 3.2, za, zb, BRICK);

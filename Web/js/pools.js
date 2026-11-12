@@ -263,6 +263,9 @@ function createPools(group, data) {
   const wall = { pos: [], tile: [], idx: [] };
   const rim = { pos: [], idx: [] };
   const deck = { pos: [], tw: [], idx: [] };
+  // (Lamp: a public pool's fence: chain link hung with a blue windscreen, as the city's pools are, 1.5 m out from its
+  // deck, on galvanized posts)
+  const screen = { pos: [], idx: [] }, posts = [], colliders = [];
   const ropes = [], ladders = [], blocks = [], chairs = [];
   // a seat facing `in` (x, z) at (x, y, z): its yaw turns local +z that way
   const facing = (inX, inZ) => Math.atan2(inX, inZ);
@@ -440,6 +443,31 @@ function createPools(group, data) {
         const a = db + i * 3, b = db + ((i + 1) % m) * 3;
         deck.idx.push(a, b, a + 1, a + 1, b, b + 1, a + 1, b + 1, a + 2, a + 2, b + 1, b + 2);
       }
+      const ring = offset(dense, COPING + DECK + 1.5), sb = screen.pos.length / 3;
+      for (let i = 0; i < m; i++) {
+        const [fx, fz] = ring[i], g = groundHeight(fx, fz) + LIFT.lawn;
+        screen.pos.push(fx, g + 0.08, fz, fx, g + 1.95, fz);
+        posts.push([fx, g, fz]);
+      }
+      // the gate: the fence's longest run left open, so it can be walked in to swim; the rest is solid (thin boxes
+      // along it, as the freeway barriers are)
+      let gate = 0, gl = 0;
+      for (let i = 0; i < m; i++) {
+        const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % m], l = Math.hypot(bx - ax, bz - az);
+        if (l > gl) { gl = l; gate = i; }
+      }
+      for (let i = 0; i < m; i++) {
+        if (i === gate) continue;
+        const a = sb + i * 2, b = sb + ((i + 1) % m) * 2;
+        screen.idx.push(a, b, a + 1, a + 1, b, b + 1);
+        const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % m], len = Math.hypot(bx - ax, bz - az);
+        if (len < 0.2) continue;
+        const ux = (bx - ax) / len, uz = (bz - az) / len, hx = len / 2, hz = 0.1, cx = (ax + bx) / 2, cz = (az + bz) / 2;
+        const ex = Math.abs(ux) * hx + Math.abs(uz) * hz, ez = Math.abs(uz) * hx + Math.abs(ux) * hz;
+        const y0 = Math.min(groundHeight(ax, az), groundHeight(bx, bz));
+        colliders.push({ minX: cx - ex, maxX: cx + ex, minZ: cz - ez, maxZ: cz + ez, minY: y0 - 0.3, maxY: y0 + LIFT.lawn + 2.1,
+          obb: { cx, cz, hx, hz, cs: ux, sn: -uz }, thin: true });
+      }
     }
 
     // ladders down the long walls, two metres in from each end (one near the deep end in a small pool)
@@ -525,6 +553,20 @@ function createPools(group, data) {
     const rimMesh = mesh({ position: [rim.pos, 3] }, rim.idx, copingMaterial(), 'Pool coping', true);
     rimMesh.castShadow = true;
     if (deck.idx.length) mesh({ position: [deck.pos, 3], tw: [deck.tw, 2] }, deck.idx, deckMaterial(), 'Pool deck');
+    if (screen.idx.length) {
+      const sg = new THREE.BufferGeometry();
+      sg.setAttribute('position', new THREE.Float32BufferAttribute(screen.pos, 3));
+      sg.setIndex(screen.idx);
+      sg.computeVertexNormals();
+      const sm = new THREE.Mesh(sg, new THREE.MeshStandardNodeMaterial({ color: 0x1f4878, roughness: 0.85, side: THREE.DoubleSide }));
+      sm.name = 'Pool fence screen';
+      sm.castShadow = sm.receiveShadow = true;
+      group.add(sm);
+      const pg = mergeGeometries(posts.map(([x, y, z]) => new THREE.CylinderGeometry(0.035, 0.035, 2.1, 6).translate(x, y + 1.05, z)));
+      const pm = new THREE.Mesh(pg, new THREE.MeshStandardNodeMaterial({ color: 0x9a9d9e, roughness: 0.5, metalness: 0.6 }));
+      pm.name = 'Pool fence posts';
+      group.add(pm);
+    }
     if (ropes.length) {
       const r = new THREE.Mesh(mergeGeometries(ropes), ropeMaterial());
       wetMaterials.push(r.material);
@@ -606,8 +648,8 @@ function createPools(group, data) {
     return true;
   }
 
-  log(`[pools] ${pools.length} pools (${pools.filter((p) => p.kind === 1).length} big ones with lanes), ${(water.pos.length + floor.pos.length + wall.pos.length + rim.pos.length + deck.pos.length) / 3} vertices, ${ropes.length} lane ropes, ${ladders.length} ladders, ${chairs.length} lifeguard chairs`);
-  return { at, wet, trap, setSeason, get open() { return open; }, count: pools.length };
+  log(`[pools] ${pools.length} pools (${pools.filter((p) => p.kind === 1).length} big ones with lanes), ${(water.pos.length + floor.pos.length + wall.pos.length + rim.pos.length + deck.pos.length) / 3} vertices, ${ropes.length} lane ropes, ${ladders.length} ladders, ${chairs.length} lifeguard chairs, ${colliders.length} solid fence lengths`);
+  return { at, wet, trap, setSeason, get open() { return open; }, count: pools.length, colliders };
 }
 
 function smooth01(t) {

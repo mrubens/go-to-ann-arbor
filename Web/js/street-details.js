@@ -24,12 +24,102 @@ import { REAL_TREES, REAL_TREE_KINDS, REAL_TREE_HEIGHTS } from './tree-geodata.j
 import { placeStreetTrees, dropCanopyFill } from './tree-placements.js';
 import { yardTreeSites, yardLeaves } from './drafted-yards.js';
 import { woodsTrees } from './yards.js';
+import { LIFT } from './ground-lifts.js';
+import { REAL_BUILDINGS } from './building-geodata.js';
 import { CHAMPION_TREES } from './champion-trees.js';
 import { createFoodCartParts } from './street-props.js';
 import { pavedPlazaRects, bigParkClearings, parkTreeSites, parkLampSites, parkLampMeshes } from './city-grid.js';
 import { bryantParkLawn } from './landmarks.js';
 import { GEO } from './city-geodata.js';
 import { createParkLampPoolMaterial } from './tsl-materials.js';
+
+// the surveyed buildings in 25 m cells (by their boxes), for the woods' understory to keep out of yards
+let buildingCells = null;
+
+function nearBuildings(cx, cz) {
+  if (!buildingCells) {
+    buildingCells = new Map();
+    for (const b of REAL_BUILDINGS) {
+      for (let i = Math.floor((b.minX - 25) / 25); i <= Math.floor((b.maxX + 25) / 25); i++) {
+        for (let j = Math.floor((b.minZ - 25) / 25); j <= Math.floor((b.maxZ + 25) / 25); j++) {
+          const k = i + ',' + j;
+          if (!buildingCells.has(k)) buildingCells.set(k, []);
+          buildingCells.get(k).push(b);
+        }
+      }
+    }
+  }
+  return buildingCells.get(cx + ',' + cz) || [];
+}
+
+// Lamp: the floor of the woods: under each tree of a wood (yards.js woodsTrees kind 0, and the canopy's own woods
+// away from buildings, as the understory has them) a ragged patch of fallen leaves, dead wood and low brush 4 to 6 m
+// across, laid just over the lawn on the slope of the ground there, the patches running together under a wood so its floor is brown and
+// dark green rather than the mown lawn round the houses. [x, z, r, ...]; drawn within 220 m
+let woodsFloorTexture = null;
+function woodsFloor(list) {
+  if (!woodsFloorTexture) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d');
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    // a ragged blob: overlapping blotches, densest in the middle, mostly the shaded dark greens of low brush and
+    // ground cover, with some of last year's leaves
+    for (let k = 0; k < 160; k++) {
+      const a = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * 46, r = 5 + rnd() * 14;
+      const v = rnd();
+      g.fillStyle = v < 0.7 ? `rgb(${44 + rnd() * 18},${60 + rnd() * 20},${28 + rnd() * 12})`
+        : v < 0.88 ? `rgb(${58 + rnd() * 16},${70 + rnd() * 16},${34 + rnd() * 10})` : `rgb(${84 + rnd() * 20},${72 + rnd() * 16},${48 + rnd() * 12})`;
+      g.beginPath();
+      g.arc(64 + Math.cos(a) * d, 64 + Math.sin(a) * d, r, 0, Math.PI * 2);
+      g.fill();
+    }
+    woodsFloorTexture = new THREE.CanvasTexture(c);
+    woodsFloorTexture.colorSpace = THREE.SRGBColorSpace;
+  }
+  const n = list.length / 3;
+  const mat = new THREE.MeshStandardNodeMaterial({ map: woodsFloorTexture, alphaTest: 0.5, roughness: 1, metalness: 0 });
+  const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat, n);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), q2 = new THREE.Quaternion(), p = new THREE.Vector3(),
+    sc = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), nrm = new THREE.Vector3(), tint = new THREE.Color();
+  // (kept off the sidewalk: a patch no wider than its distance in from the block's sidewalk ring allows)
+  const SIDEWALK = GEO.frame?.sidewalk || 4.6;
+  const inFromCurb = (x, z) => {
+    const b = blockAt(x, z);
+    if (!b) return 0;
+    let d = Infinity;
+    const P = b.poly;
+    for (let a = 0, c = P.length - 1; a < P.length; c = a++) {
+      const ax = P[c].x, az = P[c].z, ex = P[a].x - ax, ez = P[a].z - az, L = ex * ex + ez * ez || 1;
+      const t = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / L));
+      d = Math.min(d, Math.hypot(x - ax - t * ex, z - az - t * ez));
+    }
+    return d - SIDEWALK - 0.4;
+  };
+  let kept = 0;
+  for (let i = 0; i < n; i++) {
+    const x = list[i * 3], z = list[i * 3 + 1], r = list[i * 3 + 2];
+    const size = Math.min(8 + r * 4, 2 * inFromCurb(x, z));
+    if (size < 3) continue;
+    // the ground's slope there, from its heights a couple of metres either way
+    const hx = groundHeight(x + 2, z) - groundHeight(x - 2, z), hz = groundHeight(x, z + 2) - groundHeight(x, z - 2);
+    nrm.set(-hx / 4, 1, -hz / 4).normalize();
+    q.setFromUnitVectors(up, nrm).multiply(q2.setFromAxisAngle(up, r * 97));
+    mesh.setMatrixAt(kept, m4.compose(p.set(x, groundHeight(x, z) + LIFT.lawn + LIFT.over, z), q, sc.set(size, 1, size)));
+    mesh.setColorAt(kept++, tint.setScalar(0.8 + ((r * 31.7) % 1) * 0.3));
+  }
+  mesh.count = kept;
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.instanceColor.needsUpdate = true;
+  mesh.computeBoundingSphere();
+  mesh.name = 'WoodsFloor';
+  mesh.receiveShadow = true;
+  mesh.userData.cullDistance = 220;
+  mesh.userData.terrain = 'set';
+  log(`[trees] woods floor: ${kept} patches (${n - kept} by a sidewalk left out)`);
+  return mesh;
+}
 
 // Instanced street furniture, traffic signals, trees and nearby light pools.
 
@@ -96,12 +186,13 @@ function createTrafficSignalLensMaterial(isAvenueHead, clock) {
 // Pedestrian signal for crossing alongside the avenue: WALK, then a flashing hand until the avenue's amber, then a
 // steady hand
 function createWalkSignalMaterial(clock) {
-  const { cycle, avenueAmber, walk } = SIGNAL_TIMING;
+  const { cycle, leftAmber, avenueAmber, walk } = SIGNAL_TIMING;
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.colorNode = Fn(() => {
-    const t = mod(clock, cycle);
-    const isWalk = float(1.0).sub(step(walk, t));
-    const isFlashing = step(walk, t).mul(float(1.0).sub(step(avenueAmber, t)));
+    // (Lamp: from the end of the avenue's lead left turns, when its through traffic gets the green)
+    const t = mod(clock, cycle).sub(leftAmber);
+    const isWalk = step(0, t).mul(float(1.0).sub(step(walk, t)));
+    const isFlashing = step(walk, t).mul(float(1.0).sub(step(avenueAmber - leftAmber, t)));
     const handLit = float(1.0).sub(isFlashing.mul(step(0.5, fract(t))));
     const hand = mix(color(0x14181e), color(0xff5518), handLit);
     return mix(hand, color(0xf4f9ff), isWalk);
@@ -109,7 +200,7 @@ function createWalkSignalMaterial(clock) {
   return mat;
 }
 
-function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStructure = null, draftedYard = []) {
+function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStructure = null, draftedYard = [], keepOut = []) {
   const group = new THREE.Group();
   group.name = 'StreetDetails';
 
@@ -943,6 +1034,9 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   for (let i = 0; i < AM.length; i += 4) {
     const x = AM[i], z = AM[i + 1], kind = FURN_KINDS[AM[i + 2]];
     if (!kind || !blockAt(x, z)) continue; // a point in a street is a slip of the map
+    // (Lamp: nor one under a field's bleachers (bleachers.js `keepOut`), where the map's bench or table is the stand's
+    // own seating: Allmendinger Park's ball field)
+    if (keepOut.some((b) => x > b.minX - 2.5 && x < b.maxX + 2.5 && z > b.minZ - 2.5 && z < b.maxZ + 2.5)) continue;
     // one whose way the map doesn't say (OpenStreetMap's, yaw 9): on a sidewalk it faces the street, in a park as it falls
     let yaw = AM[i + 3];
     if (yaw === 9) yaw = isOnCurbIsland(x, z, 0) ? Math.PI / 2 - towardStreet(x, z) : (Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1) * Math.PI * 2;
@@ -1437,17 +1531,25 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
   // Lamp: the understory of the mapped woods (OpenStreetMap's woods, yards.js woodsTrees kind 0): a bush or a clump of
   // saplings beside three in four of their trees, drawn only within 160 m, so a wood reads as a thicket from its road
   if (TIER.name !== 'phone') {
-    const W = woodsTrees(), bushes = [];
+    const W = woodsTrees(), bushes = [], floor = [];
     const greens = [0x3d5c2a, 0x4a6a30, 0x557236, 0x3a5528, 0x5e7a3a];
+    // (Lamp: a wood's tree has its brush: a bush or a clump of saplings, and a second, smaller one round it from the
+    // first in most, and the floor of leaves and brush under it, not the mown lawn: woodsFloor below)
+    const brush = (x0, z0, r, second) => {
+      for (let k = 0; k < (second ? 2 : 1); k++) {
+        const a = r * 40 + k * 2.4, d = 1.6 + ((r * 7.3 + k * 0.37) % 1) * 2.6, x = x0 + Math.cos(a) * d, z = z0 + Math.sin(a) * d;
+        const rad = (1.3 + ((r * 13.1 + k * 0.53) % 1) * 1.4) * (k ? 0.8 : 1);
+        bushes.push({ x, y: groundHeight(x, z) + 0.13, z, yaw: a, w: rad * 2.2, h: rad * 1.4, len: rad * 1.9,
+          color: new THREE.Color(greens[Math.floor(r * 50 + k) % greens.length]) });
+      }
+    };
     for (let i = 0; i < W.length; i += 3) {
       if (W[i + 2] !== 0) continue;
       const x0 = W[i], z0 = W[i + 1];
       const r = Math.abs(Math.sin(x0 * 12.9898 + z0 * 78.233) * 43758.5453) % 1;
-      if (r > 0.75) continue;
-      const a = r * 40, d = 1.6 + (r * 7.3 % 1) * 2.6, x = x0 + Math.cos(a) * d, z = z0 + Math.sin(a) * d;
-      const rad = 1.3 + (r * 13.1 % 1) * 1.4;
-      bushes.push({ x, y: groundHeight(x, z) + 0.13, z, yaw: a, w: rad * 2.2, h: rad * 1.4, len: rad * 1.9,
-        color: new THREE.Color(greens[Math.floor(r * 50) % greens.length]) });
+      floor.push(x0, z0, r);
+      if (r > 0.85) continue;
+      brush(x0, z0, r, r < 0.6);
     }
     // and the canopy's trees in the city's nature areas (the Arb, Bird Hills, the Barton, Furstenberg and Dolph nature
     // areas...), parks left wild that the woods map doesn't cover, a bush beside half of them
@@ -1463,6 +1565,48 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
       bushes.push({ x, y: groundHeight(x, z) + 0.13, z, yaw: a, w: rad * 2.2, h: rad * 1.4, len: rad * 1.9,
         color: new THREE.Color(greens[Math.floor(r * 50) % greens.length]) });
     }
+    // (Lamp: and the canopy's own woods on private land and in parks: a canopy tree (yards.js woodsTrees kind 1 or 2)
+    // with three or more others within 10 m, in a run of unbroken canopy, and no building within 15 m, is in a wooded
+    // lot or a park's woods left to grow up in brush (Earhart, Washtenaw and Eisenhower's wooded edges, Gallup's
+    // riverbank), not a yard's or a lawn's tree: a bush beside half of them. (The fill is about 7.5 m apart but not on a
+    // grid: in full canopy a tree has two or three others within 8 m, three to five within 10; the houses' yards, under
+    // the old streets' canopy, are kept by the distance to a building.) Where the city's canopy map leaves a real wood
+    // out (most of Washtenaw's and Eisenhower's edges have a tree or two to 1,000 m²), there's nothing to put one by)
+    const fill = [], FC = 10, fillCells = new Map();
+    for (let i = 0; i < W.length; i += 3) {
+      if (W[i + 2] === 0) continue;
+      const t = { x: W[i], z: W[i + 1] }, k = Math.floor(t.x / FC) + ',' + Math.floor(t.z / FC);
+      fill.push(t);
+      if (!fillCells.has(k)) fillCells.set(k, []);
+      fillCells.get(k).push(t);
+    }
+    const BC = 25, houseCells = new Set();
+    for (const b of REAL_BUILDINGS) {
+      for (let a = -1; a <= 1; a++) for (let c = -1; c <= 1; c++) houseCells.add((Math.floor(b.cx / BC) + a) + ',' + (Math.floor(b.cz / BC) + c));
+    }
+    const nearBuilding = (x, z) => {
+      if (!houseCells.has(Math.floor(x / BC) + ',' + Math.floor(z / BC))) return false;
+      const cx = Math.floor(x / BC), cz = Math.floor(z / BC);
+      for (const b of nearBuildings(cx, cz)) {
+        if (x > b.minX - 15 && x < b.maxX + 15 && z > b.minZ - 15 && z < b.maxZ + 15) return true;
+      }
+      return false;
+    };
+    let wildLots = 0;
+    for (const t of fill) {
+      const r = Math.abs(Math.sin(t.x * 12.9898 + t.z * 78.233) * 43758.5453) % 1;
+      let n = 0;
+      const cx = Math.floor(t.x / FC), cz = Math.floor(t.z / FC);
+      for (let a = -1; a <= 1 && n < 3; a++) for (let c = -1; c <= 1 && n < 3; c++) {
+        for (const o of fillCells.get((cx + a) + ',' + (cz + c)) || []) if (o !== t && (o.x - t.x) ** 2 + (o.z - t.z) ** 2 < 100 && ++n >= 3) break;
+      }
+      if (n < 3 || nearBuilding(t.x, t.z)) continue;
+      floor.push(t.x, t.z, r);
+      if (r > 0.85) continue;
+      brush(t.x, t.z, r, r < 0.5);
+      wildLots++;
+    }
+    log(`[trees] understory: ${bushes.length} bushes, ${wildLots} of them in the canopy's own woods away from buildings`);
     if (bushes.length) {
       const under = createShrubs(treeField, { bushes });
       under.name = 'WoodsUnderstory';
@@ -1470,6 +1614,7 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
       group.add(under);
       console.info(`[streetDetails] ${bushes.length} bushes under the woods`);
     }
+    if (floor.length) group.add(woodsFloor(floor));
   }
   sidewalkTreePositions = sidewalkTreePositions.filter((t) => treeField.sites.has(t));
   console.info(`[streetDetails] ${treeField.stats.trees} trees (${sidewalkTreePositions.length} street trees)`);

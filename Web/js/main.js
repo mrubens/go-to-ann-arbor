@@ -77,6 +77,7 @@ import { setSitSpots } from './pedestrian-system.js';
 import { buildBallDiamonds } from './ball-diamonds.js';
 import { buildFootballFields } from './football-fields.js';
 import { buildBleachers } from './bleachers.js';
+import { buildRoundabouts } from './roundabouts.js';
 import { buildFreewayBarriers } from './freeway-barriers.js';
 import { buildBoatDocks } from './boat-docks.js';
 import { buildSkatePark } from './skate-park.js';
@@ -341,6 +342,8 @@ async function initApp() {
   // the bleachers by the fields and tracks (bleachers.js)
   // the freeways' guardrails, cable and concrete median barriers (freeway-barriers.js)
   const barriersPart = await live.keep('freewayBarriers', () => cityPart((g) => buildFreewayBarriers(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: [CITY_MAP, 'js/freeway-barriers.js', 'js/overpass-data.js'] });
+  // the roundabouts' central islands (roundabouts.js)
+  const roundaboutsPart = await live.keep('roundabouts', () => cityPart((g) => buildRoundabouts(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/roundabouts.js', 'js/roundabout-data.js'] });
   const bleachersPart = await live.keep('bleachers', () => cityPart((g) => buildBleachers(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/bleachers.js', 'data/bleachers.json'] });
   // the docks and boat launches on the river and its ponds, with boats tied up (boat-docks.js)
   const docksPart = await live.keep('boatDocks', () => cityPart((g) => buildBoatDocks(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/boat-docks.js', 'data/boat-docks.json'] });
@@ -426,10 +429,10 @@ async function initApp() {
   const furnitureBytes = await asset('data/street-furniture.json');
   const streetFurniture = furnitureBytes ? JSON.parse(new TextDecoder().decode(furnitureBytes)) : null;
   const details = await live.keep('streetDetails', () => cityPart(async (g) => {
-    const made = buildStreetDetails(g, allColliders, streetFurniture, parkingPart.made.inside, draftedPart.made.yard || []);
+    const made = buildStreetDetails(g, allColliders, streetFurniture, parkingPart.made.inside, draftedPart.made.yard || [], bleachersPart.made.colliders || []);
     await setOnTerrain(g.getObjectByName('StreetDetails'));
     return made;
-  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, parkingPart, draftedPart], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js', 'js/drafted-yards.js', 'js/trees.js', 'js/champion-trees.js'] });
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights, grid, outskirtsPart, landmarks, blocks, parkingPart, draftedPart, bleachersPart], from: [...TREE_DATA, 'data/street-furniture.json', 'js/street-details.js', 'js/tree-placements.js', 'js/drafted-yards.js', 'js/trees.js', 'js/champion-trees.js'] });
   const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
@@ -587,6 +590,9 @@ async function initApp() {
   allColliders.push(...airportPart.made.colliders);
   allColliders.push(...bleachersPart.made.colliders);
   allColliders.push(...barriersPart.made.colliders);
+  allColliders.push(...roundaboutsPart.made.colliders);
+  // the big pools' fences (pools.js)
+  allColliders.push(...(poolsPart.made.colliders || []));
   // the diamonds' backstops, dugouts and fences (ball-diamonds.js)
   allColliders.push(...(diamondsPart.made.colliders || []));
   // the town's helipads, painted on the roofs (or ground) where the map has them (helipads.js)
@@ -607,11 +613,22 @@ async function initApp() {
   }
   // where the player can sit (seats.js): the benches, cafe chairs, picnic benches and bleachers, each with what knocks it over
   const seatObstacles = seatingPart.made.obstacles || [];
+  // (Lamp: and the parks' picnic tables (street-details.js), two places on each bench, either side, facing the table:
+  // its benches 0.62 m out from its middle and 0.46 m up)
+  const picnicSeats = [];
+  for (const o of details.made.obstacles || []) {
+    if (o.kind !== 'picnic' || o.yaw == null) continue;
+    const c = Math.cos(o.yaw), sn = Math.sin(o.yaw);
+    for (const lz of [0.62, -0.62]) for (const lx of [-0.45, 0.45]) {
+      const x = o.x + lx * c + lz * sn, z = o.z - lx * sn + lz * c;
+      picnicSeats.push({ x, z, y: groundHeight(x, z) + 0.47, yaw: o.yaw + (lz > 0 ? Math.PI : 0), kind: 'picnic table', ob: o });
+    }
+  }
   const seatSpots = createSeats({
     benches: (details.made.obstacles || []).filter((o) => o.kind === 'bench' && o.yaw != null),
-    seats: seatingPart.made.seats || [],
+    seats: [...(seatingPart.made.seats || []), ...picnicSeats],
     bleachers: bleachersPart.made.seats || [],
-    boxOf: (s) => knockBoxOf.get(s.of != null ? seatObstacles[s.of] : s) || null
+    boxOf: (s) => knockBoxOf.get(s.ob || (s.of != null ? seatObstacles[s.of] : s)) || null
   });
   log(`[seats] ${seatSpots.count} places to sit`);
   seatingPart.made.bindColliders?.((o) => knockBoxOf.get(o)); // put away out of season and overnight (street-life.js)
@@ -664,7 +681,7 @@ async function initApp() {
   const animalsPart = live.keep('animals', () => cityPart((g) => (XBOX ? { update() {} } : buildAnimals(g))), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
   // the rooms behind the shopfronts' glass, near the player: furniture and people (shop-interiors.js)
   const shopRoomsPart = live.keep('shopRooms', () => cityPart((g) => createShopInteriors(g)), { inputs: [blocks], from: ['js/shop-interiors.js', 'js/shop-kits.js', 'js/shop-kits-b.js', 'js/shop-kits-c.js', 'js/shop-kit-core.js', 'js/shop-types.js'] });
-  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, arterial, farCityPart, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, barriersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart, brickPart, polesPart];
+  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, arterial, farCityPart, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, roundaboutsPart, barriersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart, brickPart, polesPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);

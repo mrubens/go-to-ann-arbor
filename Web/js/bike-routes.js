@@ -3,6 +3,7 @@ import { log } from '../lamp-game.js';
 import { groundHeight } from './terrain.js';
 import { GEO } from './city-geodata.js';
 import { LIFT } from './ground-lifts.js';
+import { nearestRoads } from './city-config.js';
 
 // Lamp: what the city's Non-Motorized Routes (build-annarbor.py) put beside the paint (road-paint.js): white flex posts
 // along a protected bike lane's buffer (one instanced mesh: thin, so a bike brushes past them and cars keep to their
@@ -317,13 +318,24 @@ function buildBikeRoutes(group, network) {
   // --- BIKE ROUTE signs: a green plate on a thin gray post at the curb, facing the riders coming
   const S = GEO.bikeSigns || [];
   const count = Math.floor(S.length / 3);
+  let moved = 0, dropped = 0; // signs moved back off the street, and left out
   if (count) {
     const pole = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.03, 0.03, 2.5, 6, 1, true).translate(0, 1.25, 0),
       new THREE.MeshStandardNodeMaterial({ color: 0x8d9094, roughness: 0.5, metalness: 0.6 }), count);
     const plate = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.6, 0.45).translate(0, 2.2, 0.04),
       new THREE.MeshStandardNodeMaterial({ map: signTexture(), roughness: 0.6, side: THREE.DoubleSide }), count);
+    // Lamp: one set by a cross street's curb near a junction can land out in the street itself (Kingsley at Beakes):
+    // moved back the way the riders come, a metre at a time, until it stands off every street's pavement (else hidden)
+    const onStreet = (x, z) => nearestRoads(x, z, 20).some((r) => r.dist < (r.road.w || 8) / 2 + 0.3);
     for (let k = 0; k < count; k++) {
-      const x = S[k * 3], z = S[k * 3 + 1];
+      let x = S[k * 3], z = S[k * 3 + 1];
+      if (onStreet(x, z)) {
+        const fx = Math.sin(S[k * 3 + 2]), fz = Math.cos(S[k * 3 + 2]);
+        let d = 1;
+        for (; d <= 30 && onStreet(x + fx * d, z + fz * d); d++);
+        if (d <= 30) { x += fx * d; z += fz * d; moved++; }
+        else { sc.set(0, 0, 0); m4.compose(v.set(x, -100, z), q.identity(), sc); pole.setMatrixAt(k, m4); plate.setMatrixAt(k, m4); sc.set(1, 1, 1); dropped++; continue; }
+      }
       v.set(x, groundHeight(x, z) + LIFT.slab, z);
       q.setFromAxisAngle(up, S[k * 3 + 2]);
       m4.compose(v, q, sc);
@@ -341,7 +353,7 @@ function buildBikeRoutes(group, network) {
   }
 
   const vertices = posts.length / 3 * 12 + curb.pos.length / 3 + deck.pos.length / 3 + side.pos.length / 3 + steps.length * 24 + count * 16;
-  log(`[bike routes] ${posts.length / 3} flex posts, ${(curb.pos.length / 12) | 0} curb stations, ${walks.length} boardwalks, ${steps.length} steps, ${count} bike route signs; about ${vertices} vertices`);
+  log(`[bike routes] ${posts.length / 3} flex posts, ${(curb.pos.length / 12) | 0} curb stations, ${walks.length} boardwalks, ${steps.length} steps, ${count} bike route signs (${moved} moved back off the street, ${dropped} left out); about ${vertices} vertices`);
   const axis = new THREE.Vector3();
   const near = (x, z, cells, each) => {
     const cx = Math.floor(x / HIT_CELL), cz = Math.floor(z / HIT_CELL);

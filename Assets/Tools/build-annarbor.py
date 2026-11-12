@@ -309,6 +309,28 @@ def park_spec(t, pts):
     return (1 if r else 0) | (2 if l else 0)
 
 
+# Streets in town the map gives no width or parking, parked along both curbs in fact, that a plain two-lane street's
+# 8.5 or 9.5 m leaves room for one parked side or none: Maynard (metered both sides, by the Maynard structure), E
+# William's two-lane blocks from Main to State (its lanes, the two-way bikeway behind its curb along the north side,
+# the meters along the south: curb-parking.js keeps a protected bike lane's curb clear) and Church St from North
+# University to Hill. name: (the new width, the x and z bounds of its middle), for a two-lane way untagged with a width.
+# The blocks, their sidewalks and lawns, and the lights are all drawn from the curbs this gives.
+WIDE_STREETS = {
+    'Maynard Street': (11.2, (400, 650, -100, 420)),
+    'East William Street': (12.4, (60, 700, 150, 260)),
+    'Church Street': (11.2, (1080, 1220, 180, 1320)),
+}
+
+
+def wide_street(t, pts, lanes):
+    spec = WIDE_STREETS.get(t.get('name'))
+    if not spec or lanes != 2 or 'width' in t:
+        return None
+    w, (x0, x1, z0, z1) = spec
+    mx, mz = pts[len(pts) // 2]
+    return w if x0 < mx < x1 and z0 < mz < z1 else None
+
+
 # A street closed for work is mapped as highway=construction while it lasts, with what it'll be in construction= (or
 # nothing): it's still there, so it goes in as that, or as what the rest of the street of that name is. The city's
 # closures (city-closures.js) shut the block while the work's on.
@@ -347,6 +369,9 @@ for w in ways:
     park = 0 if hw else park_spec(t, pts)
     if park and 'width' not in t:
         wd = round(wd + PARK_W * ((park & 1) + (park >> 1)), 1)
+    wide = None if hw else wide_street(t, pts, lanes)
+    if wide:
+        wd, park = wide, 3
     name = short_name(t.get('name', '') or t.get('ref', ''))
     drive.append({'id': w['id'], 'nodes': w['nodes'], 'pts': pts, 'w': wd, 'lanes': lanes, 'dir': d, 'hw': hw,
                   'name': name, 'tunnel': t.get('tunnel') in ('yes',), 'bridge': t.get('bridge') == 'yes',
