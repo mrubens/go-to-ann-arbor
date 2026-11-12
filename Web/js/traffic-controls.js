@@ -5,6 +5,7 @@ import { attribute, color, float, floor, mix, step, abs, texture, uniform, uv, v
 import { signalPhase, nearestRoads } from './city-config.js';
 import { log } from '../lamp-game.js';
 import { corridorsOf } from './safety-corridors.js';
+import { SPAN_WIRES } from './span-wire-data.js';
 
 // Lamp: Ann Arbor's traffic lights and stop & yield signs, where the road network put them (road-network.js, from
 // OpenStreetMap): at a signalised intersection, a mast arm on the far right corner of every approach with a head over
@@ -186,15 +187,30 @@ function buildTrafficControls(group, network) {
   const onPavement = (x, z) => nearestRoads(x, z, 15).some((n) => n.dist < (n.road.w || 8) / 2 + 0.4);
   const at = (e, s, o) => [e.sx + e.dx * s + e.rx * o, e.sz + e.dz * s + e.rz * o];
   // out from the road along e's right until clear of it (null if it never is)
-  const curbside = (e, s, o) => {
-    for (let k = 0; k < 10; k++, o += 0.6) {
+  // the lights hung from span wires, in 50 m cells
+  const spanCells = new Map();
+  for (let i = 0; i + 1 < SPAN_WIRES.length; i += 2) {
+    const k = Math.floor(SPAN_WIRES[i] / 50) + ',' + Math.floor(SPAN_WIRES[i + 1] / 50);
+    if (!spanCells.has(k)) spanCells.set(k, []);
+    spanCells.get(k).push(SPAN_WIRES[i], SPAN_WIRES[i + 1]);
+  }
+  const spanAt = (x, z) => {
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      const l = spanCells.get((Math.floor(x / 50) + a) + ',' + (Math.floor(z / 50) + b));
+      if (l) for (let i = 0; i < l.length; i += 2) if (Math.hypot(l[i] - x, l[i + 1] - z) < 25) return true;
+    }
+    return false;
+  };
+  let spans = 0;
+  const curbside = (e, s, o, tries = 10) => {
+    for (let k = 0; k < tries; k++, o += 0.6) {
       const [x, z] = at(e, s, o);
       if (!onRoad(x, z)) return [x, z, o];
     }
     return null;
   };
 
-  let lights = 0;
+  let lights = 0, noSpot = 0;
   let signs = 0;
   const obstacles = []; // signal poles and sign posts, solid to the player: { x, z, r }
   const faceYaw = (e) => Math.atan2(-e.dx, -e.dz); // a face turned towards the drivers coming along e
@@ -342,18 +358,70 @@ function buildTrafficControls(group, network) {
     if (n.signal) {
       // the far side: across the intersection from the stop line
       const k = (n.x - (e.sx + e.dx * e.len)) * e.dx + (n.z - (e.sz + e.dz * e.len)) * e.dz;
-      const s = e.len + Math.max(4, 2 * k + 1.5);
-      const spot = curbside(e, s, e.half + 0.9);
-      if (!spot) continue;
+      // Lamp: at a wide junction (a flared corner, a turn lane, a slip road) the curb can lie further out or further
+      // on than 6 m past the roadway's edge: look up to 12 m out and 12 m on before giving the approach up (Plymouth at
+      // Huron Pkwy, Platt at Ellsworth, Liberty at Stadium had their lights in the data and no poles)
+      let s = e.len + Math.max(4, 2 * k + 1.5), spot = null;
+      for (const on of [0, 3, 6, 9, 12]) if ((spot = curbside(e, s + on, e.half + 0.9, 20))) { s += on; break; }
+      // else on the near side, at the corner before the stop line, as some of the town's are
+      for (const back of [2, 5, 8]) if (!spot && (spot = curbside(e, e.len - back, e.half + 0.9, 20))) s = e.len - back;
+      // and where nothing past the roadway's edge counts as a curb (the open land by the outer arterials' junctions,
+      // which is no town block), 1.5 m off the far edge where that's off every street
+      if (!spot) {
+        const o = e.half + 1.5, [x, z] = at(e, s, o);
+        if (!nearestRoads(x, z, 30).some((r) => r.dist < (r.road.w || 0) / 2 + 0.6)) spot = [x, z, o];
+      }
+      if (!spot) { if (noSpot++ < 12) log(`[traffic controls] no pole for the light at (${Math.round(n.x)}, ${Math.round(n.z)}) coming ${e.street || ''} ${Math.round(e.dx * 100) / 100},${Math.round(e.dz * 100) / 100}, half ${e.half}`); continue; }
       const [px, pz, po] = spot;
       const g = groundHeight(px, pz);
+      // Lamp: on the state's routes outside downtown (span-wire-data.js) the lights hang from a wire strung across the
+      // far side between a steel pole on each corner, a box of wires over the junction, as MDOT hangs them
+      if (spanAt(n.x, n.z)) {
+        let left = null;
+        for (let o = -(e.half + 0.9), k = 0; k < 20 && !left; k++, o -= 0.6) {
+          const [x, z] = at(e, s, o);
+          if (!onRoad(x, z)) left = [x, z, o];
+        }
+        if (!left) { const o = -(e.half + 1.5), [x, z] = at(e, s, o); left = [x, z, o]; }
+        const WIRE_Y = ARM_Y + 0.9, SAG = 0.55;
+        for (const [x, z] of [[px, pz], [left[0], left[1]]]) {
+          const gg = groundHeight(x, z);
+          dummy.rotation.set(0, 0, 0);
+          dummy.position.set(x, gg + WIRE_Y / 2 + 0.1, z);
+          dummy.scale.set(0.2, WIRE_Y + 0.3, 0.2);
+          obstacles.push(standing = { x, z, r: 0.2, kind: 'signal', height: WIRE_Y, parts: [] });
+          put('pole');
+        }
+        // the wire, sagging to its middle in two straight runs
+        const mid = (po + left[2]) / 2, [mx, mz] = at(e, s, mid), gm = groundHeight(mx, mz);
+        for (const [o0, y0] of [[po, groundHeight(px, pz)], [left[2], groundHeight(left[0], left[1])]]) {
+          const [x0, z0] = at(e, s, o0), ya = y0 + WIRE_Y, yb = gm + WIRE_Y - SAG, len = Math.hypot(Math.abs(o0 - mid), ya - yb);
+          dummy.position.set((x0 + mx) / 2, (ya + yb) / 2, (z0 + mz) / 2);
+          dummy.scale.set(0.035, 0.035, len);
+          dummy.rotation.set(0, Math.atan2(e.rx, e.rz), 0);
+          dummy.rotateX(Math.atan2(ya - yb, Math.abs(o0 - mid)) * (o0 > mid ? -1 : 1));
+          put('arm');
+        }
+        standing.arm = { x: mx, z: mz, y: WIRE_Y - SAG + 0.04 };
+        for (const o of e.lanes.slice().sort((a, b) => a - b).slice(-4)) {
+          const [hx, hz] = at(e, s, o);
+          dummy.rotation.set(0, faceYaw(e), 0); // (Lamp: its lamps toward the drivers coming along e, not away from them)
+          dummy.position.set(hx, groundHeight(hx, hz) + HEAD_Y + 0.35, hz);
+          dummy.scale.set(1, 1, 1);
+          put('head');
+          put('lamps', e.axisIndex === 0 ? 0 : 1);
+          lights++;
+        }
+        spans++;
+        continue;
+      }
       dummy.rotation.set(0, Math.atan2(e.dx, e.dz), 0);
       dummy.position.set(px, g + ARM_Y / 2 + 0.1, pz);
       dummy.scale.set(0.15, ARM_Y + 0.3, 0.15);
       obstacles.push(standing = { x: px, z: pz, r: 0.16, kind: 'signal', height: ARM_Y, parts: [] });
       put('pole');
       // the arm out over the lanes coming up to it
-      const reach = Math.min(13, Math.max(3, po - Math.min(...e.lanes) + 1.2));
+      const reach = Math.min(16, Math.max(3, po - Math.min(...e.lanes) + 1.2));
       const [ax, az] = at(e, s, po - reach / 2);
       dummy.position.set(ax, g + ARM_Y, az);
       dummy.scale.set(0.12, 0.12, reach);
@@ -366,7 +434,7 @@ function buildTrafficControls(group, network) {
       for (const o of lanes) {
         if (po - o > reach) continue;
         const [hx, hz] = at(e, s, o);
-        dummy.rotation.set(0, Math.atan2(e.dx, e.dz), 0);
+        dummy.rotation.set(0, faceYaw(e), 0); // (Lamp: its lamps toward the drivers coming along e, not away from them)
         dummy.position.set(hx, groundHeight(hx, hz) + HEAD_Y, hz);
         dummy.scale.set(1, 1, 1);
         put('head');
@@ -503,7 +571,7 @@ function buildTrafficControls(group, network) {
     o.parts = parts;
   }
   group.userData.terrain = 'set'; // each was stood on the ground as it was placed
-  log(`[traffic controls] ${lights} signal heads, ${signs} stop & yield signs, ${oneWaySigns} one-way signs, `
+  log(`[traffic controls] ${lights} signal heads (${spans} approaches on span wires, ${noSpot} signalised approaches with no curb for a pole), ${signs} stop & yield signs, ${oneWaySigns} one-way signs, `
     + `${[...limits.values()].reduce((a, b) => a + b, 0)} speed limit signs, ${corridorSigns} safety corridor signs (${[...limits].sort((a, b) => a[0] - b[0]).map(([m, n]) => `${n} at ${m}`).join(', ')})`);
   const [onMain, onCross] = kinds.lamps[1].userData.on;
   const lit = (u, phase) => u.value.set(phase === 'red' ? 1 : 0, phase === 'amber' ? 1 : 0, phase === 'green' ? 1 : 0);

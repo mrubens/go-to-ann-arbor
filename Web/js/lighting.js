@@ -73,16 +73,18 @@ const TIME_PRESETS = {
     // the sun carries the day and the sky's fill is the baked sky's (envIntensity) more than the hemisphere's: with both
     // at full the shade sat only ~1.5 stops under the sun and the whole street read flat and washed out
     sunIntensity: 6.3,
-    hemiSky: 0xc8d8ec,
+    // (Lamp: the shade under the street trees lit more and less blue: midday's tree shadow on the asphalt read near
+    // navy, three stops under the sun, where the town's shaded streets are a mid grey a stop and a half under it)
+    hemiSky: 0xdcdedf,
     hemiGround: 0xb89678, // Warm sunlit masonry & pavement bounce
-    hemiIntensity: 1.0,
+    hemiIntensity: 2.0,
     skyTop: 0x3468a8,
     skyHorizon: 0xd6e3ee,
     fogColor: 0xcfdbe6,
     fogDensity: 0.00026,
     interiorGlow: 0.24,
     roadWetness: 0.08,
-    envIntensity: 0.42,
+    envIntensity: 0.45,
     canyonBounce: 0.58,
     turbidity: 4.6, // a Michigan summer's light haze: the sky pales toward the horizon without going white
     rayleigh: 2.0,

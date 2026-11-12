@@ -988,6 +988,9 @@ let hooks = {}, started = false, waiting = null, pill = null;
 // the state didn't take.
 let pending = null, reopened = false, taken = false, guarding = false;
 const host = () => window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lampLive;
+// That the page runs on this runtime, for lamp dev (cli/page.js): a game's page without it has `__lampLive` too
+// (lamp-live.js, which hands over to this runtime as it sets its own below).
+window.__lampRuntime = true;
 // Whether the game is past its loading screen, for the picture of the app Lamp's desk shows (`LampPagePlaying` in a Mac
 // app): 'loading' from when this runtime loads, 'playing' at the first frame of play.
 const tellPlaying = state => { try { const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lampPlaying; h && h.postMessage(state); } catch (e) {} };

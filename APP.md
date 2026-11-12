@@ -374,14 +374,22 @@ discharge in cubic feet a second, asked for with the weather; public domain; the
   public domain), with the open Terrain Tiles beyond its cover; heights relative to the lowest ground in the box
   (downtown is about 28 m up, the river lowest). Run `build-ground.py <app folder>` again after changing the streets. Where the 1 m model kept a big roof as ground (Palmer's parking deck and plaza by Washtenaw, the hospital helipad deck, two Geddes-area roofs), `.lamp/scripts/roof_hills.py` (flags and fills building footprints) and `.lamp/scripts/level_box.py` (a smooth fill of a box from its edges) leveled it after the build; the copies from before are in `.lamp/reference/*-before-roofs.bin.gz`. Run them again after rerunning build-ground.py.
 
-Houses (survey kind 1 under 14 m, and small sheds and garages) are drawn by `houses.js`, not the facade shaders. Each
+Houses (survey kind 1 under 14 m, and small sheds and garages) are drawn by `houses.js`, not the facade shaders; up to
+900 m², and out past the town that stood by 1950 (over 2.3 km from Main & Liberty: townhouse rows and garden
+apartments) up to 3,000 m² (`gardenApts` in buildings.js: 289 more, the far city's blocks for them 14k triangles fewer). Each
 footprint is split (rasterised at 0.5 m in its oriented box) into a main block, the largest rectangle, and up to three
 wings; the main block's roof is OSM's `roof:shape` where mapped (`data/roof-shapes.json`), else chosen from shape and
 age (a gable to the street on narrow lots, hipped foursquares, side gables with dormers on 1.5-storey houses); wings get
 lower cross gables or lean-tos. Storeys come from the survey height (LiDAR average, reads low: under 4.6 m 1, under
 6.6 m 1.5, under 10 m 2, else 3). Roofs overhang with fascia, soffits and rake boards. Walls are one shader (`wallInfo`,
 `houseInfo`, `houseStyle`: material, trim and door/shutter colors from a small palette texture, foundation height):
-clapboard in an Ann Arbor palette, about one in five brick, some stone, stucco or shakes; sash windows, shutters on
+clapboard in an Ann Arbor palette, about one in five brick, some stone, stucco or shakes; tall one-over-one sash
+windows (about 1.6 by 0.85 m, a meeting rail across, an upright only between a pair, panes a sky-catching blue-grey);
+a house the assessor dates 1955 or later (or, undated, one over 2.3 km from Main & Liberty: `modernHouse`) wears the
+subdivisions' vinyl siding in beiges, greiges, taupes and grays (MODERN_SIDING) or buff, tan and brown brick veneer
+(MODERN_BRICKS, 28% of them), and shutters one time in eight unless its photo says, and a garage door from the city's
+driveways (GEO.garageDoors) on its front wall too, beside the door, and a 5/12 or 6/12 roof (pitch 0.5, hipped 0.45) and
+no gambrel unless the map says; shutters on
 some, a colored door on the front wall, gable and dormer windows, a visible foundation. Porches (posts or craftsman
 brick piers, railings, a lean-to roof), steps (run out from the porch to the first spot the lawn can be reached at a comfortable pitch, ~19 cm risers; on a yard too steep for that, as short a flight as 30 cm risers allow; never out past the sidewalk), porch lights, shrubs and front walks that stop at the back of the sidewalk; railings, steps,
 shrubs and lights are instanced and culled by distance. Everything is seeded by the house's position.
@@ -426,7 +434,10 @@ each lane's line and its 6.5 m stall marks, and parked cars stand in those stall
 two-way, two lanes) with none mapped is parked along unmarked (`curbParking`'s `link`, `marked` false): both curbs at
 10 m across or more, one (by place, `linkOf`'s middle point) from 8.5 m; no line or stall marks, the traffic lane kept
 clear of it as of a marked one, and about half its stalls taken (parked-cars.js `streetCars`), away from driveways:
-about 25,000 cars on the streets in all.
+about 25,000 cars on the streets in all. In the middle of town (PARK_TOWN, as the build's) the other streets with
+meters and no parking mapped (`TOWN_METERED`: Fourth, Fifth, Division, S Ashley (N Ashley's curbs are bare), First, Thayer, Ann, Kingsley, Detroit,
+Catherine, Ingalls, Madison, Lawrence, William, Thompson, University) are metered and marked along each curb their
+width leaves room for after their travel lanes (3.2 m each) and bike lanes: both sides, or one, away from a bike lane.
 Storefronts (upstream's `createStorefront` in tsl-materials.js): only on buildings marked `storefronts` in buildings.js (a shop building in the survey, or a shop or mixed-use parcel; never the University's, houses or churches), on their front walls (`WALL_KINDS.shop` in building-footprints.js); muted glass and frames, no painted sign names (`SIGN_NAMES = false`: the real names come from shop-signs.js). Other fronts get upstream's building entrances, and their ground floors keep the same windows as the floors above (the person wanted them to match). Awnings: a canvas awning only where the shop's street photo shows one (data/building-looks.json, building-details.js): one over each bay of the building's longest open street wall, sloping to the street, with a valance (a 0.4 m flap of the same canvas) hanging from its street edge. A named business under one has its name lettered on the valance, the way shops letter their awnings (shop-signs.js `awningOver`, shop-types.js: the sign's own cell of the atlas, at the letters' own shape, square to the canvas), and no board behind the canvas, so the name shows once and nothing hides it (24 of the 761; a second business under one awning keeps its board, hung clear above the canvas). building-details.js also makes the odd scaffold shed, on a post at each corner, never over a front with a named business's sign on it (`namedFront`). On a slope a sign over its own bay stands on its building's ground, as the shopfront does (`signPlace().ground`), not the lower sidewalk's.
 
 Kinds of business (js/shop-types.js, data/shop-types.json from Assets/Tools/build-shop-types.py, OpenStreetMap): each of the 761 named storefronts is one of 18 kinds, from its place's amenity / shop / cuisine tags (restaurant 150, fast_food 58, cafe 52, bakery (with ice cream and sweets) 32, bar 26, books 7, apparel 35, jewelry_gift 19, grocery 68, salon 39, bank 28, medical 74, bike_sports 13, dispensary 15, gallery 14, theatre 5, retail 39, service 87; `variants` marks barbers, cinemas and supermarkets), and its shopfront looks it, outside and in. How a bay knows: a shop wall is cut into bays about 7.5 m wide; as the walls are built (`shopWallRow`, asked by building-footprints.js) each sign on a wall takes the bay it hangs over (the next free one when two share), the bay either side takes its kind when nobody's (two either side of a supermarket), and the wall gets a row in a 32 x 2048 two-byte texture (`shopBayMap`: r = kind + 32 where the sign hangs + 64 variant, g = the business's own number, the same in each of its bays), the row carried in the wall's `kind` attribute (look / 128 - row). createStorefront reads that one texel per bay; 0 is the generic shop as before. The signs then hang centred over their own bays (`signPlace`). A building that isn't one of shopfronts (a one-storey shop or strip mall under 6 m, an office block; not the University's, the city's or a house-colored block) gets a shopfront on just the walls a named business's sign hangs on (`signFronts`), its glass kept under the sign on a low wall: 648 of the 761 are over their own bay (the rest are on houses, University buildings and party walls), 1104 bays in all. The looks are a table (`LOOKS` in shop-types.js, one row of numbers per kind, sent as one uniform array: a shader may bind only a dozen buffers, so not an array per table) for the same few flat layers in every room: the back wall's rows of things, what stands 1.5 m in, lamps, and what is on the glass. Restaurant: tables with cloths, a candle and two chairs each, hanging lamps, pictures, a menu in a box by the door. Fast food: glowing menu boards over a red counter with tills. Cafe: chalkboard menus, a counter with a pastry case and an espresso machine, hanging lamps. Bakery / ice cream: pale walls, shelves of loaves, a glass case full of color. Bar: small windows in a black front, a back-bar of bottles lit from behind, stools along the bar, a pink or blue neon tube. Books: floor-to-ceiling spines, a table of stacked books. Apparel: racks of hanging clothes, mannequins in the window, shelves of folded things, large glass. Jewelry and gifts: dark walls, spot-lit niches, a low glass case. Grocery: cool light, aisles of packaged goods, glowing coolers along the back. Salon: mirrors and chairs (a barber's pole by a barber's door). Bank: a tellers' counter with glass partitions, a stone-colored frame, a cash machine beside the door that glows all night. Medical: a row of waiting chairs, notices, blinds half down. Bikes and sports: bikes in a row (two wheels and a diamond frame each), a wall of gear. Dispensary: glass frosted to 1.9 m with a green stripe, a plain lobby. Gallery: white walls, pictures, plinths, spots. Theatre and cinema: lit poster cases beside the doors. Retail and service: shelves and blocks of goods; a desk with screens, notices, blinds. Food, bars and corner shops have a neon OPEN in the window (letters from the one 128 x 64 glyph texture, with ATM). Hours: `shopOpenShares(hour)` gives the share of each kind open at the town's hour (main.js `selectTime` -> `setShopHour`; banks 9 to 5, restaurants to about 10:30, bars to 2, some fast food later); a closed one is dim, its OPEN dark. A named business's room is seen mostly by its own light (emissive, with a floor by day), so it looks the same on the sunny and the shady side of the street; after dark each kind has its own level (a bar dim and warm, a grocer bright and cool).
@@ -451,8 +462,11 @@ More from the generator, each in `GEO`:
   Designated/Suggested); the city wins over OSM where it has a line, OSM's tags stay where it has none. A link's `bike`
   bits: 1 right, 2 left (as drawn), 4/8 sharrow right/left, 16 buffered, 32 protected (flex posts), 64 curb-separated,
   128 advisory (dashed both sides, no centre line, no room taken), 256 signed route (signs only), 512 two-way lane on the
-  side its 1 or 2 says. `bike_room` widens or narrows a street with no OSM width by the lanes it gains or loses (1.7 m a
-  lane, 3 m two-way, +0.9 buffer or posts, +0.6 curb). `GEO.bikeSigns` `[x, z, heading]`: BIKE ROUTE signs at the ends of
+  side its 1 or 2 says. `bike_room` (1.7 m a lane, 3 m two-way, +0.9 buffer or posts, +0.6 curb) widens a street with
+  no OSM width for OSM's own lanes; the city's lanes don't change a link's width: it keeps its way's, the curbs the
+  street's surface and blocks are drawn at, and the lanes are painted between them (the travel lanes squeezed, or a
+  protected lane in place of that side's parking). Widening the link alone had put the lines and posts of 470 links
+  under the sidewalk, State St's protected lanes by Hill among them (their widths spliced back into GEO.roadGraph). `GEO.bikeSigns` `[x, z, heading]`: BIKE ROUTE signs at the ends of
   each signed route and every 400 m, at the rider's right curb. Each graph link's lanes and paint run as straight edges between shape nodes (road-network.js centrelineStreets): one at
   every bend over 12°, and along a gentle curve one wherever the drawn street strays over 0.75 m from the straight edge
   (pieces no shorter than 10 m), so lanes, traffic and paint stay on the asphalt (a divided road's two one-ways between
@@ -462,13 +476,39 @@ More from the generator, each in `GEO`:
   streets and alleys, at each street's limit; `road-paint.js` paints lane
   lines and bike lanes (in its merged chunks: a solid white line and a bike-and-arrow every ~130 m, 10 m in from each
   end; buffered: a second line and 45° hatching every 3 m; two-way: a dashed yellow centre; advisory: dashed lines and
-  no centre line; sharrows: a bike under two chevrons in the outermost travel lane every 50 m; `bike-routes.js` adds the
+  no centre line; a bike lane green (0x2f9e57) for its last and first 15 m at a traffic light, as Ann Arbor paints its
+  conflict zones; lane-use arrows (left, through, right and their pairs) 8 m and, on approaches over 60 m, 38 m before
+  the stop line, on the approaches OpenStreetMap's turn:lanes tag (`Assets/Tools/build-turn-lanes.py` →
+  `Web/js/turn-lanes-data.js` `TURN_LANES`: 731 approaches, the way's end, its direction and each lane's turns from the
+  left), matched to the street's edge ending within 22 m and in line, where the two agree on the number of lanes, or
+  the map has one more: a left-turn lane (painted in the street's centre turn lane, as on S Main, else left out) or a
+  right-turn lane (left out): 361 approaches, 7 left bare; each arrow about 4.5 m long;
+  sharrows: a bike under two chevrons in the outermost travel lane, as the MUTCD places them, 12 m past
+  the intersection the rider comes from and then every 75 m, none in a block's last 25 m; `bike-routes.js` adds the
   flex posts (one instanced mesh, every 6 m, thin and with no collider), low curbs, boardwalks, steps and signs; a centre turn lane ending at a bend tapers its solid edges into the double yellow that goes on), and continental crosswalks only where OSM maps a painted crossing (`GEO.controls.crossings`
-  `[x, z, marked]`: 1 painted, 0 not, 2 not said, which gets one only at traffic lights), mid-block ones too.
+  `[x, z, marked]`: 1 painted, 0 not, 2 not said, which gets one only at traffic lights, and there not on a leg with
+  no crossing mapped where two or more are mapped within 40 m of the junction: Fuller and Stadium's own legs), mid-block
+  ones too.
 - Traffic lights, stop and yield signs (`GEO.controls`, OSM) drawn by `traffic-controls.js`, lit by `signalPhase` in
   `city-config.js`, the same clock traffic obeys. Four instanced kinds in all: poles, arms and posts in one metal mesh,
   the heads, every head's lamps in one mesh (instance attribute `road` against two phase uniforms), and every sign's
   face and back in one mesh reading a canvas atlas (instance attribute `tile`, front and back cell).
+  Every head faces the drivers of the approach it stands for (`faceYaw`, as the signs do): over that approach's own
+  lanes on the far side, its lamps toward them, its black backplate toward the junction. (They faced the other way
+  until Nov 2026, so a driver saw the opposing approach's lit heads over the oncoming lanes and their own from behind.)
+  A light's pole stands on the far right corner of each approach, at the first point off the street up to 12 m
+  out and 12 m on; else on the near right corner before the stop line; else, where nothing past the roadway's edge is
+  a block (the open land at the outer arterials' junctions), 1.5 m off its edge if that's off every street; its arm
+  reaches up to 16 m. 850 heads (346 before the wider search: Plymouth at Huron Pkwy, Platt at Ellsworth, Liberty at
+  Stadium, Maple at Pauline had none); the log names the approaches still left without one (44, mostly where a divided
+  road's two junctions are a few metres apart).
+  On the state's routes outside the downtown core and central campus (the business loops I-94 BL and US-23 BUS, M-17,
+  US-12: `Assets/Tools/build-span-wires.py` → `Web/js/span-wire-data.js` `SPAN_WIRES`, the 37 lights within 12 m of a
+  way with a ref) the lights hang from span wires as MDOT hangs them: a steel pole on each far corner, a wire sagging
+  between them across the approach and the heads hung from it over every lane, a box of wires over the junction
+  (Huron at Fifth and First, N Main at Ann and Kingsley, Washtenaw at Hill, Geddes and by Arborland). The map's
+  signals say nothing of how they're hung; the routes' rule matched every junction checked against the photos but
+  Packard at Division (the city's, on a wire).
 - Street trees by species and height (the city's inventory; `trees.js` SPECIES) and streetlights
   (`GEO.streetlights`, the city's Streetlights layer, no license stated). "Now" works out the real sun (`sunTimes`).
   A streetlight's kind (GEO.streetlights' third value): 0 DTE's cobra head on its arm, 1 a post-top lantern (campus,
@@ -479,17 +519,39 @@ More from the generator, each in `GEO`:
   downtown keeps its tree pits.
 - The mapped woods' understory (street-details.js, `WoodsUnderstory`): a bush beside three in four of the woods'
   trees (yards.js woodsTrees kind 0, about 64,000), in the trees' own leaves (trees.js createShrubs), drawn within
-  160 m and casting no shadow. Not on a phone. (Bushes under every dense stand of canopy trees were tried: 200,000 of
+  160 m and casting no shadow, and beside half the canopy's trees in the city's nature areas (parks named Arboretum,
+  Nature Area, Woods or Preserve: the Arb, Bird Hills, Barton, Furstenberg...): about 131,000 in all, 0.4M triangles
+  in view in the Arb at 54 fps. Not on a phone. (Bushes under every dense stand of canopy trees were tried: 200,000 of
   them cost three quarters of the frame rate and put bushes on the Diag's lawn.)
 - Signal heads are traffic yellow on black backplates (traffic-controls.js `housing`, vertex colours).
+- Road paint (createRoadPaintMaterial) is worn: thinner in patches a few metres across at any distance, a little
+  short of white. Utility-cut patches in the asphalt are on about one 11 m cell in eight, the fresh ones only a little
+  darker than the road round them; the potholes (potholes.js) shade from a dark bottom out to the road's own grey.
 - The road's asphalt (tsl-materials.js `createRoadSurfaceMaterial`) is a light, sun-bleached gray; its tar snakes
   (`roadTarSnakes`) only on about one block in six and 1-1.8 cm wide, the pours' seams faint. Midday (lighting.js,
-  post-processing.js) has a light summer haze and a grade at a little under neutral saturation. The Huron is
+  post-processing.js) has a light summer haze and a grade at a little under neutral saturation; its sky fill (hemisphere
+  2.0 from a near-neutral sky, environment 0.45) keeps a street tree's shade on the asphalt a mid grey about two stops
+  under the sun, not navy. The Huron is
   tea-brown (`createWaterMaterial`), its banks olive (river.js).
 - Wall finishes (buildings.js `facades`): beside the University's, civic and house ones, red brick (1), buff stone
   (0), tan and cream brick (11), painted white brick with dark trim (12), dark brown brick (13) and gray panel (14);
   low commercial buildings and the historic districts take them by `brickOf`, apartment towers over 28 m mostly panel
-  or tan, a shop's photo look still deciding where it has one.
+  or tan, taller shop and office blocks only now and then blue or dark glass (more often panel, brick over a limestone
+  base, or limestone), a photographed building's look (shop or not) still deciding where it has one.
+  Finishes 0, 1, 12 and 13 (downtown's older fronts) have tall narrow sash windows about 0.9 by 2.6 m on 2 m bays in
+  4 m storeys, as Main, Liberty and Kerrytown's upper floors are.
+  The city's footprints join party-wall rows into one shape (Main's east side between Liberty and Washington is four
+  shapes for a dozen fronts), so those finishes and the tan brick (11) cut a long low front (over 11 m wide, under 22 m
+  up) into 25-foot lots (`lotFronts`, createPreWarBuildingMaterial): each lot is its own brick or paint (red, buff,
+  white, dark brown, sage, cream; three in ten keep the building's own) with a pier of the trim between; the lots at a
+  wall's two ends keep the building's own brick, and so do its side walls, so a corner never shows one brick on the front
+  and another round the side. (Raised false-front parapets on some lots were tried and taken out: a single raised face
+  read as a cardboard cutout with a row of windows in it.) Window air
+  conditioners are in one window in thirty-five, not one in eight (a New York look).
+  Finish 15 is a shopping centre's or big box's pale block, blank above its shopfronts (5 m storeys with no windows):
+  any shop building (survey kind 2 or a shop parcel) over 1,500 m² and under 17 m outside the downtown core and central
+  campus (`inCore`), Maple Village, Arborland, Westgate and the Plymouth and Packard strips; the far city's palette
+  (far-city.js FACADE_LOOK) now has 11 to 15 too.
 - Big blocks with no lawn out past downtown and campus (city-grid.js `lotBlock`, over 2,500 m²) are a sidewalk ring
   round a blacktop lot; a solid paved yard over 800 m², one wide round planted islands, or (out past downtown, the
   central campus and North Campus) any holed paving over 3,000 m² is blacktop. A change to how yards are sorted into
@@ -497,10 +559,13 @@ More from the generator, each in `GEO`:
 - Grass under thick crowns (the year-round `litterMap` of the trees' crowns) is thinned and shaded to a darker floor
   of leaf mould and moss (createParkLawnMaterial `shaded`; not golf turf). A tree over 12 m has its crown widened up to
   a third (trees.js `placeOf`, by 3% a metre), back to its model's spread where that would reach a building.
-- Brick streets (brick-streets.js, brick-streets-data.js from Assets/Tools/build-brick-streets.py: OSM surface
-  paving_stones / sett / bricks on streets): Detroit St, N Fourth and Fifth by Kerrytown, Kingsley, First, Carey and a
-  few more, red street brick laid curb to curb over the road (the width of the nearest GEO.roads street), drawn as if
-  12 cm over it (drawOver) since the road layer follows the coarser cut of the ground.
+- Brick and concrete streets (brick-streets.js, brick-streets-data.js from Assets/Tools/build-brick-streets.py: OSM
+  surface paving_stones / sett / bricks, and concrete, on streets, not bridges): Detroit St, N Fourth and Fifth by
+  Kerrytown, Kingsley, First, Carey and a few more in red street brick; 114 concrete stretches (State, Ann
+  Arbor-Saline, Jackson, Maple, Ellsworth, E Washington, Huron Pkwy...) in pale slabs a lane wide and 4.5 m long with
+  sealed joints. Each laid curb to curb at the width of the nearest GEO.roads street, 3 mm over the road and cut
+  onto the ground along its own triangles (main.js setOnTerrain on the part), under the road's paint (5 mm, a
+  stronger polygon offset).
 - Overhead wires (utility-poles.js, made in code): wooden poles about every 40 m down one side of each road-graph
   link (the side by place), 0.75-1 m behind the curb, nudged off driveways' curb cuts, with a crossarm, three
   power lines and the phone and cable lines below, a transformer can on about one in eight; the wires are line
@@ -663,7 +728,9 @@ More from the generator, each in `GEO`:
   camera's heading puts it, and is asked about the cut to that box when it is sure of it), wall material, wall color from the houses' palette, porch, shutters, dormers and, where
   OSM has no roof shape, the roof; for shops their facade, awning, display windows and frame color. An answer under
   its threshold (Choice confidence 0.5, color 0.4, roof 0.55; Noul yes at 0.7, no at 0.3) keeps the generated look.
-  [x, z, code] per building, (x, z) inside its footprint; the codes' bits are described in `houses.js`. Shops'
+  [x, z, code] per building, (x, z) inside its footprint; the codes' bits are described in `houses.js`. A shop code's
+  facade (red brick, buff brick, stone, glass and metal) is any photographed building's (buildings.js), storefront or
+  not, but the University's own keep their collegiate brick and stone. Shops'
   windows and frame color ride on their walls' WALL_KINDS value (building-footprints.js), so nothing is added to draw.
   Keys (TYPESAFE_API_KEY, MAPILLARY_TOKEN) come from the environment or ~/.lamp/reference/keys.env; downloads and
   Jev's raw answers are cached in .lamp/reference/aa/ (parcels, mapillary, looks/answers.jsonl).
@@ -754,7 +821,9 @@ Rivian R1S (from the SUV) and R1T (from the pickup) join them: oval corner headl
 - Buses: on foot, F beside a bus at its stop gets on (its driver waits while the player walks up to the door, at most 10 s past its time); the player rides along out of sight with the camera pulled back, and F at a later stop gets off at the door (traffic.js boardBus/busRide/leaveBus, controllers.js getOnBus/getOffBus, main.js getInOrOut).
 - Next bus and next stop (main.js busLine, four times a second): on foot within 6 m of a stop's sign (TheRide's or the U's), a plain line per route under the place's name gives its next two buses from that stop by the timetable shifted by the live delay, "4 · Downtown · 6 min" (U-M by route name, "Bursley-Baits · …"; 'Now' while one is due or standing there; a clock time an hour or more off; "No more buses today"); it goes when the player walks off. theride.js `departures(stop, ms)` reads each stop's calls once (cached), traffic.js `busesDue` merges the signs within reach (stop signs carry their timetable and stop). On a bus the place's name becomes "Next: Washtenaw & Stadium" (busRide nextStop, from busStop's stopIx), the stop's own name while it stands there, with a soft two-tone chime (audio-events.js 'buschime') as it pulls in; it ends when the player gets off. No pop-ups.
 - ONE WAY signs at the corners where one-way streets leave an intersection (traffic-controls.js).
-- Burton Tower, Hill Auditorium and the Michigan Union are modeled by hand (campus-landmarks.js). The Union is in high
+- Burton Tower, Hill Auditorium and the Michigan Union are modeled by hand (campus-landmarks.js). Hill Auditorium is
+  built facing north and mirrored about its outline's middle to face south, its limestone front on North University
+  and the blind stage house toward Ingalls Mall, as the real one stands. The Union is in high
   detail with `wallKit`: leaded Tudor-arched windows in stone frames, oriels, buttresses, battlements, the octagonal-
   turreted tower and the State Street frontispiece with its portal. Their colliders follow the buildings, each
   dropping the survey's blocks it stands for (`replaces`) and keeping its neighbors: Hill's hall (with the wings along

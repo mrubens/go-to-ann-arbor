@@ -42,6 +42,9 @@ import { buildChurches, churchPlan, churchLayout } from './churches.js';
 import { log } from '../lamp-game.js';
 import { buildGasStations, canopyFootprints, insideCanopy } from './gas-stations.js';
 import { landUseAt, historicDistrictAt, LAND_USE } from './districts.js';
+// Lamp: the downtown core and central campus (x east and z south of Main & Liberty, m: as utility-poles.js UNDERGROUND)
+const CORE = [[-300, 700, -170, 300], [700, 1450, -250, 820], [-120, 420, 1250, 1900]];
+const inCore = (x, z) => CORE.some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
 import { groundHeight } from './terrain.js';
 import { polygonContains, polygonBoxOverlaps } from './building-collision.js';
 import { pavedPlazaRects, parkTreeSites, sidewalkBlocks } from './city-grid.js';
@@ -177,8 +180,11 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       stoneColor: 0xd8cdb8,
       trimColor: 0x9e937f,
       windowGlassColor: 0x1a2836,
-      windowWidth: 2.6,
-      floorHeight: 3.7,
+      windowWidth: 2.0,
+      lotFronts: true,
+      floorHeight: 4.0,
+      windowRatioX: 0.46,
+      windowRatioY: 0.64,
       litProbability: 0.54,
       warmth: 0.80,
       seed: 12.4
@@ -188,8 +194,11 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       stoneColor: 0xa45a45,
       trimColor: 0xcab9a0,
       windowGlassColor: 0x16222e,
-      windowWidth: 2.4,
-      floorHeight: 3.5,
+      windowWidth: 2.0,
+      lotFronts: true,
+      floorHeight: 4.0,
+      windowRatioX: 0.46,
+      windowRatioY: 0.64,
       litProbability: 0.56,
       warmth: 0.86,
       seed: 27.8
@@ -263,22 +272,28 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     // 11: Tan and cream common brick: downtown's 1900s commercial blocks and the 1960s-80s apartment slabs
     [createPreWarBuildingMaterial, {
       stoneColor: 0xc0a27a, trimColor: 0xe0d6c0, windowGlassColor: 0x18242e,
-      windowWidth: 2.5, floorHeight: 3.6, litProbability: 0.5, warmth: 0.82, seed: 131.9
+      lotFronts: true, windowWidth: 2.5, floorHeight: 3.6, litProbability: 0.5, warmth: 0.82, seed: 131.9
     }],
     // 12: Painted brick, white and pale gray, with dark trim: Main Street's Italianate fronts
     [createPreWarBuildingMaterial, {
       stoneColor: 0xe2ded4, trimColor: 0x45484b, windowGlassColor: 0x18222c,
-      windowWidth: 2.2, floorHeight: 4.0, litProbability: 0.5, warmth: 0.85, seed: 149.2
+      lotFronts: true, windowWidth: 1.9, floorHeight: 4.2, windowRatioX: 0.46, windowRatioY: 0.66, litProbability: 0.5, warmth: 0.85, seed: 149.2
     }],
     // 13: Dark brown and plum brick: the 1910s-20s blocks and newer infill
     [createPreWarBuildingMaterial, {
       stoneColor: 0x6b4536, trimColor: 0xcfc4ac, windowGlassColor: 0x141e28,
-      windowWidth: 2.4, floorHeight: 3.6, litProbability: 0.52, warmth: 0.8, seed: 163.4
+      lotFronts: true, windowWidth: 2.0, floorHeight: 3.9, windowRatioX: 0.46, windowRatioY: 0.62, litProbability: 0.52, warmth: 0.8, seed: 163.4
     }],
     // 14: Gray metal and fibre-cement panel with wide windows: the 2000s-20s towers downtown and by campus
     [createPreWarBuildingMaterial, {
       stoneColor: 0x6a6e71, trimColor: 0x9ca2a6, windowGlassColor: 0x1a2630,
       windowWidth: 3.4, floorHeight: 3.3, windowRatioX: 0.62, litProbability: 0.6, warmth: 0.7, seed: 177.7
+    }],
+    // 15: The shopping centres' and big boxes' pale split-face block and painted panel: blank walls, their glass at the
+    // shopfronts and none above (Maple Village, Arborland, Westgate, the Plymouth and Packard strips)
+    [createPreWarBuildingMaterial, {
+      stoneColor: 0xcfc8b8, trimColor: 0x8a8478, windowGlassColor: 0x1a2630,
+      windowWidth: 4.0, floorHeight: 5.0, windowRatioX: 0.0, windowRatioY: 0.0, litProbability: 0.3, warmth: 0.75, seed: 191.3
     }]
   );
   const materials = facades.map(([create, opts]) => create({ ...opts, footprintLocal: true }));
@@ -444,7 +459,10 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
       continue;
     }
     const smallShed = polyArea < 70 && b.height < 6;
-    if (((b.kind || 1) === 1 && b.height < 14 && polyArea < 900) || smallShed) {
+    // (Lamp: and out past the town that stood by 1950, a low residential building up to 3,000 m² is a townhouse row or
+    // garden apartments, drawn as houses are, with their pitched roofs, siding and garages, not a downtown block)
+    const gardenApts = (b.kind || 1) === 1 && b.height < 14 && polyArea < 3000 && Math.hypot(b.cx, b.cz) > 2300;
+    if (((b.kind || 1) === 1 && b.height < 14 && polyArea < 900) || gardenApts || smallShed) {
       const ground = maxGround + LAWN_Y;
       b.ground = ground;
       b.minGround = minGround;
@@ -470,8 +488,10 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     const brickOf = (t) => (t < 0.36 ? 1 : t < 0.54 ? 0 : t < 0.7 ? 11 : t < 0.84 ? 12 : 13);
     let mat = kind === 1 ? (b.height < 13 ? (tone < 0.18 ? 1 : 5 + Math.floor(rand() * 3))
       : b.height > 28 ? (tone < 0.45 ? 14 : tone < 0.7 ? 11 : 13) : (tone < 0.3 ? 1 : tone < 0.5 ? 11 : tone < 0.7 ? 13 : tone < 0.85 ? 14 : 0))
-      : kind === 2 ? (b.height < 16 ? brickOf(tone) : (tone < 0.4 ? 14 : tone < 0.7 ? 2 : 3))
-        : kind === 3 ? (b.height < 14 ? (tone < 0.5 ? 1 : 3) : (tone < 0.6 ? 2 : 4))
+      // (Lamp: a taller shop or office block is glass now and then, more often brick, limestone or panel: N Ashley's
+      // and Liberty's mid-rises are brick over a limestone base, and the town's blue curtain-wall towers are few)
+      : kind === 2 ? (b.height < 16 ? brickOf(tone) : (tone < 0.3 ? 14 : tone < 0.55 ? brickOf(tone * 0.84) : tone < 0.8 ? 0 : 3))
+        : kind === 3 ? (b.height < 14 ? (tone < 0.5 ? 1 : 3) : (tone < 0.25 ? 2 : tone < 0.45 ? 14 : tone < 0.6 ? 3 : tone < 0.8 ? 1 : 0))
           : kind === 5 ? (b.height > 30 && tone < 0.45 ? 2 : tone < 0.62 ? 8 : 9)
             : kind === 6 ? (tone < 0.6 ? 10 : 9)
               : (b.height < 40 ? (tone < 0.55 ? 1 : 0) : (tone < 0.5 ? 0 : 3));
@@ -481,6 +501,9 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     if (kind !== 5 && historicDistrictAt(b.cx, b.cz) && b.height < 30) mat = brickOf(tone);
     else if (use === LAND_USE.RELIGIOUS && kind !== 5) mat = tone < 0.5 ? 0 : 1;
     else if (use === LAND_USE.INDUSTRY && kind !== 5 && b.height < 20) mat = tone < 0.7 ? 10 : 3;
+    // Lamp: a big low shop building out past downtown and the campus is a shopping centre's or a big box's, not a
+    // downtown block: one tall storey of pale block with its glass at the shopfronts (15)
+    if ((kind === 2 || use === LAND_USE.SHOPS) && polyArea > 1500 && b.height < 17 && !inCore(b.cx, b.cz)) mat = 15;
     // Lamp: the building's first-floor doors and windows sit above the uphill grade (`maxGround`), while its foundation
     // base extends below `minGround` so hillside walls never sink doors underground or float in mid-air
     const ground = maxGround + 0.08;
@@ -491,10 +514,12 @@ function buildCityBlocks(scene, landmarkColliders = [], addresses = null, gasSta
     const storefronts = b.height >= 6 && kind !== 5 && (mat < 5 || mat > 7)
       && (kind === 2 || use === LAND_USE.SHOPS || use === LAND_USE.MIXED_USE);
     // Lamp: a shop building's facade, display windows and shopfront color as its street photo shows them
-    // (data/building-looks.json): red brick, buff brick and stone, painted (kept), glass and metal
-    const look = storefronts ? shopLook(b) : 0;
+    // (data/building-looks.json): red brick, buff brick and stone, painted (kept), glass and metal. The facade is any
+    // photographed building's, shops or not (E Huron's glass and metal by Fifth was tan brick), but the University's
+    // own keep their collegiate brick and stone; the display windows and colors are only a storefront's
+    const look = kind !== 5 ? shopLook(b) : 0;
     if (look & 7) mat = [mat, 1, 0, 0, mat, 3][look & 7];
-    const record = { ...b, tone, ground, minGround, storefronts, shopLook: look };
+    const record = { ...b, tone, ground, minGround, storefronts, shopLook: storefronts ? look : 0 };
     surveyedBuckets[mat].push(record);
     const detail = {
       cx: b.cx, cz: b.cz, minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ,

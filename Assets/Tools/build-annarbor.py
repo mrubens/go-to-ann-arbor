@@ -454,8 +454,10 @@ for r in drive:
 # --- The city's Non-Motorized Routes (ckan.a2gov.org, no license stated; fetch-annarbor.py): each bike lane, buffered,
 # protected, advisory or two-way lane, sharrow and signed bike route matched to the road graph's link it runs along
 # (within 12 m of the link's middle and in line with it, as the speed limits are). Where the city has one, it wins over
-# OpenStreetMap's tags; where it has nothing, OSM's stay. The street widens or narrows by the lanes it gains or loses
-# (where OSM gives no width).
+# OpenStreetMap's tags; where it has nothing, OSM's stay. (Lamp: the link keeps its way's width, the curbs as the
+# street's surface and blocks are drawn from it: the city's lanes are painted between those curbs, taking the room of
+# the travel lanes or, where they're protected, the parking beside them, curb-parking.js. Widening the link alone
+# put the lines and posts of 470 links under the sidewalk, State St's protected lanes by Hill among them.)
 NM_PATH = os.path.join(REF, 'nonmotorized/aa_nonmotorized.geojson')
 nm_feats = []
 if os.path.exists(NM_PATH):
@@ -477,7 +479,7 @@ if nm_street:
     from shapely.strtree import STRtree as _STR
     nm_tree = _STR([l for l, _ in nm_street])
     kinds_n = {}
-    changed = widened = 0
+    changed = 0
     for li, (r, line) in enumerate(glink_way):
         if r['hw']:
             continue
@@ -542,13 +544,9 @@ if nm_street:
         g = glinks[li]
         if g[8] != bits:
             changed += 1
-            if not r['wt']:
-                nw = round(g[3] - bike_room(g[8]) + bike_room(bits), 1)
-                widened += nw != g[3]
-                g[3] = max(4.5, nw)
             g[8] = bits
     print(f'the city\'s bike routes on {sum(kinds_n.values())} links ({", ".join(f"{v} {k}" for k, v in sorted(kinds_n.items()))}); '
-          f'{changed} differ from OSM\'s, {widened} streets widened or narrowed')
+          f'{changed} differ from OSM\'s')
 
 # Small green BIKE ROUTE signs along the city's signed routes (Designated and Suggested Bike): at each end of each
 # route and every 400 m along it, at the right-hand curb facing the riders coming, as flat [x, z, heading] (heading the

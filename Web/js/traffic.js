@@ -1128,7 +1128,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // Once too close to stop, v is committed: it goes, and holds the intersection from then on.
   function mayEnter(v, d) {
     // (the cruiser after the player goes through, siren clearing the way, when its lane can make its turn)
-    if (v.chase && v.move.out[v.lane] >= 0) return true;
+    // (its exit lane set here too: one left from an earlier move may not exist on this one's road)
+    if (v.chase && v.move.out[v.lane] >= 0 && v.move.out[v.lane] < v.move.to.lanes.length) {
+      v.out = v.move.out[v.lane];
+      v.yielding = false;
+      return true;
+    }
     const e = v.edge;
     const n = e.to;
     const phase = n.signal ? phaseOf(e) : 'green';

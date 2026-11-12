@@ -402,7 +402,7 @@ function buildRoadNetwork(sidewalks, obstacles, signalIntersections = []) {
       const room = (side) => !(l.bike & side) || l.bike & 128 ? 0 : (l.bike & 512 ? 3 : 1.7) + (l.bike & 48 ? 0.9 : l.bike & 64 ? 0.6 : 0);
       const bk = l.bike & (16 | 32 | 64 | 128 | 512);
       // Lamp: a parking lane along each curb (curb-parking.js), and any bike lane beside it on the traffic side
-      const park = curbParking(l.park, l.bike, linkOf(l.w, l.lanes, l.dir, l.cls, l.pts.map((p) => [p.x, p.z])));
+      const park = curbParking(l.park, l.bike, linkOf(l.w, l.lanes, l.dir, l.cls, l.pts.map((p) => [p.x, p.z]), l.name));
       const pR = room(1), pL = room(2);
       const bR = pR + park.right, bL = pL + park.left;
       // n lanes from `from` (m right of the centre line) out to `to`, each 2.7 to 3.6 m wide

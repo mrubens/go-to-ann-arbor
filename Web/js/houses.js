@@ -38,6 +38,14 @@ const HERITAGE = [
 ];
 const BRICKS = [0x8e4a38, 0x9a5240, 0x7c3b2c, 0x6b4a37, 0x7b5944, 0xa86a4c];
 const STONES = [0x9a9286, 0x857d70, 0xa89f8e];
+// Lamp: the subdivisions built from the 1950s on (Northwood, Lansdowne, the north-east and south-east, Scio Church): vinyl
+// and aluminium siding in beiges, greiges, taupes, grays and whites, and buff, tan and brown brick veneer, not the old
+// town's painted clapboard and red brick
+const MODERN_SIDING = [0xd8cdb8, 0xc9c3b6, 0xb9b2a4, 0xe4e0d6, 0x9fa3a0, 0xcbbd9c, 0x8e9a9b, 0xbfb59b, 0xd6d2c8, 0xa89c86];
+const MODERN_BRICKS = [0x9b6b4e, 0xa77d5c, 0x8a5a44, 0xb38b6b, 0x7e5a46, 0xa0705a];
+// a house of that era: the assessor says built in 1955 or later, or (where it says nothing) one out past the town that
+// stood by 1950, about 2.3 km from Main & Liberty
+const modernHouse = (r, year, historic, garage) => !garage && !historic && (year >= 1955 || (!year && Math.hypot(r.cx, r.cz) > 2300));
 // the lawns sit this far over the ground (city-grid.js), and a house's first floor and front steps with them
 const LAWN_Y = LIFT.lawn;
 // how far up a house's wall the uphill lawn may reach on a sloping lot
@@ -323,9 +331,10 @@ function createHouseWallMaterial() {
   const vs = v.sub(fh);
   const row = floor(vs.div(2.8));
   const y = fract(vs.div(2.8)).mul(2.8); // meters up its storey
-  const winTop = mix(float(2.12), float(2.42), r3), winBot = mix(float(0.95), float(0.8), r3);
+  // (Lamp: tall double-hung sashes, about 1.6 m by 0.85, as the town's older houses have, not near-square ones)
+  const winTop = mix(float(2.3), float(2.5), r3), winBot = mix(float(0.85), float(0.72), r3);
   const paired = step(r5, 0.3).mul(frontLike);
-  const hwBase = mix(float(0.4), float(0.56), r2);
+  const hwBase = mix(float(0.38), float(0.5), r2);
   const hw = min(mix(hwBase, hwBase.mul(2.0).add(0.05), paired), spacing.mul(0.5).sub(0.32));
   const rowFits = step(row.mul(2.8).add(fh).add(winTop).add(0.12), eave).mul(step(0.0, vs));
   const isDoorBay = isDoorWall.mul(step(abs(col.sub(floor(n.mul(0.5)))), 0.1)).mul(step(row, 0.1));
@@ -364,7 +373,8 @@ function createHouseWallMaterial() {
   const mid = WYB.add(WYT).mul(0.5).add(0.1);
   const lightW = WHW.mul(2.0).div(mix(float(3.0), float(6.0), pairedW));
   const lightD = abs(fract(WX.add(WHW).div(lightW).add(0.5)).sub(0.5)).mul(lightW);
-  const muntin = max(max(box(WY, mid.sub(0.04), mid.add(0.04), fwV), box(WX, mix(float(-0.03), float(-0.06), pairedW), mix(float(0.03), float(0.06), pairedW), fwU)),
+  // (one-over-one: a meeting rail across, an upright only as the mullion between a pair)
+  const muntin = max(max(box(WY, mid.sub(0.04), mid.add(0.04), fwV), box(WX, float(-0.06), float(0.06), fwU).mul(step(0.5, pairedW))),
     step(r4, 0.5).mul(step(mid, WY)).mul(step(lightD, 0.02)));
   // shutters beside the windows of some clapboard and brick houses
   const sw = WHW.mul(0.92);
@@ -408,7 +418,8 @@ function createHouseWallMaterial() {
   const lit = step(0.6, fract(sin(col.mul(12.99).add(row.mul(78.23)).add(seed.mul(3.7)).add(kind.mul(5.1))).mul(43758.5)));
 
   const nightFactor = smoothstep(0.7, 1.45, cityUniforms.uInteriorGlow);
-  const glassColor = mix(color(0x1d262e), color(0x3a4650), smoothstep(WYB.add(0.2), WYT, WY));
+  // (the panes catch the sky: a mid blue-grey, lighter toward the top, not black holes)
+  const glassColor = mix(color(0x2c3640), color(0x5a6874), smoothstep(WYB.add(0.2), WYT, WY));
   const glass = winOpen.mul(float(1.0).sub(muntin));
   mat.colorNode = Fn(() => {
     let c = clap;
@@ -526,7 +537,10 @@ function pushWall(hc, a, b, y0, y1, kind, eaveRel) {
   const dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz);
   if (L < 0.05 || y1 <= y0) return;
   // the garage door is measured along the wall from a; the shader counts u the same way
-  const gd = kind !== K_FRONT && hc.doors.length ? doorOnWall(hc.doors, a, b) : null;
+  // (Lamp: on the front wall too for a newer house, whose garage faces the street beside its door, unless the door
+  // would cover the middle bay, the front door's)
+  let gd = (kind !== K_FRONT || hc.modern) && hc.doors.length ? doorOnWall(hc.doors, a, b) : null;
+  if (gd && kind === K_FRONT && gd[0] < L / 2 + 1.3 && gd[1] > L / 2 - 1.3) gd = null;
   const nx = dz / L, nz = -dx / L;
   const o = c.pos.length / 3;
   c.pos.push(a.x, y0, a.z, b.x, y0, b.z, a.x, y1, a.z, b.x, y1, b.z);
@@ -858,7 +872,8 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
 
     // Walls: clapboard in Ann Arbor's colors, about one in five brick, a few stone, stucco or cedar shakes
     const m = id(2);
-    const brickP = historic ? 0.22 : ranch ? 0.25 : 0.18;
+    const modern = modernHouse(r, year, historic, garage);
+    const brickP = historic ? 0.22 : modern ? 0.28 : ranch ? 0.25 : 0.18;
     let matKind = M_CLAP;
     if (!garage) {
       if (m < brickP) matKind = M_BRICK;
@@ -870,9 +885,9 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     if (look & 7) matKind = (look & 7) - 1;
     const seen = look >> 3 & 63;
     const sidingHex = seen ? LOOK_PALETTES[matKind][seen - 1]
-      : matKind === M_BRICK ? pick(BRICKS, id(3)) : matKind === M_STONE ? pick(STONES, id(3))
+      : matKind === M_BRICK ? pick(modern ? MODERN_BRICKS : BRICKS, id(3)) : matKind === M_STONE ? pick(STONES, id(3))
       : matKind === M_STUCCO ? pick(STUCCO, id(3)) : matKind === M_SHAKE ? pick(SHAKES, id(3))
-      : pick(historic && id(12) < 0.5 ? HERITAGE : SIDING_PICK, id(3));
+      : pick(historic && id(12) < 0.5 ? HERITAGE : modern ? MODERN_SIDING : SIDING_PICK, id(3));
     // trim: white on most; dark on some light houses, contrasting colors on historic ones
     const tr = id(9);
     const light = luma(sidingHex) > 0.7;
@@ -887,9 +902,11 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     let seed = id(4) * 100;
     const shutters = look >> 11 & 3;
     for (let k = 0; shutters && k < 64 && (seed * 2.713 - Math.floor(seed * 2.713) >= 0.68) !== (shutters === 2); k++) seed += 0.731;
+    // (a newer house the photo says nothing of has shutters one time in eight, not one in three)
+    for (let k = 0; !shutters && modern && id(14) < 0.6 && k < 64 && seed * 2.713 - Math.floor(seed * 2.713) >= 0.68; k++) seed += 0.731;
     const hc = {
       c: cellOf(r.cx, r.cz), g, P, seed, sc: lin(sidingHex), style: [matKind, trim, accent, fh],
-      doors: doorsNear(r.cx, r.cz), uDir: { x: fb.ax, z: fb.az }, vDir: { x: vx, z: vz },
+      doors: doorsNear(r.cx, r.cz), modern, uDir: { x: fb.ax, z: fb.az }, vDir: { x: vx, z: vz },
       trimRGB, soffitRGB: trimRGB.map((x) => x * 0.8), shade: lin(pick(SHINGLES, id(5)))
     };
     const c = hc.c;
@@ -945,9 +962,10 @@ function buildHouses(records, addresses = null, { quiet = false } = {}) {
     else if (storeys === 1) { if (rr < 0.45) { type = 'hip'; along = longer; } else along = frontAlong; }
     else if (rr < 0.55) along = frontAlong;
     else if (rr < 0.8) { type = 'hip'; along = longer; }
-    else if (rr < 0.86) { type = 'gambrel'; along = frontAlong; }
+    else if (rr < 0.86 && !modern) { type = 'gambrel'; along = frontAlong; }
     else along = deepAlong;
-    const pitch = garage ? 0.45 : type === 'hip' ? (ranch ? 0.4 : 0.55) : storeys === 1.5 ? 0.95 : ranch ? 0.42 : historic ? 0.85 : 0.7;
+    // (Lamp: a newer house's roof is a 5/12 or 6/12 one, lower than the old town's, and no gambrel unless mapped)
+    const pitch = garage ? 0.45 : type === 'hip' ? (ranch ? 0.4 : modern ? 0.45 : 0.55) : storeys === 1.5 ? 0.95 : ranch ? 0.42 : historic ? 0.85 : modern ? 0.5 : 0.7;
     const mainTop = garage ? g + Math.max(2.4, Math.min(3, h - 1)) : g + fh + (storeys === 1.5 ? 3.25 : Math.floor(storeys) * 2.8 + 0.2);
     const hbM = (along === 'u' ? mW : mL) / 2;
     const rhM = type === 'flat' ? 0 : Math.max(0.9, Math.min(garage ? 2 : 6.5, hbM * pitch));
@@ -1464,7 +1482,8 @@ export function houseFarLook(r) {
   const ranch = storeys === 1 && (said === 1 || !historic);
   const fh = garage ? 0.12 : historic ? 0.6 + 0.25 * id(21) : ranch ? 0.25 + 0.15 * id(21) : 0.45 + 0.25 * id(21);
   const m = id(2);
-  const brickP = historic ? 0.22 : ranch ? 0.25 : 0.18;
+  const modern = modernHouse(r, year, historic, garage);
+  const brickP = historic ? 0.22 : modern ? 0.28 : ranch ? 0.25 : 0.18;
   let matKind = M_CLAP;
   if (!garage) {
     if (m < brickP) matKind = M_BRICK;
@@ -1475,12 +1494,12 @@ export function houseFarLook(r) {
   if (look & 7) matKind = (look & 7) - 1;
   const seen = look >> 3 & 63;
   const wall = seen ? LOOK_PALETTES[matKind][seen - 1]
-    : matKind === M_BRICK ? pick(BRICKS, id(3)) : matKind === M_STONE ? pick(STONES, id(3))
+    : matKind === M_BRICK ? pick(modern ? MODERN_BRICKS : BRICKS, id(3)) : matKind === M_STONE ? pick(STONES, id(3))
     : matKind === M_STUCCO ? pick(STUCCO, id(3)) : matKind === M_SHAKE ? pick(SHAKES, id(3))
-    : pick(historic && id(12) < 0.5 ? HERITAGE : SIDING, id(3));
+    : pick(historic && id(12) < 0.5 ? HERITAGE : modern ? MODERN_SIDING : SIDING, id(3));
   const tag = garage ? 0 : taggedRoof(ring, r.cx, r.cz) || (look >> 15 & 7);
   const eave = garage ? Math.max(2.4, Math.min(3, h - 1)) : fh + (storeys === 1.5 ? 3.25 : Math.floor(storeys) * 2.8 + 0.2);
-  const pitch = garage ? 0.45 : storeys === 1.5 ? 0.95 : ranch ? 0.42 : historic ? 0.85 : 0.7;
+  const pitch = garage ? 0.45 : storeys === 1.5 ? 0.95 : ranch ? 0.42 : historic ? 0.85 : modern ? 0.5 : 0.7;
   const rise = tag === 3 ? 0 : Math.max(0.9, Math.min(garage ? 2 : 6.5, fb.W / 2 * pitch));
   const key = Math.floor(r.cx / STREAM_CELL) * 100000 + Math.floor(r.cz / STREAM_CELL);
   return { box: fb, area, garage, wall, roof: pick(SHINGLES, id(5)), eave, rise, key };

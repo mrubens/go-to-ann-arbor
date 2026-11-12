@@ -1303,6 +1303,7 @@ function createPreWarBuildingMaterial(opts = {}) {
     floorHeight = 3.8,
     windowRatioX = 0.50,
     windowRatioY = 0.58,
+    lotFronts = false,
     litProbability = 0.36,
     warmth = 0.82,
     crownGlowHeight = 9999.0,
@@ -1313,7 +1314,7 @@ function createPreWarBuildingMaterial(opts = {}) {
     cornerPier = 1.2 // solid masonry at both ends of every wall above the shopfronts (box-local mode)
   } = opts;
 
-  const cacheKey = `${stoneColor}_${trimColor}_${windowWidth}_${floorHeight}_${litProbability}_${warmth}_${crownGlowHeight}_${seed}_${boxLocal}_${footprintLocal}_${cornerPier}`;
+  const cacheKey = `${stoneColor}_${trimColor}_${windowWidth}_${floorHeight}_${litProbability}_${warmth}_${crownGlowHeight}_${seed}_${boxLocal}_${footprintLocal}_${cornerPier}_${lotFronts}_${windowRatioX}_${windowRatioY}`;
   if (_preWarCache.has(cacheKey)) {
     return _preWarCache.get(cacheKey);
   }
@@ -1374,7 +1375,9 @@ function createPreWarBuildingMaterial(opts = {}) {
   // Window AC units (~12% of upper-floor windows), none in the floor the band course covers
   const beltFloor = step(5.0, mod(floor(gridV), 6.0)).mul(front);
   const acRand = hash2D(cellId.add(vec2(uSeed.mul(1.3).add(7.1), 91.7)));
-  const hasAC = step(0.88, acRand).mul(float(1.0).sub(isGroundFloor)).mul(float(1.0).sub(isRoof)).mul(open).mul(float(1.0).sub(beltFloor));
+  // (Lamp: a window unit in one window in thirty-five, not one in eight: Ann Arbor's downtown fronts and campus blocks
+  // are mostly central air; the units are a New York look)
+  const hasAC = step(0.972, acRand).mul(float(1.0).sub(isGroundFloor)).mul(float(1.0).sub(isRoof)).mul(open).mul(float(1.0).sub(beltFloor));
 
   mat.colorNode = Fn(() => {
     const oneMinusEffX = float(1.0).sub(effHalfX);
@@ -1510,7 +1513,28 @@ function createPreWarBuildingMaterial(opts = {}) {
       signPaint.assign(vec4(mix(ground, ink, max(letters, border)), cover));
     });
 
-    const wallTint = mix(mix(cStone, backTint, back), signPaint.xyz, signPaint.w);
+    // Lamp: a long low front on an old downtown street is a row of buildings on 25-foot lots, each its own brick or
+    // paint, a pier between them (the city's footprints join party-wall rows into one: Main St's east side between
+    // Liberty and Washington is four shapes for a dozen fronts)
+    let frontStone = cStone, lotPier = float(0.0);
+    if (lotFronts) {
+      const rowWall = step(11.0, wallW).mul(step(exposedHeight, 22.0)).mul(front);
+      const lotN = max(float(1.0), floor(wallW.div(7.6).add(0.5)));
+      const lotLen = wallW.div(lotN);
+      const lotId = floor(wallS.div(lotLen));
+      // (a sine hash of small inputs: a building seed in the thousands left every lot the same)
+      const lh = fract(sin(lotId.mul(12.9898).add(fract(boxSeed.mul(0.0731)).mul(78.233)).add(tone.mul(37.7))).mul(43758.5453));
+      const lh2 = fract(lh.mul(17.31));
+      const pick = mix(mix(mix(color(0xa45a45), color(0xc4a87e), step(0.3, lh2)), mix(color(0xe0dbd0), color(0x6e4838), step(0.72, lh2)), step(0.55, lh2)),
+        mix(color(0x8a9488), color(0xd6c9ae), step(0.92, lh2)), step(0.84, lh2));
+      // (the lots at the wall's two ends keep the building's own brick, as its side walls do: a corner never shows one
+      // brick on the front and another round the side)
+      const inner = step(0.5, lotId).mul(step(lotId, lotN.sub(1.5)));
+      frontStone = mix(cStone, pick, step(0.3, lh).mul(rowWall).mul(inner));
+      const lotU = fract(wallS.div(lotLen));
+      lotPier = max(float(1.0).sub(smoothstep(0.0, 0.35 / 7.6, lotU)), smoothstep(1.0 - 0.35 / 7.6, 1.0, lotU)).mul(rowWall).mul(step(1.5, lotN));
+    }
+    const wallTint = mix(mix(mix(frontStone, cTrim, lotPier.mul(0.7)), lotFronts ? mix(backTint, cStone, float(1).sub(parged).mul(0.85)) : backTint, back), signPaint.xyz, signPaint.w);
     // Trim stone on the band courses, the storefront fascia, the coping capping every wall, and the hillside foundation plinth
     const trimMix = max(isCornice.mul(0.62), coping.mul(0.8));
     const foundationPlinth = float(1.0).sub(smoothstep(0.18, 0.24, vCoord)).mul(float(1.0).sub(isRoof));
@@ -2319,10 +2343,10 @@ const roadWear = Fn(([wxz, px]) => {
       .mul(smoothstep(0.04, 0.015, px)));
   });
 
-  // Rectangular utility-cut patches (ConEd, water & sewer trenches): one 11 m cell in two, kept inside its cell. Some
-  // are squarish cuts, others long narrow trenches running along the avenue or across it
+  // Rectangular utility-cut patches (water, sewer and gas trenches): one 11 m cell in five, kept inside its cell. Some
+  // are squarish cuts, others long narrow trenches running along the street or across it
   const pCell = floor(wxz.div(11.0));
-  const hasPatch = step(0.5, hash2D(pCell.add(vec2(3.7, 8.1))));
+  const hasPatch = step(0.88, hash2D(pCell.add(vec2(3.7, 8.1))));
   const trench = step(0.6, hash2D(pCell.add(vec2(2.9, 6.3))));
   const alongX = step(0.5, hash2D(pCell.add(vec2(5.5, 9.9))));
   const pCentre = pCell.add(0.5).add(vec2(hash2D(pCell.add(vec2(1.3, 5.9))), hash2D(pCell.add(vec2(9.2, 2.4)))).sub(0.5)
@@ -2478,7 +2502,8 @@ function createRoadSurfaceMaterial() {
       .mul(float(1.0).sub(tarSeam));
 
     // Utility-cut patches with their tar-sealed edges, stone chips, tar snakes, oil drips, cracks & potholes
-    const patchCol = mix(mix(baseAsphalt, cOldPatch, 0.45).mul(1.08), color(0x2b2e33).mul(0.85), patchFresh);
+    // (a fresh patch a little darker and bluer than the weathered road round it, not a black box)
+    const patchCol = mix(mix(baseAsphalt, cOldPatch, 0.45).mul(1.08), mix(baseAsphalt, color(0x3a3c40), 0.25), patchFresh);
     const repaired = mix(baseAsphalt, patchCol, patchCover)
       .mul(float(1.0).sub(patchSeal.mul(0.5)))
       .add(chips.mul(0.08).mul(float(1.0).sub(patchCover.mul(patchFresh))))
@@ -2624,7 +2649,10 @@ function createRoadPaintMaterial() {
     });
     return w;
   })();
-  mat.opacityNode = dashes.mul(varying(float(1.0).div(widen))).mul(smoothstep(0.1, 0.6, wear).mul(0.4).add(0.55)).mul(distFade);
+  // Lamp: and worn as Ann Arbor's paint is a year or two after it's laid: thinner in patches a few metres across
+  // wherever it's seen from (not only close up), the asphalt showing through, the freshest only a little short of solid
+  const patchy = smoothstep(0.25, 0.75, noise2D(xz.mul(0.13).add(5.3)));
+  mat.opacityNode = dashes.mul(varying(float(1.0).div(widen))).mul(smoothstep(0.1, 0.6, wear).mul(0.28).add(0.3).add(patchy.mul(0.26))).mul(distFade);
 
   // Standing-water puddle mask is zero when uRoadWetness <= 0.1 (e.g. midday); evaluate once and share across channels
   const puddle = Fn(() => {
@@ -2635,7 +2663,8 @@ function createRoadPaintMaterial() {
     return p;
   })();
   const film = smoothstep(0.2, 0.8, cityUniforms.uRoadWetness);
-  mat.colorNode = vec3(mix(float(1.0), float(0.72), puddle).mul(mix(float(1.0), float(0.86), film)));
+  // (a little short of white: weathered, dusty paint)
+  mat.colorNode = vec3(mix(float(0.84), float(0.6), puddle).mul(mix(float(1.0), float(0.86), film)));
   mat.roughnessNode = mix(mix(float(0.62), float(0.42), film), float(0.2), puddle);
   mat.aoNode = groundSkyAONode();
 

@@ -199,9 +199,11 @@ const unpack = (v) => pow(vec3(floor(v.div(65536)), floor(mod(v, 65536).div(256)
 function createRoomMaterial() {
   const mat = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide });
   // (drawn a hair in front of what shares its plane: a neighbour's wall built along the room's side wall, the same
-  // plane to the centimetre, flickered through it, its windows and all)
+  // plane to the centimetre, flickered through it, its windows and all. A constant bias only, and the side walls set
+  // 3 cm in: a slope-scaled one pulled the ceiling's and side walls' front edges, seen edge-on from the sidewalk,
+  // out over the facade and the shop signs as a thin bright line at the shopfront's head)
   mat.polygonOffset = true;
-  mat.polygonOffsetFactor = -2;
+  mat.polygonOffsetFactor = 0;
   mat.polygonOffsetUnits = -6;
   const A = attribute('roomA', 'vec4'), B = attribute('roomB', 'vec4'), Cc = attribute('roomC', 'vec4');
   const Dd = attribute('roomD', 'vec4'), Ee = attribute('roomE', 'vec4');
@@ -210,7 +212,7 @@ function createRoomMaterial() {
   const slot = aux.z;
   const is = (n) => step(abs(slot.sub(n)), 0.25);
   const local = vec3(
-    p.x.add(aux.x.mul(halfW.sub(H0))),
+    p.x.add(aux.x.mul(halfW.sub(H0))).add(is(5).sub(is(6)).mul(0.03)),
     p.y.sub(max(float(HT).sub(height), 0).mul(clamp(p.y.sub(2.0).div(HT - 2.0), 0, 1))),
     p.z.add(aux.y.mul(depth.sub(D0))));
   const hidden = max(is(5).mul(Cc.z), is(6).mul(Cc.w));

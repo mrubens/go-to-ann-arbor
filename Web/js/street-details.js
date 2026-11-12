@@ -1449,6 +1449,20 @@ function buildStreetDetails(scene, colliders = [], streetFurniture = null, inStr
       bushes.push({ x, y: groundHeight(x, z) + 0.13, z, yaw: a, w: rad * 2.2, h: rad * 1.4, len: rad * 1.9,
         color: new THREE.Color(greens[Math.floor(r * 50) % greens.length]) });
     }
+    // and the canopy's trees in the city's nature areas (the Arb, Bird Hills, the Barton, Furstenberg and Dolph nature
+    // areas...), parks left wild that the woods map doesn't cover, a bush beside half of them
+    const WILD = /arboretum|nature|woods|preserve|natural/i;
+    for (const t of keptTrees) {
+      if (!t.likeStreet) continue;
+      const blk = blockAt(t.x, t.z);
+      if (!blk?.parkName || !WILD.test(blk.parkName)) continue;
+      const r = Math.abs(Math.sin(t.x * 12.9898 + t.z * 78.233) * 43758.5453) % 1;
+      if (r > 0.5) continue;
+      const a = r * 40, d = 1.6 + (r * 7.3 % 1) * 2.6, x = t.x + Math.cos(a) * d, z = t.z + Math.sin(a) * d;
+      const rad = 1.3 + (r * 13.1 % 1) * 1.4;
+      bushes.push({ x, y: groundHeight(x, z) + 0.13, z, yaw: a, w: rad * 2.2, h: rad * 1.4, len: rad * 1.9,
+        color: new THREE.Color(greens[Math.floor(r * 50) % greens.length]) });
+    }
     if (bushes.length) {
       const under = createShrubs(treeField, { bushes });
       under.name = 'WoodsUnderstory';

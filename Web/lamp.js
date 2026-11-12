@@ -240,10 +240,42 @@
     });
   }
 
+  // A page shared on lamp.dev plays from a host of its own under play.lamp.dev, away from Lamp. The person's own
+  // lamp on this computer can answer it (`lamp ai`, at a port of the computer's own), once they've allowed this
+  // page there; the token it's given is kept with the page's saved things. Whether there's an AI is asked first,
+  // without one, so the person is asked only when the page uses it.
+  var NEARBY = 'http://127.0.0.1:47423';
+  function shared() { return !installed && here.protocol === 'https:' && /\.play\.lamp\.dev$/.test(here.hostname || ''); }
+  function nearby(path, body, timeout, deadline) {
+    var text = JSON.stringify(body);
+    function go(t) { return exchange(NEARBY, path, t, text, deadline ? Math.max(1000, deadline - Date.now()) : timeout); }
+    function allow() {
+      return exchange(NEARBY, '/pair', null, JSON.stringify({ name: document.title || '' }), 130000).then(function (answer) {
+        if (answer.status !== 200 || !answer.reply.token) throw new Failure('This computer didn\'t allow this page to use its AI.');
+        write('nearby.token', answer.reply.token);
+        return answer.reply.token;
+      });
+    }
+    var kept = read('nearby.token', null);
+    var done = path === '/ai/status' || (body && body.probe === true) ? go(kept) : (kept ? Promise.resolve(kept) : allow()).then(function (t) {
+      return go(t).then(function (answer) {
+        if (answer.status !== 401) return answer;
+        // Taken back on the computer: ask once more.
+        forget('nearby.token');
+        return allow().then(go);
+      });
+    });
+    return done.then(null, function (e) {
+      throw e instanceof Failure ? e : new Failure('AI isn\'t available here. Open this in Lamp, or with Lamp\'s command line on this computer, run lamp ai.');
+    });
+  }
+
   function post(path, body, timeout, deadline) {
     timeout = timeout || 240000;
     var done;
-    if (bridge) {
+    if (!bridge && shared()) {
+      done = nearby(path, body, timeout, deadline);
+    } else if (bridge) {
       // The TV preview on the Mac answers for Lamp itself.
       done = bridge.postMessage({ path: path, body: JSON.stringify(body), timeout: timeout }).then(function (r) {
         var reply = {};
@@ -693,23 +725,35 @@
    * Text calls take a few seconds; decisions well under a second; image calls 10-60 seconds. Show `error.message` on
    * failure. Aspect ratios look like "1:1", "16:9", "3:4".
    *
-   * Not every Mac has every kind of AI set up, and a device away from the Mac's Wi-Fi, or with Lamp closed, has none.
-   * `LampAI.isAvailable('pictures')` (or 'text', 'decisions') says whether it can answer now: check it where a
-   * feature depends on it, and show the feature with a short note ("Pictures need AI set up in Lamp") rather than
-   * hiding it or failing at it. A call that fails for that reason has `needsSetup` set on its error.
+   * Not every Mac has every kind of AI set up, a device away from the Mac's Wi-Fi or with Lamp closed has none, and a
+   * page shared on lamp.dev has it only on a computer that answers it. `LampAI.status('pictures')` (or 'text',
+   * 'decisions', 'act', 'hear') says whether it can answer now and, when it can't, the line to show: check it where
+   * a feature depends on it, and show the feature with its `reason` as it's given rather than words of the app's
+   * own, or hiding it or failing at it. A call that fails for that reason has `needsSetup` set on its error.
    */
   var LampAI = {
     Failure: Failure,
 
-    /** Whether this kind of AI ('text', 'decisions', 'pictures' or 'act') can answer now. False when Lamp can't be reached. */
-    isAvailable: function (capability) {
-      // 'act' is asked of /ai/act itself: true only when this lamp.js has it, the app around the page lets the
-      // route through (an older one answers Not found) and the AI that answers the app can take it.
-      if (capability === 'act') return post('/ai/act', { probe: true }, 10000).then(function (reply) { return reply.act === true; }, function () { return false; });
-      // 'hear' the same way: this lamp.js, the app around the page and the AI set up in Lamp can all take it.
-      if (capability === 'hear') return post('/ai/hear', { probe: true }, 10000).then(function (reply) { return reply.hear === true; }, function () { return false; });
-      return post('/ai/status', {}, 10000).then(function (reply) { return reply[capability] === true; }, function () { return false; });
+    /** Whether this kind of AI ('text', 'decisions', 'pictures', 'act' or 'hear') can answer now: { available, reason },
+     *  where `reason` is the short line to show when it can't, written for where the page is. */
+    status: function (capability) {
+      var no = function (reason) { return { available: false, reason: reason || 'AI isn\'t set up for this here.' }; };
+      // 'act' is asked of /ai/act itself: available only when this lamp.js has it, the app around the page lets the
+      // route through (an older one answers Not found) and the AI that answers the app can take it. 'hear' the same.
+      if (capability === 'act' || capability === 'hear') {
+        return post('/ai/' + capability, { probe: true }, 10000).then(function (reply) {
+          return reply[capability] === true ? { available: true, reason: '' } : no(reply.reason || reply.why);
+        }, function (e) { return no(e && e.message); });
+      }
+      return post('/ai/status', {}, 10000).then(function (reply) {
+        if (reply[capability] === true) return { available: true, reason: '' };
+        var detail = reply.details && reply.details[capability];
+        return no(detail && detail.reason);
+      }, function (e) { return no(e && e.message); });
     },
+
+    /** Whether this kind of AI can answer now, as `status` says. */
+    isAvailable: function (capability) { return LampAI.status(capability).then(function (s) { return s.available; }); },
 
     /** options: data (text from outside the app, for the AI to work on, not obey), images (pictures to look at),
      *  system, json (true asks for JSON and gives back the parsed value: describe its exact shape in the prompt),

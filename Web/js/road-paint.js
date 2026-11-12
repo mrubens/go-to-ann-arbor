@@ -17,9 +17,11 @@ import { bridgeDecks } from './terrain.js';
 
 const WHITE = new THREE.Color(0xe6e2d6);
 const YELLOW = new THREE.Color(0xe8ad22);
+const GREEN = new THREE.Color(0x2f9e57); // Lamp: the bike lanes' green at conflict zones
 const STEP = 6; // Lamp: metres between a strip's vertices along it, so it follows the ground
 const HEIGHT = LIFT.paint; // above the asphalt (ground-lifts.js)
 import { LIFT } from './ground-lifts.js';
+import { TURN_LANES } from './turn-lanes-data.js';
 const PAINT_CELL_SIZE = 900;
 const PAINT_CULL_DISTANCE = 1150;
 const WIDEN_SPHERE_PAD = 16; // createRoadPaintMaterial widens thin distant strips up to 16x in screen space
@@ -269,13 +271,16 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
   };
 
   // A crosswalk at the end of e by node: where a painted crossing is mapped there, not where an unpainted one is,
-  // and where nothing is said, only at traffic lights
+  // and where nothing is said, only at traffic lights. Lamp: and not on a leg with no crossing mapped at a light whose
+  // other legs have theirs: there the map's crossings are the junction's, and the bare leg is one people don't cross
+  // (Fuller Rd, Stadium Blvd: the arterial's own legs left bare where the side street's are painted)
   const paintedEnd = (e, s, node) => {
     const [x, z] = at(e, s, 0);
     const near = crossingsNear(x, z, e.half + 5);
     for (const c of near) c.used = true;
     if (near.some((c) => c.marked === 1)) return true;
     if (near.some((c) => c.marked === 0)) return false;
+    if (!near.length && crossingsNear(node.x, node.z, 40).length >= 2) return false;
     return signalled(node);
   };
 
@@ -345,10 +350,18 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
     // Lamp: bike lanes along the curb (offsets in e's frame), `width` the lane and any buffer, `bk` its kind:
     // a solid white line on the traffic side; a buffer's second line and hatching (16, 32), or a curb's line (64);
     // a two-way lane's dashed yellow centre (512); and the bike and arrow in each direction it's ridden
+    // Lamp: and, as Ann Arbor paints them, the lane green for its last and first 15 m at a traffic light, where
+    // turning cars cross it (Dexter at Maple, Miller, S Industrial), the bike and arrow white on the green
     const bikeLane = (curb, width, bk, f) => {
       const sgn = Math.sign(curb);
       const lane = bk & 512 ? 3 : 1.7;
       const inner = curb - sgn * lane;
+      const G = Math.min(15, e.len / 2 - 1);
+      if (G > 4) {
+        const mid = curb - sgn * lane / 2;
+        if (!e.from.shape && signalled(e.from)) strip(...at(e, 0.2, mid), ...at(e, G, mid), lane - 0.2, GREEN);
+        if (!e.to.shape && signalled(e.to)) strip(...at(e, e.len - G, mid), ...at(e, e.len - 0.2, mid), lane - 0.2, GREEN);
+      }
       along(e, inner, 0.15, WHITE);
       if (width > lane + 0.3) {
         const outer = curb - sgn * width;
@@ -383,11 +396,18 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
       if (e.bikeR) bikeLane(e.half - pR, e.bikeR, bk, 1);
       if (!back && e.bikeL) bikeLane(-e.half + pL, e.bikeL, bk, 1);
       if (back && back.bikeR) bikeLane(-e.half + pL, back.bikeR, back.bk || 0, -1);
-      // shared-lane arrows in the outermost travel lane, a little toward the curb, every 50 m
+      // shared-lane arrows in the outermost travel lane, a little toward the curb: Lamp: as the MUTCD places them, one
+      // just past the intersection the rider comes from and then every 75 m (250 ft), none in the last 25 m before
+      // the next, so a street's approach to a corner is bare (E Washington at Fourth, Fourth at Ann), not one at
+      // each end of every block
+      const sharrows = (o, f) => {
+        if (e.len < 30) return;
+        for (let d = 12; d <= e.len - 25 || d === 12; d += 75) picture(f > 0 ? d - 1.6 : e.len - d + 1.6, o, f, SHARROW);
+      };
       const rightLane = (f) => f.lanes.length ? f.lanes[f.lanes.length - 1] : null;
-      if (e.share && rightLane(e) != null) pictures(Math.min(rightLane(e) + 0.3, e.half - pR - 1.2), 1, 50, SHARROW);
-      if (!back && e.shareL && e.lanes.length) pictures(Math.max(e.lanes[0] - 0.3, -e.half + pL + 1.2), 1, 50, SHARROW);
-      if (back && back.share && rightLane(back) != null) pictures(-Math.min(rightLane(back) + 0.3, back.half - pL - 1.2), -1, 50, SHARROW);
+      if (e.share && rightLane(e) != null) sharrows(Math.min(rightLane(e) + 0.3, e.half - pR - 1.2), 1);
+      if (!back && e.shareL && e.lanes.length) sharrows(Math.max(e.lanes[0] - 0.3, -e.half + pL + 1.2), 1);
+      if (back && back.share && rightLane(back) != null) sharrows(-Math.min(rightLane(back) + 0.3, back.half - pL - 1.2), -1);
     }
 
     // Stop bars across the lanes arriving at each stop line, from the centre line (or median) to the curb, only where
@@ -412,6 +432,57 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
       if (!bends.has(node.id)) bends.set(node.id, []);
       bends.get(node.id).push({ e, end, lines: lines.slice(firstLine) });
     }
+  }
+
+  // Lamp: lane-use arrows on the approaches OpenStreetMap gives turn lanes (turn-lanes-data.js): one in each lane 8 m
+  // before the stop line and, on a long approach, another 30 m back, where the map's lanes and the street's agree in
+  // number: left, through and right arrows and their pairs (State at Huron, Scio Church at Main)
+  {
+    const arrowCells = new Map();
+    for (const a of TURN_LANES) {
+      const k = Math.floor(a[0] / 40) + ',' + Math.floor(a[1] / 40);
+      if (!arrowCells.has(k)) arrowCells.set(k, []);
+      arrowCells.get(k).push(a);
+    }
+    const SHAFT = [[-2.6, 0, 0.1, 0, 0.16]];
+    const AHEAD = [[-0.4, -0.42, 0.75, 0, 0.16], [-0.4, 0.42, 0.75, 0, 0.16], [-0.2, 0, 0.6, 0, 0.36]];
+    const turn = (v) => [[-0.4, 0, 0.35, v * 0.75, 0.16], [0.35, v * 0.75, 0.35, v * 1.05, 0.16],
+      [-0.05, v * 0.68, 0.35, v * 1.25, 0.16], [0.75, v * 0.68, 0.35, v * 1.25, 0.16]];
+    let painted = 0, unmatched = 0;
+    for (const f of network.paintEdges || network.edges) {
+      if (f.to.shape || f.cls === 0 || f.len < 14 || !f.lanes.length) continue;
+      const ex = f.sx + f.dx * f.len, ez = f.sz + f.dz * f.len;
+      let best = null, bestD = 22;
+      for (let i = Math.floor((ex - 22) / 40); i <= Math.floor((ex + 22) / 40); i++) {
+        for (let j = Math.floor((ez - 22) / 40); j <= Math.floor((ez + 22) / 40); j++) {
+          for (const a of arrowCells.get(i + ',' + j) || []) {
+            const d = Math.hypot(a[0] - ex, a[1] - ez);
+            if (d < bestD && a[2] * f.dx + a[3] * f.dz > 0.9) { best = a; bestD = d; }
+          }
+        }
+      }
+      if (!best) continue;
+      // the map's lanes onto the street's: the same number, or one more where the map's leftmost is a left-turn lane
+      // (into the street's centre turn lane, where it has one: S Main, Stadium; else left out) or its rightmost a
+      // right-turn lane (left out)
+      let codes = best.slice(4);
+      const lanes = [...f.lanes].sort((p, q) => p - q);
+      if (codes.length === lanes.length + 1 && codes[0] === 1) {
+        codes = codes.slice(1);
+        if (f.turn) { lanes.unshift(0); codes.unshift(1); }
+      } else if (codes.length === lanes.length + 1 && codes[codes.length - 1] === 4) codes = codes.slice(0, -1);
+      if (codes.length !== lanes.length) { unmatched++; continue; }
+      for (const s of f.len > 60 ? [f.len - 8, f.len - 38] : [f.len - 8]) {
+        lanes.forEach((o, k) => {
+          const c = codes[k];
+          const parts = [...SHAFT, ...(c & 2 ? AHEAD : []), ...(c & 1 ? turn(-1) : []), ...(c & 4 ? turn(1) : [])];
+          // (drawn about 2.2 m long and scaled up to a real arrow's 4.5 m: long, as a driver sees it foreshortened)
+          for (const [u0, v0, u1, v1, w] of parts) strip(...at(f, s + u0 * 1.6, o + v0 * 1.15), ...at(f, s + u1 * 1.6, o + v1 * 1.15), w * 1.3, WHITE);
+        });
+      }
+      painted++;
+    }
+    console.info(`[road paint] lane-use arrows on ${painted} approaches (${unmatched} tagged ones whose lanes don't match the street's)`);
   }
 
   // Lamp: painted crossings mid-block (by a school, a park path, a campus walk), wherever one wasn't an intersection's

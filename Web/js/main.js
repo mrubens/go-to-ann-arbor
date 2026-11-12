@@ -129,6 +129,11 @@ const BUILDING_DATA = ['js/building-geodata.js', 'js/building-geodata.bin.gz'];
 const TREE_DATA = ['js/tree-geodata.js', 'js/tree-geodata.bin.gz', 'js/tree-placements.js'];
 
 async function initApp() {
+  // where an uncaught error came from, for the log (Lamp's loop rethrows it, so the log's own line names only the loop)
+  if (!window.__stackLogged) {
+    window.__stackLogged = true;
+    window.addEventListener('error', (e) => { if (e.error?.stack) console.error(`[stack] ${e.error.stack.split('\n').slice(0, 8).join(' | ')}`); });
+  }
   const container = document.getElementById('canvas-container');
   const loadingOverlay = document.getElementById('loading-overlay');
   const loadingStatus = document.getElementById('loading-status');
@@ -346,7 +351,11 @@ async function initApp() {
   // the Border to Border Trail's fresh asphalt and centre line, its wayfinding signs and markers (b2b-trail.js)
   const b2bPart = await live.keep('b2bTrail', () => cityPart((g) => buildB2BTrail(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/b2b-trail.js', 'js/b2b-route.js', 'js/b2b-data.js'] });
   // Ann Arbor's brick streets by Kerrytown and the Old Fourth Ward, paved over the asphalt (brick-streets.js)
-  const brickPart = live.keep('brickStreets', () => cityPart((g) => buildBrickStreets(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/brick-streets.js', 'js/brick-streets-data.js'] });
+  const brickPart = await live.keep('brickStreets', () => cityPart(async (g) => {
+    const made = buildBrickStreets(g);
+    await setOnTerrain(g); // cut along the road's own triangles, 3 mm over it (brick-streets.js)
+    return made;
+  }, { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/brick-streets.js', 'js/brick-streets-data.js'] });
   // the overhead wires of the older neighbourhoods and arterials: wooden poles, crossarms, sagging lines (utility-poles.js)
   const polesPart = live.keep('utilityPoles', () => cityPart((g) => buildUtilityPoles(g), { cull: setupSceneCulling, still: true }), { inputs: [heights], from: ['js/utility-poles.js'] });
   // Ann Arbor Municipal Airport south of town, with helicopters parked by the FBO to fly (airport.js)
@@ -3139,13 +3148,26 @@ async function initApp() {
   // sharp: drawing smaller never made frames faster here (the log showed it undone every time), it only blurred the city
   // fill: drawn at the window's shape everywhere but the Xbox (stage.js), which keeps the fixed 1920x1080 stage
   let stopFilling = null;
+  // A frame that throws is logged with where it came from and skipped, rather than stopping the game's loop for good
+  // (a frozen picture); in the first frames after a start or a change it's thrown on, so a change that fails as it runs
+  // still goes back out Lamp's safe way
+  let framesRun = 0;
+  const said = new Set();
+  const guardedFrame = (f) => {
+    try { frame(f); framesRun++; } catch (e) {
+      if (framesRun < 30) throw e;
+      const key = String(e?.message || e);
+      if (!said.has(key)) { said.add(key); log(`[frame] skipped a frame that failed: ${e?.stack ? e.stack.split('\n').slice(0, 8).join(' | ') : key}`); }
+    }
+  };
   game({ renderer, init() {
+    framesRun = 0;
     // the Xbox: Lamp's stage at 1920x1080 (scale 1); elsewhere the window's shape at the tier's pixels
     stopFilling?.();
     stopFilling = fillWindow(renderer, (w, h) => { stage = { w, h }; fitCameras(); });
     const was = pendingRestore(); if (was) startFrom(was); else golf.resume(); // (a golf round saved at the last close)
   // (on an Xbox too: the runtime's own steps, from 1920x1080, undid its smaller size and left it at 960x540 or full size)
-  }, frame, touch: false, keyboard: false, snapshot, sharp: XBOX || TIER.name !== 'phone', fill: FILLS,
+  }, frame: guardedFrame, touch: false, keyboard: false, snapshot, sharp: XBOX || TIER.name !== 'phone', fill: FILLS,
     // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.
     dispose() { stopFilling?.(); golf.dispose(); groundShade.group.removeFromParent(); groundShade.dispose(); split.second?.dispose(); split.view?.dispose(); document.body.classList.remove('split');
       cameraSystem.release(); mapSystem.release(); renderPipeline.dispose(); colorGrade.dispose(); ssrPass?.dispose(); aoPass?.dispose(); scenePass.dispose(); } });

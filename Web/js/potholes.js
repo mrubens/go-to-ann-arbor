@@ -14,7 +14,8 @@ const lin = (hex) => new THREE.Color(hex);
 function potholeGeometry() {
   const R = [0, 0.28, 0.42, 0.5, 0.62], N = 18, pos = [], nor = [], col = [], idx = [];
   const rim = (k) => 1 + 0.18 * Math.sin(k * 2.3) + 0.12 * Math.sin(k * 5.1 + 1) + 0.07 * Math.sin(k * 9.7);
-  const shade = [lin(0x0d0e10), lin(0x17181a), lin(0x242527), lin(0x2c2d2f), lin(0x34322f)];
+  // (Lamp: from a shadowed bottom out to a rim the grey of the town's weathered asphalt, not a black blot)
+  const shade = [lin(0x26272a), lin(0x343538), lin(0x46474a), lin(0x56575a), lin(0x66655f)];
   const lean = [0, 0.55, 0.7, 0.35, -0.12]; // how far each ring's normal leans in (the slope faces the middle)
   for (let r = 0; r < R.length; r++) for (let k = 0; k < N; k++) {
     const a = (k / N) * Math.PI * 2, s = R[r] * (r ? rim(k) * (r === 4 ? 1.08 : 1) : 0);

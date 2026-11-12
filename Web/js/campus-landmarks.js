@@ -225,7 +225,8 @@ function burtonTower(B, site) {
   return { minX: cx - H - 0.3, maxX: cx + H + 0.3, minZ: cz - H - 0.3, maxZ: cz + H + 0.3, maxY: Y(58.5) };
 }
 
-// Hill Auditorium: its lobby front along North University (the outline's north part), the hall behind it
+// Hill Auditorium: its lobby front along North University, the hall behind it (built facing north and mirrored to face
+// south by buildCampusLandmarks)
 function hillAuditorium(B, site) {
   const g = groundOf(site.ring) - 0.3;
   const Y = (y) => g + y;
@@ -861,7 +862,24 @@ function buildCampusLandmarks(group, colliders, sites) {
   for (const [name, make] of MODELS) {
     const site = sites[name];
     if (!site || !site.ring) continue;
-    colliders.push(...[].concat(make(B, site)));
+    const from = [B.stone.pos.length, B.glass.pos.length];
+    let made = [].concat(make(B, site));
+    // Lamp: Hill Auditorium was modelled facing north, its stage house on North University; the real one faces south
+    // onto North University, its limestone front and arches to the street, the blind stage house behind toward Ingalls
+    // Mall: mirrored north to south about the middle of its outline
+    if (name === 'Hill Auditorium') {
+      let z0 = Infinity, z1 = -Infinity;
+      for (let i = 1; i < site.ring.length; i += 2) { z0 = Math.min(z0, site.ring[i]); z1 = Math.max(z1, site.ring[i]); }
+      const c = z0 + z1;
+      [[B.stone, from[0]], [B.glass, from[1]]].forEach(([m, start]) => {
+        for (let i = start; i < m.pos.length; i += 9) {
+          for (let k = 2; k < 9; k += 3) m.pos[i + k] = c - m.pos[i + k];
+          for (let k = 0; k < 3; k++) { const t = m.pos[i + 3 + k]; m.pos[i + 3 + k] = m.pos[i + 6 + k]; m.pos[i + 6 + k] = t; }
+        }
+      });
+      made = made.map((b) => ({ ...b, minZ: c - b.maxZ, maxZ: c - b.minZ }));
+    }
+    colliders.push(...made);
     built.push(name);
   }
   const mesh = (m, mat) => {
