@@ -113,10 +113,11 @@
     image: function (name) { return loadImage(LampAssets.url(name)); }
   };
 
-  function Failure(message, needsSetup) {
+  function Failure(message, needsSetup, help) {
     this.name = 'LampAI.Failure';
     this.message = message;
     this.needsSetup = needsSetup || null;
+    this.help = help || null;
     this.stack = (new Error(message)).stack;
   }
   Failure.prototype = Object.create(Error.prototype);
@@ -190,6 +191,8 @@
   }
 
   // Why a copy Lamp didn't put on a device has no AI: a page on the web (its published page) is away from Lamp.
+  // Where someone with no Lamp finds how to turn AI on, for a page away from Lamp.
+  var AI_HELP = 'https://lamp.dev';
   function unplaced() {
     return here.protocol === 'https:'
       ? 'This page is on the web, away from Lamp, so it has no AI here. Open it in Lamp for that.'
@@ -206,7 +209,7 @@
       var ipv4 = /^http:\/\/\d+\.\d+\.\d+\.\d+:/;
       list = list.filter(function (r) { return ipv4.test(r); }).concat(list.filter(function (r) { return !ipv4.test(r); }));
     }
-    if (!list.length) return Promise.reject(new Failure(unplaced()));
+    if (!list.length) return Promise.reject(new Failure(unplaced(), null, AI_HELP));
     // With a deadline (LampAI.act's turn), each try gets only the time left, and none starts after it.
     function left() { return deadline ? deadline - Date.now() : timeout; }
     function attempt(i, round) {
@@ -229,7 +232,7 @@
   function token() {
     var kept = read('install.token', null);
     if (kept && installed && kept.app === installed.app) return Promise.resolve(kept.token);
-    if (!installed) return Promise.reject(new Failure(unplaced()));
+    if (!installed) return Promise.reject(new Failure(unplaced(), null, AI_HELP));
     return send('/app/claim', { app: installed.app }, null, 10000).then(function (answer) {
       if (answer.status !== 200 || !answer.reply.token) {
         throw new Failure('This app needs Lamp to put it on this device once more before it can use AI: press Play in Lamp on your Mac.');
@@ -273,8 +276,8 @@
     return done.then(null, function (e) {
       if (e instanceof Failure) throw e;
       // Safari never lets a page on the web reach this computer this way, so Lamp or lamp ai open here wouldn't help.
-      if (safari()) throw new Failure('AI here works in Chrome or in Lamp, or with Lamp\'s command line: lamp play and this page\'s link.');
-      throw new Failure('AI isn\'t available here. Open Lamp on this computer, or with Lamp\'s command line, run lamp ai.');
+      if (safari()) throw new Failure('AI here works in Chrome or in Lamp, or with Lamp\'s command line: lamp play and this page\'s link.', null, AI_HELP);
+      throw new Failure('AI isn\'t available here. Open Lamp on this computer, or with Lamp\'s command line, run lamp ai.', null, AI_HELP);
     });
   }
 
@@ -733,27 +736,33 @@
    * page shared on lamp.dev has it only on a computer that answers it. `LampAI.status('pictures')` (or 'text',
    * 'decisions', 'act', 'hear') says whether it can answer now and, when it can't, the line to show: check it where
    * a feature depends on it, and show the feature with its `reason` as it's given rather than words of the app's
-   * own, or hiding it or failing at it. A call that fails for that reason has `needsSetup` set on its error.
+   * own, or hiding it or failing at it, and where it gives `help` (a page away from Lamp), a link to it beside the
+   * reason: "How to turn on AI". A call that fails for that reason has `needsSetup`, or `help`, set on its error.
    */
   var LampAI = {
     Failure: Failure,
 
-    /** Whether this kind of AI ('text', 'decisions', 'pictures', 'act' or 'hear') can answer now: { available, reason },
-     *  where `reason` is the short line to show when it can't, written for where the page is. */
+    /** Whether this kind of AI ('text', 'decisions', 'pictures', 'act' or 'hear') can answer now: { available, reason,
+     *  help }, where `reason` is the short line to show when it can't, written for where the page is, and `help`, when
+     *  it's there, the page that says how to turn AI on, to link to beside it. */
     status: function (capability) {
-      var no = function (reason) { return { available: false, reason: reason || 'AI isn\'t set up for this here.' }; };
+      var no = function (reason, help) {
+        var said = { available: false, reason: reason || 'AI isn\'t set up for this here.' };
+        if (help) said.help = help;
+        return said;
+      };
       // 'act' is asked of /ai/act itself: available only when this lamp.js has it, the app around the page lets the
       // route through (an older one answers Not found) and the AI that answers the app can take it. 'hear' the same.
       if (capability === 'act' || capability === 'hear') {
         return post('/ai/' + capability, { probe: true }, 10000).then(function (reply) {
           return reply[capability] === true ? { available: true, reason: '' } : no(reply.reason || reply.why);
-        }, function (e) { return no(e && e.message); });
+        }, function (e) { return no(e && e.message, e && e.help); });
       }
       return post('/ai/status', {}, 10000).then(function (reply) {
         if (reply[capability] === true) return { available: true, reason: '' };
         var detail = reply.details && reply.details[capability];
         return no(detail && detail.reason);
-      }, function (e) { return no(e && e.message); });
+      }, function (e) { return no(e && e.message, e && e.help); });
     },
 
     /** Whether this kind of AI can answer now, as `status` says. */
@@ -864,6 +873,7 @@
      * probability, choice, score and confidence. Fails only when no item could be judged.
      */
     decideEach: function (items, questions, options) {
+      var failed = null;
       var o = options || {}, about = o.about || function (item) { return item; };
       var limit = Math.max(1, o.concurrency || 12), total = items.length, done = 0, next = 0;
       var results = new Array(total), saved = o.remember ? read('verdicts', {}) : null, now = Date.now();
@@ -891,7 +901,7 @@
           for (var k in (reply.answers || {})) if (reply.answers.hasOwnProperty(k)) answers[k] = decision(reply.answers[k]);
           if (key) saved[key] = { answers: reply.answers, until: now + o.remember * 1000 };
           finish(i, answers);
-        }, function (error) { finish(i, null, error.message); });
+        }, function (error) { if (!failed) failed = error; finish(i, null, error.message); });
       }
       function worker() {
         if (next >= total) return Promise.resolve();
@@ -907,7 +917,8 @@
           keys.slice(-2000).forEach(function (k) { kept[k] = saved[k]; });
           write('verdicts', kept);
         }
-        if (total && results.every(function (r) { return r.error; })) throw new Failure(results[0].error);
+        // Every item failed: the first failure's setup and help go with it, as a single decision's would.
+        if (total && results.every(function (r) { return r.error; })) throw new Failure(results[0].error, failed && failed.needsSetup, failed && failed.help);
         return results;
       });
     },

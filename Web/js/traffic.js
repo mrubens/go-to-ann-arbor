@@ -5,7 +5,7 @@ import { planClosures } from './road-work.js';
 import { log } from '../lamp-game.js';
 import { createPedestrianSystem } from './pedestrian-system.js';
 import { vehicleContact, resolveVehicleContact, sweptVehicleContact } from './vehicle-physics.js';
-import { SIGNAL_TIMING, signalPhase, leftArrow, walkSignal } from './city-config.js';
+import { SIGNAL_TIMING, signalPhase, leftArrow, pedSignal } from './city-config.js';
 import { cityUniforms, createContactShadowMaterial, createCarFlareMaterial } from './tsl-materials.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
 import {
@@ -522,7 +522,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   const nearFreeways = []; // Lamp: the freeway's links among them, where new cars go more often (see spawnVehicle)
   const nearSignals = [];
   const pedestrianSystem = createPedestrianSystem(network, {
-    player, player2, nearEdges, nearSignals, mayCross, walkOn, visible, nearView
+    player, player2, nearEdges, nearSignals, mayCross, walkOn, walkPhase, visible, nearView
   });
   group.add(...pedestrianSystem.meshes);
 
@@ -1069,7 +1069,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections, c
   // Do people on crosswalk p have the WALK? Across the avenue (group 0, the road with the avenue phase) with the cross
   // street's traffic, across any other road with the avenue's.
   function walkOn(p) {
-    return walkSignal(clock + (p.node?.offset || 0), p.group !== 0);
+    return walkPhase(p).state === 'walk';
+  }
+  // ...the WALK, the flashing hand (with its countdown) or the steady hand (city-config.js pedSignal)
+  function walkPhase(p) {
+    return pedSignal(clock + (p.node?.offset || 0), p.group !== 0, !!p.node?.leftPhase, p.len - 4);
   }
 
   // May p step off the curb onto its crosswalk? On the WALK (early in the parallel traffic's green, so red for the

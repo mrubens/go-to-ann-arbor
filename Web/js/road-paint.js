@@ -177,11 +177,11 @@ function deckUnder(decks, x, z, dx, dz) {
 }
 
 // Lamp: the lane-use arrows and ONLY painted as real road markings, crisp, from pictures on one canvas: a cell for
-// each arrow (left, ahead, right and their pairs; drawn elongated, 5.5 m along the lane and 2.4 m across, a 25 cm
+// each arrow (left, ahead, right and their pairs; drawn elongated, 4.2 m along the lane and 2.4 m across, a 36 cm
 // shaft, a smooth bend into a turn, a pointed head) and one for ONLY (heavy letters 3.4 m tall along the lane, the
 // word 3 m across, reading left to right to the driver coming up to it); each laid on the ground as a small grid, all
 // one mesh. `spots`: [x, z, along x, along z, picture], from the picture's near end
-const MARK_W = 256, MARK_H = 512, ARROW_L = 5.5, ARROW_W = 2.4, WORD_L = 3.4, WORD_W = 3.0;
+const MARK_W = 256, MARK_H = 512, ARROW_L = 4.2, ARROW_W = 2.4, WORD_L = 3.4, WORD_W = 3.0;
 function laneMarkCanvas() {
   const c = document.createElement('canvas');
   c.width = MARK_W * 8; c.height = MARK_H;
@@ -189,26 +189,26 @@ function laneMarkCanvas() {
   ctx.fillStyle = ctx.strokeStyle = '#ece8dc';
   const px = MARK_W / ARROW_W, py = MARK_H / ARROW_L; // pixels a metre across, along
   for (let code = 1; code < 8; code++) {
-    const x0 = code * MARK_W, cx = x0 + MARK_W / 2, sw = 0.25 * px, yOf = (u) => MARK_H - u * py; // u: metres from the near end
+    const x0 = code * MARK_W, cx = x0 + MARK_W / 2, sw = 0.36 * px, yOf = (u) => MARK_H - u * py; // u: metres from the near end
     const ahead = code & 2, turns = [code & 1 ? -1 : 0, code & 4 ? 1 : 0].filter(Boolean);
     ctx.lineWidth = sw;
     ctx.lineCap = 'butt';
     // the shaft, up to the ahead head or the bend
-    const top = ahead ? 3.9 : turns.length ? 3.0 : 3.9;
+    const top = ahead ? 2.85 : turns.length ? 2.2 : 2.85;
     ctx.beginPath(); ctx.moveTo(cx, yOf(0)); ctx.lineTo(cx, yOf(top)); ctx.stroke();
     if (ahead) {
-      ctx.beginPath(); ctx.moveTo(cx - 0.45 * px, yOf(3.85)); ctx.lineTo(cx + 0.45 * px, yOf(3.85)); ctx.lineTo(cx, yOf(5.45)); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(cx - 0.55 * px, yOf(2.8)); ctx.lineTo(cx + 0.55 * px, yOf(2.8)); ctx.lineTo(cx, yOf(4.15)); ctx.closePath(); ctx.fill();
     }
     for (const sg of turns) {
       // off the shaft lower down where it goes ahead too, in a quarter bend 0.55 m across into a head pointing across
-      const u0 = ahead ? 1.6 : 3.0, rv = 0.42 * px, ru = 1.0 * py;
+      const u0 = ahead ? 1.2 : 2.2, rv = 0.42 * px, ru = 0.8 * py;
       ctx.beginPath();
       ctx.moveTo(cx, yOf(u0));
       ctx.ellipse(cx + sg * rv, yOf(u0), rv, ru, 0, sg < 0 ? 0 : Math.PI, sg < 0 ? -Math.PI / 2 : -Math.PI / 2, sg < 0);
       ctx.stroke();
-      const hy = yOf(u0 + 1.0), hx = cx + sg * rv;
+      const hy = yOf(u0 + 0.8), hx = cx + sg * rv;
       ctx.beginPath();
-      ctx.moveTo(hx, hy - 0.42 * py); ctx.lineTo(hx, hy + 0.42 * py); ctx.lineTo(hx + sg * 0.52 * px, hy); ctx.closePath(); ctx.fill(); // (its tip 25 px inside the cell's edge)
+      ctx.moveTo(hx, hy - 0.5 * py); ctx.lineTo(hx, hy + 0.5 * py); ctx.lineTo(hx + sg * 0.55 * px, hy); ctx.closePath(); ctx.fill(); // (its tip 25 px inside the cell's edge)
     }
   }
   // ONLY in cell 0, its letters filling the cell (the cell is ARROW_L by ARROW_W; laneWords stretches it to WORD_L by WORD_W)
@@ -530,7 +530,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
       if (!arrowCells.has(k)) arrowCells.set(k, []);
       arrowCells.get(k).push(a);
     }
-    const TAIL = -3.6; // (an arrow's near end, back from its spot)
+    const TAIL = -2.6; // (an arrow's near end, back from its spot)
     const arrowSpots = []; // [x, z, along x, along z, picture: an arrow's code (bits 1 left, 2 ahead, 4 right) or 0 for ONLY]
     let painted = 0, unmatched = 0;
     for (const f of network.paintEdges || network.edges) {

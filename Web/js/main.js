@@ -25,6 +25,7 @@ import { createTrafficSystem, createHighwayTraffic, freewayLanes, VEHICLE_RADIUS
 import { loadCityClosures } from './city-closures.js';
 import { buildRoadPaint } from './road-paint.js';
 import { buildTrafficControls } from './traffic-controls.js';
+import { buildPedSignals } from './ped-signals.js';
 import { buildShopSigns } from './shop-signs.js';
 import { setShopTypes } from './shop-types.js';
 import { createShopInteriors } from './shop-interiors.js';
@@ -484,6 +485,8 @@ async function initApp() {
   const bikeRoutesPart = await live.keep('bikeRoutes', () => cityPart((g) => buildBikeRoutes(g, traffic.made.network), { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic], from: [CITY_MAP, 'js/bike-routes.js'] });
   // Traffic lights and stop & yield signs where the road network put them (traffic-controls.js)
   const controlsPart = live.keep('trafficControls', () => cityPart((g) => buildTrafficControls(g, traffic.made.network), { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic, details], from: ['js/traffic-controls.js'] });
+  // the pedestrian signals at the lights' crosswalks, on the walkers' own timing (ped-signals.js)
+  const pedSignalsPart = live.keep('pedSignals', () => cityPart((g) => buildPedSignals(g, traffic.made.network), { cull: setupSceneCulling, still: true }), { inputs: [heights, traffic], from: ['js/ped-signals.js', 'js/pedestrian-routes.js'] });
   // Signs over the real shops, restaurants and cafes (shop-signs.js, from OpenStreetMap)
   const signsPart = live.keep('shopSigns', () => cityPart((g) => buildShopSigns(g), { cull: setupSceneCulling, still: true }), { inputs: [heights, blocks], from: ['js/shop-signs.js', 'js/shop-types.js', 'data/shop-types.json'] });
   await showLoadingStage('Laying the railroads...');
@@ -606,7 +609,7 @@ async function initApp() {
     return { minX: o.x - o.r, maxX: o.x + o.r, minZ: o.z - o.r, maxZ: o.z + o.r, minY: g - 1, maxY: g + 6, thin: true, knock };
   };
   const knockBoxOf = new Map();
-  for (const o of [...(details.made.obstacles || []), ...(controlsPart.made.obstacles || []), ...(seatingPart.made.obstacles || [])]) {
+  for (const o of [...(details.made.obstacles || []), ...(controlsPart.made.obstacles || []), ...(pedSignalsPart.made.obstacles || []), ...(seatingPart.made.obstacles || [])]) {
     const b = obstacleBox(o);
     knockBoxOf.set(o, b);
     allColliders.push(b);
@@ -681,7 +684,7 @@ async function initApp() {
   const animalsPart = live.keep('animals', () => cityPart((g) => (XBOX ? { update() {} } : buildAnimals(g))), { inputs: [heights, details], from: ['js/animals.js', 'js/animal-models.js', 'js/animal-birds.js', 'js/river-birds.js', 'js/city-birds.js', 'js/deer.js'] });
   // the rooms behind the shopfronts' glass, near the player: furniture and people (shop-interiors.js)
   const shopRoomsPart = live.keep('shopRooms', () => cityPart((g) => createShopInteriors(g)), { inputs: [blocks], from: ['js/shop-interiors.js', 'js/shop-kits.js', 'js/shop-kits-b.js', 'js/shop-kits-c.js', 'js/shop-kit-core.js', 'js/shop-types.js'] });
-  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, arterial, farCityPart, roadPaint, controlsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, roundaboutsPart, barriersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart, brickPart, polesPart];
+  const parts = [shopRoomsPart, grid, bandShellPart, restroomsPart, draftedPart, cascadesPart, riverPeoplePart, animalsPart, outskirtsPart, landmarks, blocks, details, traffic, highway, arterial, farCityPart, roadPaint, controlsPart, pedSignalsPart, signsPart, railPart, parkedPart, launchesPart, liveryPart, roadWorkPart, potholesPart, humpsPart, cartsPart, planesPart, scootersPart, racksPart, poolsPart, seatingPart, diamondsPart, footballPart, bleachersPart, roundaboutsPart, barriersPart, docksPart, skatePart, mtbPart, b2bPart, bikeRoutesPart, parkingPart, airportPart, moonPart, starsPart, helipadsPart, brickPart, polesPart];
   for (const part of parts) {
     scene.add(part.group);
     cullAlso(part.culled);
@@ -710,7 +713,7 @@ async function initApp() {
   const coverWithSnow = () => loadSnowCover().then((cover) => {
     if (cover <= 0) return;
     poolsPart.group.traverse((o) => { if (o.isMesh && /^(Pool floor|Pool walls|Lane ropes)/.test(o.name)) for (const m of [o.material].flat()) m.userData.snow = 0; });
-    for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, poolsPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, b2bPart, brickPart, parkingPart, airportPart]) dressForSnow(part.group);
+    for (const part of [grid, bandShellPart, restroomsPart, outskirtsPart, landmarks, blocks, details, controlsPart, pedSignalsPart, signsPart, railPart, parkedPart, roadWorkPart, scootersPart, racksPart, seatingPart, poolsPart, diamondsPart, footballPart, bleachersPart, docksPart, skatePart, mtbPart, b2bPart, brickPart, parkingPart, airportPart]) dressForSnow(part.group);
   });
   coverWithSnow();
   // Ann Arbor's date, checked about once a minute by the clock and as the page is shown again (a session left running
@@ -2789,6 +2792,7 @@ async function initApp() {
     }
     streetDetails.signalClock.value = elapsed;
     controlsPart.made.update(elapsed);
+    pedSignalsPart.made.update(elapsed);
     trafficSystem.setStillBodies?.(stillBodies());
     syncSiren();
     trafficSystem.update(

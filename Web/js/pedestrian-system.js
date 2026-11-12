@@ -113,7 +113,7 @@ function mealHour(h) {
 const SIT_POSE = (hipY) => ({ hip: [0, hipY, -0.04], shoulder: [0, hipY + 0.52, -0.1], hand: [0.16, hipY + 0.13, 0.3],
   foot: [0.13, 0.07, Math.min(0.5, 0.2 + hipY * 0.62)], standing: false });
 
-function createPedestrianSystem(network, { player, player2 = null, nearEdges, nearSignals, mayCross, walkOn, visible, nearView }) {
+function createPedestrianSystem(network, { player, player2 = null, nearEdges, nearSignals, mayCross, walkOn, walkPhase, visible, nearView }) {
   let clock = 0;
   let focusX = 0, focusZ = 140;
   let hasView = false;
@@ -750,6 +750,9 @@ function createPedestrianSystem(network, { player, player2 = null, nearEdges, ne
       p.restTime = clock + 35 + Math.random() * 55;
     }
     let vMax = avoiding ? p.avoidSpeed : p.pause > 0 || p.conversation ? 0 : p.speed;
+    // Lamp: caught out in the street as the hand starts flashing, or still in it on the steady hand, they hurry the
+    // rest of the way over
+    if (p.node && !avoiding && vMax > 0 && curbProgress(p) > KERB + 0.3 && curbProgress(p) < p.len - 1 && walkPhase(p).state !== 'walk') vMax *= 1.4;
     if (dodging || diving) p.v = vMax = 0;
     if (!p.nextRoute) vMax = Math.min(vMax, Math.sqrt(2 * brake * ahead));
     let room = Infinity;

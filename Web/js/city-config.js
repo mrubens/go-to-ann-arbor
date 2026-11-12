@@ -655,11 +655,36 @@ function leftArrow(time, isAvenue, leftPhase = false) {
   return p === 'green' ? 'flash' : p;
 }
 
+// Lamp: a crosswalk's pedestrian signal, as the town's coordinated downtown signals run theirs: the WALK comes up a
+// moment before the parallel traffic's green (a leading interval, in the all-red; at a junction with lead lefts, once
+// the lefts, which turn over it, are done) and rests on WALK through the green until there's just time left for
+// someone stepping off to get across at 3.5 ft/s (1.07 m/s, the federal manual's walking speed) on the flashing
+// DON'T WALK, which counts down to the parallel amber; a steady hand after. `width` is the road crossed, m. Seconds
+// into the cycle (the start may be before 0: the end of the cycle before).
+function pedTiming(isAvenue, leftPhase = false, width = 14) {
+  const { cycle, leftAmber, avenueAmber, avenueRed, streetAmber, streetRed } = SIGNAL_TIMING;
+  const start = isAvenue ? (leftPhase ? leftAmber : streetRed - cycle) : avenueRed;
+  const end = isAvenue ? avenueAmber : streetAmber;
+  const clear = Math.min(end - start - SIGNAL_TIMING.walk, Math.max(7, Math.ceil(width / 1.07)));
+  return { start, walkEnd: end - clear, end };
+}
+
+// A crosswalk's pedestrian signal at a given time (the junction's own clock): 'walk', 'flash' (the flashing hand,
+// with `left` seconds on its countdown) or 'dont' (the steady hand), for people walking alongside the avenue
+// (isAvenue) or the cross street
+const pedOut = { state: 'dont', left: 0 };
+function pedSignal(time, isAvenue, leftPhase = false, width = 14) {
+  const { start, walkEnd, end } = pedTiming(isAvenue, leftPhase, width);
+  const { cycle } = SIGNAL_TIMING;
+  const t = (((time - start) % cycle) + cycle) % cycle;
+  pedOut.state = t < walkEnd - start ? 'walk' : t < end - start ? 'flash' : 'dont';
+  pedOut.left = pedOut.state === 'flash' ? end - start - t : 0;
+  return pedOut;
+}
+
 // Do pedestrians walking alongside avenue (or cross street) traffic have the WALK at a given time?
-function walkSignal(time, isAvenue) {
-  const { cycle, leftAmber, streetGreen, walk } = SIGNAL_TIMING;
-  const t = (((time - (isAvenue ? leftAmber : streetGreen)) % cycle) + cycle) % cycle;
-  return t < walk;
+function walkSignal(time, isAvenue, leftPhase = false, width = 14) {
+  return pedSignal(time, isAvenue, leftPhase, width).state === 'walk';
 }
 
 export {
@@ -700,5 +725,7 @@ export {
   isTypingInField,
   signalPhase,
   leftArrow,
-  walkSignal
+  walkSignal,
+  pedSignal,
+  pedTiming
 };
