@@ -3,7 +3,7 @@ import { CROSSWALK } from './road-network.js';
 import { GEO } from './city-geodata.js';
 import { createRoadPaintMaterial } from './tsl-materials.js';
 import { curbStalls } from './curb-parking.js';
-import { bridgeDecks } from './terrain.js';
+import { bridgeDecks, groundHeight } from './terrain.js';
 
 // Road markings generated from the drivable road network (js/road-network.js), so the paint matches where traffic
 // actually drives and stops: dashed lane lines, double yellow centre lines on two-way roads (Lamp: not on residential
@@ -174,6 +174,90 @@ function deckUnder(decks, x, z, dx, dz) {
     return top;
   }
   return null;
+}
+
+// Lamp: the lane-use arrows and ONLY painted as real road markings, crisp, from pictures on one canvas: a cell for
+// each arrow (left, ahead, right and their pairs; drawn elongated, 5.5 m along the lane and 2.4 m across, a 25 cm
+// shaft, a smooth bend into a turn, a pointed head) and one for ONLY (heavy letters 3.4 m tall along the lane, the
+// word 3 m across, reading left to right to the driver coming up to it); each laid on the ground as a small grid, all
+// one mesh. `spots`: [x, z, along x, along z, picture], from the picture's near end
+const MARK_W = 256, MARK_H = 512, ARROW_L = 5.5, ARROW_W = 2.4, WORD_L = 3.4, WORD_W = 3.0;
+function laneMarkCanvas() {
+  const c = document.createElement('canvas');
+  c.width = MARK_W * 8; c.height = MARK_H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = ctx.strokeStyle = '#ece8dc';
+  const px = MARK_W / ARROW_W, py = MARK_H / ARROW_L; // pixels a metre across, along
+  for (let code = 1; code < 8; code++) {
+    const x0 = code * MARK_W, cx = x0 + MARK_W / 2, sw = 0.25 * px, yOf = (u) => MARK_H - u * py; // u: metres from the near end
+    const ahead = code & 2, turns = [code & 1 ? -1 : 0, code & 4 ? 1 : 0].filter(Boolean);
+    ctx.lineWidth = sw;
+    ctx.lineCap = 'butt';
+    // the shaft, up to the ahead head or the bend
+    const top = ahead ? 3.9 : turns.length ? 3.0 : 3.9;
+    ctx.beginPath(); ctx.moveTo(cx, yOf(0)); ctx.lineTo(cx, yOf(top)); ctx.stroke();
+    if (ahead) {
+      ctx.beginPath(); ctx.moveTo(cx - 0.45 * px, yOf(3.85)); ctx.lineTo(cx + 0.45 * px, yOf(3.85)); ctx.lineTo(cx, yOf(5.45)); ctx.closePath(); ctx.fill();
+    }
+    for (const sg of turns) {
+      // off the shaft lower down where it goes ahead too, in a quarter bend 0.55 m across into a head pointing across
+      const u0 = ahead ? 1.6 : 3.0, rv = 0.5 * px, ru = 1.0 * py;
+      ctx.beginPath();
+      ctx.moveTo(cx, yOf(u0));
+      ctx.ellipse(cx + sg * rv, yOf(u0), rv, ru, 0, sg < 0 ? 0 : Math.PI, sg < 0 ? -Math.PI / 2 : -Math.PI / 2, sg < 0);
+      ctx.stroke();
+      const hy = yOf(u0 + 1.0), hx = cx + sg * rv;
+      ctx.beginPath();
+      ctx.moveTo(hx, hy - 0.42 * py); ctx.lineTo(hx, hy + 0.42 * py); ctx.lineTo(hx + sg * 0.62 * px, hy); ctx.closePath(); ctx.fill();
+    }
+  }
+  // ONLY in cell 0, its letters filling the cell (the cell is ARROW_L by ARROW_W; laneWords stretches it to WORD_L by WORD_W)
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '900 120px "Arial Narrow", Arial, Helvetica, sans-serif';
+  ctx.translate(MARK_W / 2, MARK_H / 2);
+  ctx.scale(1, 5.2);
+  ctx.fillText('ONLY', 0, 4, MARK_W - 12);
+  ctx.restore();
+  return c;
+}
+function laneWords(spots) {
+  const tex = new THREE.CanvasTexture(laneMarkCanvas());
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const NU = 8, NV = 4;
+  const pos = [], uv = [], idx = [];
+  for (const [x0, z0, dx, dz, pic] of spots) {
+    const L = pic ? ARROW_L : WORD_L, Wd = pic ? ARROW_W : WORD_W;
+    const rx = -dz, rz = dx, base = pos.length / 3;
+    for (let i = 0; i <= NU; i++) {
+      for (let j = 0; j <= NV; j++) {
+        const u = (L * i) / NU, v = Wd * (j / NV - 0.5);
+        const x = x0 + dx * u + rx * v, z = z0 + dz * u + rz * v;
+        pos.push(x, groundHeight(x, z) + HEIGHT + 0.004, z);
+        uv.push((pic + j / NV) / 8, i / NU);
+      }
+    }
+    for (let i = 0; i < NU; i++) {
+      for (let j = 0; j < NV; j++) {
+        const a = base + i * (NV + 1) + j, b = a + NV + 1;
+        idx.push(a, a + 1, b, a + 1, b + 1, b);
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardNodeMaterial({ map: tex, alphaTest: 0.5, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'RoadLaneMarks';
+  mesh.receiveShadow = true;
+  mesh.userData.terrain = 'set';
+  mesh.userData.cullDistance = 220;
+  return mesh;
 }
 
 function buildRoadPaint(scene, network, sharedBuilder = null) {
@@ -467,27 +551,9 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
       if (c & 4) out.push(...bend(1, both ? -2.0 : -0.8, both ? -0.8 : 0.6));
       return out;
     };
-    // the word ONLY ahead of a lane's arrow where the lane only turns: block letters 2.4 m tall along the lane and
-    // 0.6 m across, [u, v] strokes in each letter's own 0..1 square
-    const LETTERS = {
-      O: Array.from({ length: 12 }, (_, k) => {
-        const a = (k / 12) * Math.PI * 2, b = ((k + 1) / 12) * Math.PI * 2;
-        return [0.5 + 0.5 * Math.sin(a), 0.5 + 0.5 * Math.cos(a), 0.5 + 0.5 * Math.sin(b), 0.5 + 0.5 * Math.cos(b)];
-      }),
-      N: [[0, 0, 1, 0], [1, 0, 0, 1], [0, 1, 1, 1]],
-      L: [[0, 0, 1, 0], [0, 0, 0, 1]],
-      Y: [[1, 0, 0.5, 0.5], [1, 1, 0.5, 0.5], [0.5, 0.5, 0, 0.5]]
-    };
-    const onlyParts = (u0) => {
-      const out = [], LW = 0.6, LH = 2.4, GAP = 0.15, v0 = -(4 * LW + 3 * GAP) / 2;
-      [...'ONLY'].forEach((ch, i) => {
-        for (const [a0, b0, a1, b1] of LETTERS[ch]) {
-          // (a: up the letter, along the lane; b: across it, to the right)
-          out.push([u0 + a0 * LH, v0 + i * (LW + GAP) + b0 * LW, u0 + a1 * LH, v0 + i * (LW + GAP) + b1 * LW, 0.2, 0.2]);
-        }
-      });
-      return out;
-    };
+    // the word ONLY ahead of a lane's arrow where the lane only turns: real lettering from a font (onlyDecal below),
+    // each spot [x, z, along x, along z]
+    const arrowSpots = []; // [x, z, along x, along z, picture: an arrow's code (bits 1 left, 2 ahead, 4 right) or 0 for ONLY]
     let painted = 0, unmatched = 0;
     for (const f of network.paintEdges || network.edges) {
       if (f.to.shape || f.cls === 0 || f.len < 14 || !f.lanes.length) continue;
@@ -516,19 +582,16 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
         lanes.forEach((o, k) => {
           const c = codes[k];
           if (!c) return;
-          const parts = arrowParts(c);
+          // (Lamp: drawn crisp from a picture of each arrow, as the ONLY is: paint strips came out worn and faded)
+          arrowSpots.push([...at(f, s + TAIL, o), f.dx, f.dz, c & 7]);
           // a lane that only turns has ONLY ahead of its arrow, nearer the stop line (where there's room for it)
-          if (!(c & 2) && s + 5.4 < f.len - 1) parts.push(...onlyParts(2.8));
-          for (const [u0, v0, u1, v1, w0, w1] of parts) {
-            const [ax, az] = at(f, s + u0, o + v0), [bx, bz] = at(f, s + u1, o + v1);
-            if (w0 === w1) strip(ax, az, bx, bz, w0, WHITE);
-            else builder.strip3D(ax, HEIGHT, az, bx, HEIGHT, bz, w0, WHITE, 1, 1, 0, 1, w1);
-          }
+          if (!(c & 2) && s + 6.2 < f.len - 1) arrowSpots.push([...at(f, s + 2.4, o), f.dx, f.dz, 0]);
         });
       }
       painted++;
     }
     console.info(`[road paint] lane-use arrows on ${painted} approaches (${unmatched} tagged ones whose lanes don't match the street's)`);
+    if (arrowSpots.length) scene.add(laneWords(arrowSpots));
   }
 
   // Lamp: painted crossings mid-block (by a school, a park path, a campus walk), wherever one wasn't an intersection's
