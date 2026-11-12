@@ -201,14 +201,14 @@ function laneMarkCanvas() {
     }
     for (const sg of turns) {
       // off the shaft lower down where it goes ahead too, in a quarter bend 0.55 m across into a head pointing across
-      const u0 = ahead ? 1.6 : 3.0, rv = 0.5 * px, ru = 1.0 * py;
+      const u0 = ahead ? 1.6 : 3.0, rv = 0.42 * px, ru = 1.0 * py;
       ctx.beginPath();
       ctx.moveTo(cx, yOf(u0));
       ctx.ellipse(cx + sg * rv, yOf(u0), rv, ru, 0, sg < 0 ? 0 : Math.PI, sg < 0 ? -Math.PI / 2 : -Math.PI / 2, sg < 0);
       ctx.stroke();
       const hy = yOf(u0 + 1.0), hx = cx + sg * rv;
       ctx.beginPath();
-      ctx.moveTo(hx, hy - 0.42 * py); ctx.lineTo(hx, hy + 0.42 * py); ctx.lineTo(hx + sg * 0.62 * px, hy); ctx.closePath(); ctx.fill();
+      ctx.moveTo(hx, hy - 0.42 * py); ctx.lineTo(hx, hy + 0.42 * py); ctx.lineTo(hx + sg * 0.52 * px, hy); ctx.closePath(); ctx.fill(); // (its tip 25 px inside the cell's edge)
     }
   }
   // ONLY in cell 0, its letters filling the cell (the cell is ARROW_L by ARROW_W; laneWords stretches it to WORD_L by WORD_W)
@@ -218,7 +218,7 @@ function laneMarkCanvas() {
   ctx.font = '900 120px "Arial Narrow", Arial, Helvetica, sans-serif';
   ctx.translate(MARK_W / 2, MARK_H / 2);
   ctx.scale(1, 5.2);
-  ctx.fillText('ONLY', 0, 4, MARK_W - 12);
+  ctx.fillText('ONLY', 0, 4, MARK_W - 40);
   ctx.restore();
   return c;
 }
@@ -236,7 +236,7 @@ function laneWords(spots) {
         const u = (L * i) / NU, v = Wd * (j / NV - 0.5);
         const x = x0 + dx * u + rx * v, z = z0 + dz * u + rz * v;
         pos.push(x, groundHeight(x, z) + HEIGHT + 0.004, z);
-        uv.push((pic + j / NV) / 8, i / NU);
+        uv.push((pic + 0.03 + (0.94 * j) / NV) / 8, i / NU); // (inset: the next picture never bleeds in as it blurs with distance)
       }
     }
     for (let i = 0; i < NU; i++) {
@@ -530,29 +530,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
       if (!arrowCells.has(k)) arrowCells.set(k, []);
       arrowCells.get(k).push(a);
     }
-    // (Lamp: as the MUTCD draws them, elongated along the lane as a driver sees them, 5.5 m long: a 25 cm shaft;
-    // ahead, on to a head 90 cm across and 1.6 m long; a turn, bending off the shaft in a smooth quarter curve into a
-    // head pointing across the lane; ahead and a turn both, the turn leaving the shaft lower down. [u ahead, v right,
-    // u, v, width at the first end, at the second] in metres, from the arrow's middle)
-    const W = 0.25, TAIL = -3.6;
-    const head = (u0, v0, u1, v1, base) => [[u0, v0, u1, v1, base, 0.001]];
-    const AHEAD = [[TAIL, 0, 0.3, 0, W, W], ...head(0.3, 0, 1.9, 0, 0.9)];
-    const bend = (sgn, u0, u1, rv = 0.5, n = 10) => {
-      const out = [], ru = u1 - u0;
-      for (let k = 0; k < n; k++) {
-        const a = (k / n) * Math.PI / 2, b = ((k + 1) / n) * Math.PI / 2;
-        out.push([u0 + ru * Math.sin(a), sgn * rv * (1 - Math.cos(a)), u0 + ru * Math.sin(b), sgn * rv * (1 - Math.cos(b)), W, W]);
-      }
-      return [...out, ...head(u1, sgn * (rv - 0.03), u1, sgn * (rv + 0.85), 0.8)];
-    };
-    const arrowParts = (c) => {
-      const both = c & 2, out = both ? [...AHEAD] : [[TAIL, 0, -0.8, 0, W, W]];
-      if (c & 1) out.push(...bend(-1, both ? -2.0 : -0.8, both ? -0.8 : 0.6));
-      if (c & 4) out.push(...bend(1, both ? -2.0 : -0.8, both ? -0.8 : 0.6));
-      return out;
-    };
-    // the word ONLY ahead of a lane's arrow where the lane only turns: real lettering from a font (onlyDecal below),
-    // each spot [x, z, along x, along z]
+    const TAIL = -3.6; // (an arrow's near end, back from its spot)
     const arrowSpots = []; // [x, z, along x, along z, picture: an arrow's code (bits 1 left, 2 ahead, 4 right) or 0 for ONLY]
     let painted = 0, unmatched = 0;
     for (const f of network.paintEdges || network.edges) {
@@ -584,8 +562,7 @@ function buildRoadPaint(scene, network, sharedBuilder = null) {
           if (!c) return;
           // (Lamp: drawn crisp from a picture of each arrow, as the ONLY is: paint strips came out worn and faded)
           arrowSpots.push([...at(f, s + TAIL, o), f.dx, f.dz, c & 7]);
-          // a lane that only turns has ONLY ahead of its arrow, nearer the stop line (where there's room for it)
-          if (!(c & 2) && s + 6.2 < f.len - 1) arrowSpots.push([...at(f, s + 2.4, o), f.dx, f.dz, 0]);
+          // (no ONLY: the town paints it on some turn lanes and not others, and the map doesn't say which)
         });
       }
       painted++;
